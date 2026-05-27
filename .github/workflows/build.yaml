@@ -18,6 +18,16 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Ensure thirdparty dependencies are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -d thirdparty/zlib ] || git clone --depth 1 https://github.com/madler/zlib.git thirdparty/zlib
+          [ -d thirdparty/SDL ] || git clone --depth 1 https://github.com/libsdl-org/SDL.git thirdparty/SDL
+          [ -d thirdparty/imgui ] || git clone --depth 1 https://github.com/ocornut/imgui.git thirdparty/imgui
+          [ -d thirdparty/MatrixUtil ] || git clone --depth 1 https://github.com/evrhel/MatrixUtil.git thirdparty/MatrixUtil
+          ls -la thirdparty
+
       - name: Configure
         run: |
           mkdir build
@@ -38,6 +48,16 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Ensure thirdparty dependencies are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -d thirdparty/zlib ] || git clone --depth 1 https://github.com/madler/zlib.git thirdparty/zlib
+          [ -d thirdparty/SDL ] || git clone --depth 1 https://github.com/libsdl-org/SDL.git thirdparty/SDL
+          [ -d thirdparty/imgui ] || git clone --depth 1 https://github.com/ocornut/imgui.git thirdparty/imgui
+          [ -d thirdparty/MatrixUtil ] || git clone --depth 1 https://github.com/evrhel/MatrixUtil.git thirdparty/MatrixUtil
+          ls -la thirdparty
+
       - name: Configure
         run: |
           mkdir build
@@ -57,6 +77,16 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Ensure thirdparty dependencies are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -d thirdparty/zlib ] || git clone --depth 1 https://github.com/madler/zlib.git thirdparty/zlib
+          [ -d thirdparty/SDL ] || git clone --depth 1 https://github.com/libsdl-org/SDL.git thirdparty/SDL
+          [ -d thirdparty/imgui ] || git clone --depth 1 https://github.com/ocornut/imgui.git thirdparty/imgui
+          [ -d thirdparty/MatrixUtil ] || git clone --depth 1 https://github.com/evrhel/MatrixUtil.git thirdparty/MatrixUtil
+          ls -la thirdparty
 
       - name: Configure
         run: |
