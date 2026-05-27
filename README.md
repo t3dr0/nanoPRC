@@ -1,10 +1,10 @@
-# nano_prc
+# nanoPRC
 
-[![build](https://github.com/mvrhel/nano_prc/actions/workflows/build.yaml/badge.svg)](https://github.com/mvrhel/nano_prc/actions/workflows/build.yaml)
+[![build](https://github.com/mvrhel/nanoPRC/actions/workflows/build.yaml/badge.svg)](https://github.com/mvrhel/nanoPRC/actions/workflows/build.yaml)
 
 ## License
 
-nano_prc is licensed under the GNU Affero General Public License v3.0.
+nanoPRC is licensed under the GNU Affero General Public License v3.0.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license summaries.
 
 ## Building
