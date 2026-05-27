@@ -545,7 +545,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
         return;
     }
 
-    bool keys[SDL_NUM_SCANCODES] = { 0 };
+    bool keys[SDL_SCANCODE_COUNT] = { 0 };
     bool mouseDown = false;
     bool mouseMoved = false;
     int mouseX_buttondown, mouseY_buttondown;
