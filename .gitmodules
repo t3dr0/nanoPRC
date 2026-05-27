@@ -1,0 +1,12 @@
+[submodule "thirdparty/zlib"]
+	path = thirdparty/zlib
+	url = https://github.com/madler/zlib
+[submodule "thirdparty/SDL"]
+	path = thirdparty/SDL
+	url = git@github.com:libsdl-org/SDL.git
+[submodule "thirdparty/MatrixUtil"]
+	path = thirdparty/MatrixUtil
+	url = git@github.com:evrhel/MatrixUtil.git
+[submodule "thirdparty/imgui"]
+	path = thirdparty/imgui
+	url = git@github.com:ocornut/imgui.git

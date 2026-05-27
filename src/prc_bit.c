@@ -1,0 +1,1400 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nano_prc is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nano_prc is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nano_prc. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+//#define PRC_COUNT_BIT
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "prc_data.h"
+#include "prc_bit.h"
+#include "prc_double.h"
+#include "debug.h"
+#include "prc_parse_common.h"
+
+#define PRC_HUFFMAN_INITIAL_NODES 256
+
+#ifdef PRC_COUNT_BIT
+#include <stdio.h>
+size_t bit_count = 0;
+#endif
+
+inline static void
+prc_next_bit(prc_context *ctx, prc_bit_state *state)
+{
+    state->bitmask >>= 1;
+    if (state->bitmask == 0)
+    {
+        state->ptr += 1;
+        state->bitmask = 0x80;
+    }
+#ifdef PRC_COUNT_BIT
+    bit_count++;
+    printf("Bit pos %zu\n", bit_count);
+#endif
+}
+
+inline static void
+prc_next_huff_bit(prc_context *ctx, prc_bit_state *state)
+{
+    if (state->bitmask == 0x80)
+    {
+        state->ptr += 1;
+        state->bitmask = 0x01;
+    }
+    else
+    {
+        state->bitmask <<= 1;
+    }
+}
+
+void
+prc_init_huff_bit_state(prc_context *ctx, prc_bit_state *state, uint8_t* ptr)
+{
+    state->ptr = ptr;
+    state->bitmask = 0x01;
+    state->curr_name = NULL;
+}
+
+void
+prc_init_bit_state(prc_context *ctx, prc_bit_state *state, uint8_t *ptr, size_t byte_count)
+{
+    state->ptr = ptr;
+    state->bitmask = 0x80;
+    state->bit_count = (int64_t) byte_count * 8;
+    state->bit_position = 0;
+    state->curr_name = NULL;
+
+#if 1
+   // if (ctx->reset_graphics_state)
+   // {
+        state->graphics_content.behavior_bit_field1 = 0;
+        state->graphics_content.behavior_bit_field2 = 0;
+        state->graphics_content.biased_index_of_line_style = 0;
+        state->graphics_content.biased_layer_index = 0;
+        state->graphics_content.has_entity_ref = 0;
+       // ctx->reset_graphics_state = 0;
+   // }
+#endif
+}
+
+void prc_bitread_rewind(prc_context *ctx, prc_bit_state *state, uint8_t backup_bits)
+{
+    while (backup_bits > 0)
+    {
+        if (state->bitmask == 0x80)
+        {
+            state->ptr--;
+            state->bitmask = 0x01;
+            backup_bits = backup_bits - 1;
+        }
+        else
+        {
+            state->bitmask = state->bitmask << 1;
+            backup_bits = backup_bits - 1;
+        }
+    }
+}
+
+uint8_t
+prc_bitread_bit(prc_context *ctx, prc_bit_state *state)
+{
+    uint8_t bit = *(state->ptr) & state->bitmask;
+    prc_next_bit(ctx, state);
+
+    /* This is for debug issues */
+    state->bit_count--;
+    state->bit_position++;
+
+    if (bit > 0)
+        return 1;
+    else
+        return 0;
+}
+
+/* DEBUG */
+/* Place a break point here and look at memory to search for tags when we get
+  lost in the bit stream */
+void
+prc_debug_stream(prc_context *ctx, prc_bit_state *bit_state)
+{
+    int k;
+    uint32_t value1, value2, value3, value4, value5, value6;
+    uint8_t *ptr_curr;
+    uint8_t bitmask_curr;
+    int64_t bit_count;
+    int64_t bit_pos;
+    int code;
+    uint8_t is_curve;
+
+    for (k = 0; k < 7131600; k++)
+    {
+        /* Grab the state values */
+        ptr_curr = bit_state->ptr;
+        bitmask_curr = bit_state->bitmask;
+        bit_count = bit_state->bit_count;
+        bit_pos = bit_state->bit_position;
+
+        /* Get the next uint32 and show in the debugger */
+      //  value1 = prc_bitread_bit(ctx, bit_state);
+       // value1 = prc_bitread_uint32(ctx, bit_state);
+        value2 = prc_bitread_uint32(ctx, bit_state);
+
+
+        //value2 = prc_bitread_uint_variable_bit(ctx, bit_state, 4);
+        //code = prc_bitread_compressed_entity_type(ctx, bit_state, &is_curve, &value2);
+
+        //value3 = prc_bitread_uint32(ctx, bit_state);
+        //value4 = prc_bitread_uint32(ctx, bit_state);
+       // value4 = prc_bitread_bit(ctx, state);
+       // value5 = prc_bitread_bit(ctx, state);
+      //  value6 = prc_bitread_uint32(ctx, state);
+
+        //PRC_TYPE_GRAPH_Material
+        //PRC_TYPE_GRAPH_TextureTransformation
+        
+        if (value2 == PRC_TYPE_TOPO_Connex ||
+            value2 == PRC_TYPE_TOPO_Shell ||
+            value2 == PRC_TYPE_TOPO_Face ||
+            value2 == PRC_TYPE_TOPO_BrepData ||
+            value2 == PRC_TYPE_TOPO_BrepDataCompress ||
+            value2 == PRC_TYPE_TOPO_Context ||
+            value2 == PRC_TYPE_TOPO_Item ||
+            value2 == PRC_TYPE_TOPO_MultipleVertex ||
+            value2 == PRC_TYPE_TOPO_UniqueVertex ||
+            value2 == PRC_TYPE_TOPO_Body
+            )
+        {
+            printf("Found value\n");
+        }
+
+        /* Reset the state */
+        bit_state->ptr = ptr_curr;
+        bit_state->bitmask = bitmask_curr;
+        bit_state->bit_count = bit_count;
+        bit_state->bit_position = bit_pos;
+
+        /* Go forward 1 bit */
+        prc_bitread_bit(ctx, bit_state);
+    }
+}
+
+/* This does a debug where we check what the bounding box is from individual bit shifts */
+void
+prc_debug_view_stream_bounding_box_search(prc_context *ctx, prc_bit_state *state)
+{
+    uint32_t value;
+    uint8_t *ptr_curr;
+    uint8_t bitmask_curr;
+    int64_t bit_count;
+    int k, i, j;
+    prc_bounding_box bounding_box;
+    int code;
+
+    for (k = 0; k < 7131600; k++)
+    {
+        /* Grab the state values */
+        ptr_curr = state->ptr;
+        bitmask_curr = state->bitmask;
+        bit_count = state->bit_count;
+
+        code = prc_parse_bound_box(ctx, state, &bounding_box);
+
+        if (bounding_box.maximum_corner.x == 0 && bounding_box.maximum_corner.y == 0 && bounding_box.maximum_corner.z == 0 &&
+            bounding_box.minimum_corner.x == 0 && bounding_box.minimum_corner.y == 0 && bounding_box.minimum_corner.z == 0)
+        {
+            printf("Found box\n");
+        }
+
+        /* Reset the state */
+        state->ptr = ptr_curr;
+        state->bitmask = bitmask_curr;
+        state->bit_count = bit_count;
+
+        /* Go forward 1 bit */
+        prc_bitread_bit(ctx, state);
+    }
+}
+
+
+/* This does a debug where it copies the next N bits into
+   a memory pointer so that I can actually view the contents.
+   Handy for looking for names for examples */
+void
+prc_debug_view_stream_on_byte_boundary(prc_context *ctx, prc_bit_state *state)
+{
+    uint32_t value;
+    uint8_t *ptr_curr;
+    uint8_t bitmask_curr;
+    int64_t bit_count;
+    unsigned char temp[10];
+    int k, i, j;
+
+    for (k = 0; k < 7131600; k++)
+    {
+        /* Grab the state values */
+        ptr_curr = state->ptr;
+        bitmask_curr = state->bitmask;
+        bit_count = state->bit_count;
+
+        for (i = 0; i < 10; i++)
+        {
+            temp[i] = 0;
+            for (j = 0; j < 8; j++)
+            {
+                temp[i] <<= 1;
+                temp[i] |= prc_bitread_bit(ctx, state);
+            }
+        }
+
+        if (temp[0] == 'S' && temp[1] == 'o')
+        {
+            printf("Found string\n");
+        }
+
+        /* Reset the state */
+        state->ptr = ptr_curr;
+        state->bitmask = bitmask_curr;
+        state->bit_count = bit_count;
+
+        /* Go forward 1 bit */
+        prc_bitread_bit(ctx, state);
+    }
+}
+
+static uint8_t
+prc_bitread_huff_bit(prc_context *ctx, prc_bit_state *state)
+{
+    uint8_t bit = *(state->ptr) & state->bitmask;
+    prc_next_huff_bit(ctx, state);
+
+    if (bit > 0)
+        return 1;
+    else
+        return 0;
+}
+
+uint8_t
+prc_bitread_uint8(prc_context *ctx, prc_bit_state *state)
+{
+    uint8_t val = 0;
+    int k;
+
+    val |= prc_bitread_bit(ctx, state);
+    for (k = 0; k < 7; k++)
+    {
+        val <<= 1;
+        val |= prc_bitread_bit(ctx, state);
+    }
+    return val;
+}
+
+uint32_t
+prc_bitread_uint32(prc_context *ctx, prc_bit_state *state)
+{
+    uint32_t val = 0;
+    uint32_t pos = 0;
+
+    while (prc_bitread_bit(ctx, state))
+    {
+        val |= (((uint32_t)(prc_bitread_uint8(ctx, state))) << (8 * pos++));
+    }
+    return val;
+}
+
+int32_t
+prc_bitread_int32(prc_context *ctx, prc_bit_state *state)
+{
+    uint32_t val = 0;
+    uint32_t pos = 0;
+
+    while (prc_bitread_bit(ctx, state))
+    {
+        val |= (((uint32_t)(prc_bitread_uint8(ctx, state))) << (8 * pos++));
+    }
+
+    val <<= (4 - pos) * 8;
+    val >>= (4 - pos) * 8;
+    return val;
+}
+
+int32_t
+prc_bitread_uncompressed_uint32(prc_context *ctx, prc_bit_state *state)
+{
+    uint32_t val;
+
+    val = prc_bitread_uint8(ctx, state);
+    val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 8);
+    val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 16);
+    val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 24);
+
+    return val;
+}
+
+int
+prc_bitread_string(prc_context *ctx, prc_bit_state *state, prc_string* string)
+{
+    unsigned int k;
+
+    string->null_flag = prc_bitread_bit(ctx, state);
+    string->string = NULL;
+    if (string->null_flag)
+    {
+        string->size = prc_bitread_uint32(ctx, state);
+        string->string = (unsigned char*)prc_malloc(ctx, string->size + 1);
+        if (string->string == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_string\n");
+            return PRC_ERROR_MEMORY;
+        }
+
+        /* Lets hope the character array is not Huffman compressed... Spec is horrid */
+        for (k = 0; k < string->size; k++)
+        {
+            string->string[k] = prc_bitread_uint8(ctx, state);
+        }
+        string->string[string->size] = 0x0;
+        string->null_flag = 0;
+    }
+    return 0;
+}
+
+float 
+prc_bitread_float(prc_context *ctx, prc_bit_state *state)
+{
+    union float_uint val;
+
+    val.uint_val = prc_bitread_uint8(ctx, state);
+    val.uint_val += (prc_bitread_uint8(ctx, state) << 8);
+    val.uint_val += (prc_bitread_uint8(ctx, state) << 16);
+    val.uint_val += (prc_bitread_uint8(ctx, state) << 24);
+
+    return val.float_val;
+}
+
+double
+prc_bitread_double_with_variable_bit_number(prc_context *ctx, prc_bit_state *state,
+    unsigned int number_of_bits, double tolerance)
+{
+    uint8_t is_negative = prc_bitread_bit(ctx, state);
+    uint32_t mantissa = prc_bitread_uint_variable_bit(ctx, state, number_of_bits - 1);
+
+    return tolerance * (is_negative ? -1.0 : 1.0) * (double)mantissa;
+}
+
+double
+prc_bitread_double(prc_context *ctx, prc_bit_state *state)
+{
+    union ieee754_double value;
+    value.d = 0;
+    sCodageOfFrequentDoubleOrExponent* pcofdoe;
+    unsigned int ucofdoe = 0;
+    for (int i = 1; i <= 22; ++i)
+    {
+        ucofdoe <<= 1;
+        ucofdoe |= prc_bitread_bit(ctx, state);
+        if ((pcofdoe = get_acofdoe_value(ctx, ucofdoe, i)) != NULL)
+            break;
+    }
+    value.d = pcofdoe->u2uod.Value;
+
+    // check if zero
+    if (pcofdoe->NumberOfBits == 2 && pcofdoe->Bits == 1 && pcofdoe->Type == VT_double)
+        return value.d;
+
+    value.ieee.negative = prc_bitread_bit(ctx, state); // get sign
+
+    if (pcofdoe->Type == VT_double) // double from list
+        return value.d;
+
+    if (prc_bitread_bit(ctx, state) == 0) // no mantissa
+        return value.d;
+
+    // read the mantissa
+    // read uppermost 4 bits of mantissa
+    unsigned char b4 = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        b4 <<= 1;
+        b4 |= prc_bitread_bit(ctx, state);
+    }
+
+#ifdef PRC_BIG_ENDIAN
+    *((unsigned char*)(&value) + 1) |= b4;
+    unsigned char* lastByte = (unsigned char*)(&value) + 7;
+    unsigned char* currentByte = (unsigned char*)(&value) + 2;
+#else
+    *((unsigned char*)(&value) + 6) |= b4;
+    unsigned char* lastByte = (unsigned char*)(&value) + 0;
+    unsigned char* currentByte = (unsigned char*)(&value) + 5;
+#endif
+
+    for (; MOREBYTE(currentByte, lastByte); NEXTBYTE(currentByte))
+    {
+        if (prc_bitread_bit(ctx, state))
+        {
+            // new byte
+            *currentByte = prc_bitread_uint8(ctx, state);
+        }
+        else
+        {
+            // get 3 bit offset
+            unsigned int offset = 0;
+            offset |= (prc_bitread_bit(ctx, state) << 2);
+            offset |= (prc_bitread_bit(ctx, state) << 1);
+            offset |= prc_bitread_bit(ctx, state);
+            if (offset == 0)
+            {
+                // fill remaining bytes in mantissa with previous byte
+                unsigned char pByte = BYTEAT(currentByte, 1);
+                for (; MOREBYTE(currentByte, lastByte); NEXTBYTE(currentByte))
+                    *currentByte = pByte;
+                break;
+            }
+            else if (offset == 6)
+            {
+                // fill remaining bytes except last byte with previous byte
+                unsigned char pByte = BYTEAT(currentByte, 1);
+                PREVIOUSBYTE(lastByte);
+                for (; MOREBYTE(currentByte, lastByte); NEXTBYTE(currentByte))
+                    *currentByte = pByte;
+                *currentByte = prc_bitread_uint8(ctx, state);
+                break;
+            }
+            else
+            {
+                // one repeated byte
+                *currentByte = BYTEAT(currentByte, offset);
+            }
+        }
+    }
+    return value.d;
+}
+
+uint32_t
+prc_bitread_huff_data(prc_context *ctx, prc_bit_state *state, uint32_t num_bits)
+{
+    uint32_t k;
+    uint32_t val = 0;
+
+    for (k = 0; k < num_bits; k++)
+    {
+        val += (prc_bitread_huff_bit(ctx, state) << k);
+    }
+    return val;
+}
+
+static prc_huff_node*
+prc_new_huff_node(prc_context *ctx)
+{
+    prc_huff_node *node = (prc_huff_node*)prc_malloc(ctx, sizeof(prc_huff_node));
+    
+    if (node == NULL)
+    {
+        return NULL;
+    }
+
+    node->is_leaf = 0;
+    node->left = NULL;
+    node->right = NULL;
+    node->next = NULL;
+    
+    return node;
+}
+
+/* Huffman decoder. Can be used to decode data of different bit lengths on the leaves.
+*  This particular implemenation can support char (1 byte) or short (2 byte) arrays
+*  as input to the encoder, and compresses them using a number of bits that depends 
+*  upon the maximum value that the array contains.  This number of bits used,
+*  is specified by the data type. For example, for the Edge_status_array the number
+*  is equal to 2.  In that case, it is writing out a character array each with 2 bits
+*  per character.  normal_angle_array is a shortarray with 16bits per character.  
+*  This decoder, always returns data of uint32_t but data could have been smaller when compressed.
+*  The characterArray, shortArray, character_array_compressed
+* 
+*  Here is some types and bit sizes that the spec says:
+* 
+*  CharacterArray 
+*  point_color_array --> CharacterArray  8 bits.  Is it compressed?
+*  behaviors_array --> CharacterArray 8 bits.  Is it compressed?
+*  edge_status_array --> CharacterArray with 2 bits per character. Is it huffman compressed?
+*  character_array (character_array_compressed) 6 bits.  I guess if a character array is compressed it uses 6 bits.
+*  point_reference_array --> CompressedIndiceArray.  An odd one with the flag of it being compressed specified if number_of_reference_points >= 3 is from CompressedIndiceArray type.
+*  normal_angle_array (normal_angle_array_compressed) optionally compressed using normal_angle_number_of_bits.  Is should be lower than 16 and set to 10 for good performance
+* 
+* ShortArray
+* normal_angle_array, line_attribute_array, line_attribute_array  --> is compressed bit will tell if data is compressed and using huffman. But what is the number of bits used?
+*
+* point_array -> CompressedIntegerArray
+*
+* CompressedIndiceArray  --> invokes WriteCharacterArray but with out having written if the data is compressed or not. It is impled from the number of reference_points.
+* point_reference_array, triangle_face_array
+*/
+static uint32_t*
+prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bits, uint32_t huffman_array_size, uint32_t *data_decode_size)
+{
+    uint32_t k;
+    uint32_t *data; /* Just take the largest we might encounter */
+    uint32_t *huffman_array = NULL;
+    uint32_t bits_last_integer;
+    prc_bit_state huff_state;
+    uint32_t num_leaves;
+    uint32_t max_code_length;
+    uint32_t *leaf_values;
+    uint32_t *code_length;
+    uint32_t *code_values;
+    uint32_t bit_mask, bit;
+    int j;
+    prc_huff_node *root_node;
+    prc_huff_node *curr_node;
+    uint32_t num_values;
+    uint32_t index;
+    size_t max_bits;
+    size_t num_bits_read = 0;
+    prc_huff_node **linear_list = NULL;
+    uint32_t linear_list_capacity;
+    uint32_t linear_list_size = 0;
+
+    huffman_array = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * huffman_array_size);
+    if (huffman_array == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman_array\n");
+        return NULL;
+    }
+
+    for (k = 0; k < huffman_array_size; k++)
+    {
+        huffman_array[k] = prc_bitread_uncompressed_uint32(ctx, state);
+    }
+    bits_last_integer = prc_bitread_uint32(ctx, state);
+
+    /* Here for sanity check */
+    max_bits = (huffman_array_size - 1) * 32 + bits_last_integer;
+
+    /* Now take the huffman array apart into the values, codes and code lengths */
+    /* Everything is bit compressed.  And of course it is encoded different
+       than the rest of the data, hence the special _huff_ calls.  The spec
+       obfuscates this fact.  Madness. */
+    prc_init_huff_bit_state(ctx, &huff_state, (uint8_t *)huffman_array);
+
+    /* First read in huffman array */
+    num_leaves = prc_bitread_huff_data(ctx, &huff_state, num_bits + 1);
+    num_bits_read = num_bits_read + num_bits + 1;
+
+    max_code_length = prc_bitread_huff_data(ctx, &huff_state, 8);
+    if (max_code_length == 0)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "huffman_array max_code_length is zero\n");
+        return NULL;
+    }
+
+    num_bits_read += 8;
+
+    leaf_values = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+    if (leaf_values == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman leaf_values\n");
+        return NULL;
+    }
+
+    code_length = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+    if (code_length == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman code_length\n");
+        return NULL;
+    }
+
+    code_values = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+    if (code_values == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman code_values\n");
+        return NULL;
+    }
+
+    for (k = 0; k < num_leaves; k++)
+    {
+        leaf_values[k] = prc_bitread_huff_data(ctx, &huff_state, num_bits);
+        num_bits_read += num_bits;
+        code_length[k] = prc_bitread_huff_data(ctx, &huff_state, max_code_length);
+        num_bits_read += max_code_length;
+        code_values[k] = prc_bitread_huff_data(ctx, &huff_state, code_length[k]);
+        num_bits_read += code_length[k];
+    }
+
+    /* Allocate an array to hold all the nodes of the tree in a linear list 
+       to make deallocation easier */
+    linear_list_capacity = PRC_HUFFMAN_INITIAL_NODES;
+    linear_list = (prc_huff_node **)prc_malloc(ctx, sizeof(prc_huff_node *) * linear_list_capacity);
+    if (linear_list == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman linear_list\n");
+        return NULL;
+    }
+
+    /* Build the tree.  The idea here is to only construct the path to each leaf */
+    /* This also creates a linear path through the nodes to make it easy to free */
+    root_node = prc_new_huff_node(ctx);
+    if (root_node == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman root_node\n");
+        return NULL;
+    }
+    linear_list[linear_list_size++] = root_node;
+
+    for (k = 0; k < num_leaves; k++)
+    {
+        /* Traverse current tree. Adding nodes as need to get to leaf */
+        curr_node = root_node;
+        for (j = code_length[k] - 1; j >= 0; j--)
+        {
+            bit_mask = 1 << j;
+            bit = code_values[k] & bit_mask;
+            if (bit == 0)
+            {
+                /* Go left */
+                if (curr_node->left == NULL)
+                {
+                    curr_node->left = prc_new_huff_node(ctx);
+                    if (curr_node->left == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        return NULL;
+                    }
+                    /* Check if we need to grow the linear list */
+                    if (linear_list_size >= linear_list_capacity)
+                    {
+                        linear_list_capacity *= 2;
+                        linear_list = (prc_huff_node **)prc_realloc(ctx, linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
+                        if (linear_list == NULL)
+                        {
+                            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                            return NULL;
+                        }
+                    }
+                    linear_list[linear_list_size++] = curr_node->left;
+                    curr_node->next = curr_node->left;
+                    if (curr_node->left == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        return NULL;
+                    }
+                }
+                curr_node = curr_node->left;
+            }
+            else
+            {
+                /* Go right */
+                if (curr_node->right == NULL)
+                {
+                    curr_node->right = prc_new_huff_node(ctx);
+                    if (curr_node->right == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        return NULL;
+                    }
+                    /* Check if we need to grow the linear list */
+                    if (linear_list_size >= linear_list_capacity)
+                    {
+                        linear_list_capacity *= 2;
+                        linear_list = (prc_huff_node **)prc_realloc(ctx, linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
+                        if (linear_list == NULL)
+                        {
+                            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                            return NULL;
+                        }
+                    }
+                    linear_list[linear_list_size++] = curr_node->right;
+                    curr_node->next = curr_node->right;
+                    if (curr_node->right == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        return NULL;
+                    }
+                }
+                curr_node = curr_node->right;
+            }
+        }
+        /* At a leaf */
+        curr_node->is_leaf = 1;
+        curr_node->value = leaf_values[k];
+    }
+
+    /* Now get the number of data values that were encoded */
+    num_values = prc_bitread_huff_data(ctx, &huff_state, 32);
+    num_bits_read += 32;
+
+    data = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * num_values);
+    if (data == NULL)
+        return data;
+
+    /* And finally the encoded values */
+    index = 0;
+    curr_node = root_node;
+    while (index < num_values)
+    {
+        bit = prc_bitread_huff_bit(ctx, &huff_state);
+        num_bits_read += 1;
+        if (bit == 0)
+        {
+            curr_node = curr_node->left;
+        }
+        else
+        {
+            curr_node = curr_node->right;
+        }
+        if (curr_node->is_leaf)
+        {
+            data[index] = curr_node->value;
+            index += 1;
+            curr_node = root_node;
+        }
+    }
+    *data_decode_size = num_values;
+
+    prc_free(ctx, huffman_array);
+    prc_free(ctx, leaf_values);
+    prc_free(ctx, code_length);
+    prc_free(ctx, code_values);
+
+    /* Free the tree using the linear list */
+    for (k = 0; k < linear_list_size; k++)
+    {
+        prc_free(ctx, linear_list[k]);
+    }
+    prc_free(ctx, linear_list);
+
+    return data;
+}
+
+/* 10.6 Inverse of Writecharacterarray. */
+uint8_t*
+prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_size,
+    uint8_t num_bits, uint8_t has_comp_bit, uint32_t num_known)
+{
+    uint8_t compressed;
+    uint32_t k;
+    uint8_t*data;
+    uint32_t huffman_array_size;
+    uint32_t *huffman_array = NULL;
+    uint32_t bits_last_integer;
+    prc_bit_state huff_state;
+    uint32_t array_size;
+
+    /* Get the is_compressed bit. */
+    if (has_comp_bit)
+        compressed = prc_bitread_bit(ctx, state);
+
+    /* Go ahead and read the size. This is the used to decide if the data was compressed or not for the indice array */
+    array_size = prc_bitread_uint32(ctx, state);
+    if (array_size == 0)
+    {
+        *data_size = 0;
+        return NULL;
+    }
+
+    if (!has_comp_bit)
+    {
+        if (num_known <= 3) /* HTML doc has < 3 but <= 3 seems to be uncompressed */
+        {
+            compressed = false;
+            *data_size = array_size;
+        }
+        else
+        {
+            compressed = true;
+            huffman_array_size = array_size;
+        }
+    }
+    else
+    {
+        if (compressed)
+        {
+            huffman_array_size = array_size;
+        }
+        else
+        {
+            *data_size = array_size;
+        }
+    }
+
+    if (compressed)
+    {
+        uint32_t num_leaves;
+        uint32_t max_code_length;
+        uint32_t *leaf_values;
+        uint32_t *code_length;
+        uint32_t *code_values;
+        uint32_t bit_mask, bit;
+        int j;
+        prc_huff_node *root_node;
+        prc_huff_node *curr_node;
+        prc_huff_node **linear_nodes;
+        uint32_t linear_node_count;
+        uint32_t linear_node_size;
+        uint32_t num_values;
+        uint32_t index;
+        size_t max_bits;
+        size_t num_bits_read = 0;
+
+        if (huffman_array_size > 0)
+        {
+            huffman_array = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * huffman_array_size);
+            if (huffman_array == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman_array\n");
+                return NULL;
+            }
+
+            for (k = 0; k < huffman_array_size; k++)
+            {
+                huffman_array[k] = prc_bitread_uncompressed_uint32(ctx, state);
+            }
+            bits_last_integer = prc_bitread_uint32(ctx, state);
+            /* So we over read the last bit.  We need to reset the state?? */
+            //uint8_t backup_bits = 32 - (int) bits_last_integer;
+            //prc_bitread_rewind(ctx, state, backup_bits);
+
+            max_bits = (huffman_array_size - 1) * 32 + bits_last_integer;
+
+            /* Now take the huffman array apart into the values, codes and code lengths */
+            /* Everything is bit compressed.  And of course it is encoded different
+               than the rest of the data, hence the special _huff_ calls.  The spec
+               obfuscates this fact.  Madness. */
+            prc_init_huff_bit_state(ctx, &huff_state, (uint8_t*) huffman_array);
+
+            /* First read in huffman array */
+            num_leaves = prc_bitread_huff_data(ctx, &huff_state, num_bits + 1);
+            num_bits_read = num_bits_read + num_bits + 1;
+
+            max_code_length = prc_bitread_huff_data(ctx, &huff_state, 8);
+            if (max_code_length > 32)
+            {
+                prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman max_code_length\n");
+                return NULL;
+            }
+            num_bits_read += 8;
+
+            leaf_values = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+            if (leaf_values == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of leaf_values\n");
+                return NULL;
+            }
+
+            code_length = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+            if (code_length == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of code_length\n");
+                return NULL;
+            }
+
+            code_values = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * num_leaves);
+            if (code_values == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of code_values\n");
+                return NULL;
+            }
+
+            for (k = 0; k < num_leaves; k++)
+            {
+                leaf_values[k] = prc_bitread_huff_data(ctx, &huff_state, num_bits);
+                num_bits_read += num_bits;
+                code_length[k] = prc_bitread_huff_data(ctx, &huff_state, max_code_length);
+                num_bits_read += max_code_length;
+                code_values[k] = prc_bitread_huff_data(ctx, &huff_state, code_length[k]);
+                num_bits_read += code_length[k];
+            }
+
+            /* Build the tree.  The idea here is to only construct the path to each leaf */
+            /* This also creates a linear path through the nodes to make it easy to free */
+            root_node = prc_new_huff_node(ctx);
+
+            /* For now assume that we need twice as many nodes as we have for leaves. If could be
+               more. If needed we will realloc */
+            linear_node_size = 2 * num_leaves;
+            linear_nodes = (prc_huff_node**)prc_calloc(ctx, linear_node_size, sizeof(prc_huff_node*));
+            linear_nodes[0] = root_node;
+            linear_node_count = 1;
+
+            if (root_node == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of root_node\n");
+                return NULL;
+            }
+
+            for (k = 0; k < num_leaves; k++)
+            {
+                /* Traverse current tree. Adding nodes as need to get to leaf */
+                curr_node = root_node;
+                for (j = code_length[k] - 1; j >= 0; j--)
+                {
+                    bit_mask = 1 << j;
+                    bit = code_values[k] & bit_mask;
+                    if (bit == 0)
+                    {
+                        /* Go left */
+                        if (curr_node->left == NULL)
+                        {
+                            curr_node->left = prc_new_huff_node(ctx);
+                            if (curr_node->left == NULL)
+                            {
+                                prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman creation\n");
+                                return NULL;
+                            }
+                            if (linear_node_count == linear_node_size - 1)
+                            {
+                                linear_node_size = linear_node_size * 2;
+                                linear_nodes = prc_realloc(ctx, linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                            }
+                            linear_nodes[linear_node_count] = curr_node->left;
+                            linear_node_count++;
+                        }
+                        curr_node = curr_node->left;
+                    }
+                    else
+                    {
+                        /* Go right */
+                        if (curr_node->right == NULL)
+                        {
+                            curr_node->right = prc_new_huff_node(ctx);
+                            if (curr_node->right == NULL)
+                            {
+                                prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman creation\n");
+                                return NULL;
+                            }
+                            if (linear_node_count == linear_node_size - 1)
+                            {
+                                linear_node_size = linear_node_size * 2;
+                                linear_nodes = prc_realloc(ctx, linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                            }
+                            linear_nodes[linear_node_count] = curr_node->right;
+                            linear_node_count++;
+                        }
+                        curr_node = curr_node->right;
+                    }
+                }
+                /* At a leaf */
+                curr_node->is_leaf = 1;
+                curr_node->value = leaf_values[k];
+            }
+
+            /* Now get the number of data values that were encoded */
+            num_values = prc_bitread_huff_data(ctx, &huff_state, 32);
+            num_bits_read += 32;
+
+            data = (uint8_t*)prc_malloc(ctx, sizeof(uint8_t) * num_values);
+            if (data == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman data\n");
+                return NULL;
+            }
+
+            /* And finally the encoded values */
+            index = 0;
+            curr_node = root_node;
+            while (index < num_values)
+            {
+                bit = prc_bitread_huff_bit(ctx, &huff_state);
+                num_bits_read += 1;
+                if (bit == 0)
+                {
+                    curr_node = curr_node->left;
+                }
+                else
+                {
+                    curr_node = curr_node->right;
+                }
+                if (curr_node->is_leaf)
+                {
+                    data[index] = curr_node->value;
+                    index += 1;
+                    curr_node = root_node;
+                }
+            }
+            *data_size = num_values;
+
+            prc_free(ctx, huffman_array);
+            prc_free(ctx, leaf_values);
+            prc_free(ctx, code_length);
+            prc_free(ctx, code_values);
+
+            for (k = 0; k < linear_node_count; k++)
+            {
+                prc_free(ctx, linear_nodes[k]);
+            }
+            prc_free(ctx, linear_nodes);
+
+            return data;
+        }
+        else
+        {
+            *data_size = 0;  /* I don't think this is an error */
+            //prc_error(ctx, PRC_ERROR_HUFFMAN, "Huffman array size is zero\n");
+            return NULL;
+        }
+    }
+    else
+    {
+        data = (uint8_t*)prc_malloc(ctx, sizeof(uint8_t) * *data_size);
+        if (data == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of prc_bitread_character_array data\n");
+            return NULL;
+        }
+
+        for (k = 0; k < *data_size; k++)
+        {
+            data[k] = prc_bitread_uint8(ctx, state);
+        }
+        return data;
+    }   
+    return NULL;
+}
+
+uint32_t
+prc_bitread_uint_variable_bit(prc_context *ctx, prc_bit_state *state, uint32_t bit_length)
+{
+    uint32_t value = 0;
+    uint32_t k;
+    uint8_t bit;
+
+    for (k = 0; k < bit_length; k++)
+    {
+        bit = prc_bitread_bit(ctx, state);
+        if (bit)
+            value += 1 << (bit_length - 1 - k);
+    }
+    return value;
+}
+
+
+int32_t
+prc_bitread_int_variable_bit(prc_context *ctx, prc_bit_state *state, uint32_t bit_length)
+{
+    int32_t value;
+    uint8_t sign;
+
+    sign = prc_bitread_bit(ctx, state);
+    value = (int32_t)prc_bitread_uint_variable_bit(ctx, state, bit_length - 1);
+
+    if (sign)
+        return -value;
+    else
+        return value;
+}
+
+/* A special version for dealin with the ana curves */
+int
+prc_bitread_compressed_entity_type_analoop(prc_context *ctx, prc_bit_state *state,
+    uint32_t *entity_type)
+{
+    uint8_t bit0, bit1, bit2, bit3;
+    uint32_t value;
+
+
+    /* Read the first two bits */
+    bit0 = prc_bitread_bit(ctx, state);
+    bit1 = prc_bitread_bit(ctx, state);
+
+    if (bit0 == 1 && bit1 == 1)
+    {
+        /* Read the next two bits */
+        bit2 = prc_bitread_bit(ctx, state);
+        bit3 = prc_bitread_bit(ctx, state);
+
+        if (bit2 != 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Unknown entity type %d in prc_bit_read_compressed_entity_type\n", value);
+            return PRC_ERROR_PARSE;
+        }
+        if (bit3 == 0)
+        {
+            *entity_type = PRC_HCG_Ellipse;
+            return 0;
+        }
+        else
+        {
+            *entity_type = PRC_HCG_CompositeCurve;
+            return 0;
+        }
+    }
+    else
+    {
+        value = (bit0 << 1) | bit1;
+        switch (value)
+        {
+        case 0:
+            *entity_type = PRC_HCG_Line;
+            return 0;
+
+        case 1:
+            *entity_type = PRC_HCG_Circle;
+            return 0;
+
+        case 2:
+            *entity_type = PRC_HCG_BsplineHermiteCurve;
+            return 0;
+
+        default:
+            prc_error(ctx, PRC_ERROR_PARSE, "Unknown entity type %d in prc_bit_read_compressed_entity_type\n", value);
+            return PRC_ERROR_PARSE;
+
+        }
+    }
+
+}
+
+/* This may need to be checked for bit order in the is_curve case */
+int
+prc_bitread_compressed_entity_type(prc_context *ctx, prc_bit_state *state,
+                                    uint8_t *is_curve, uint32_t *entity_type)
+{
+    uint8_t bit0, bit1, bit2, bit3;
+    uint32_t value;
+
+    *is_curve = prc_bitread_bit(ctx, state);
+
+    if (*is_curve)
+    {
+        /* Read the first two bits */
+        bit0 = prc_bitread_bit(ctx, state);
+        bit1 = prc_bitread_bit(ctx, state);
+
+        if (bit0 == 1 && bit1 == 1)
+        {
+            /* Read the next two bits */
+            bit2 = prc_bitread_bit(ctx, state);
+            bit3 = prc_bitread_bit(ctx, state);
+            
+            if (bit2 != 0)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Unknown entity type %d in prc_bit_read_compressed_entity_type\n", value);
+                return PRC_ERROR_PARSE;
+            }
+            if (bit3 == 0)
+            {
+                *entity_type = PRC_HCG_Ellipse;
+                return 0;
+            }
+            else
+            {
+                *entity_type = PRC_HCG_CompositeCurve;
+                return 0;
+            }
+        }
+        else
+        {
+            value = (bit0 << 1) | bit1;
+            switch (value)
+            {
+                case 0:
+                    *entity_type = PRC_HCG_Line;
+                    return 0;
+
+                case 1:
+                    *entity_type = PRC_HCG_Circle;
+                    return 0;
+
+                case 2:
+                    *entity_type = PRC_HCG_BsplineHermiteCurve;
+                    return 0;
+
+                default:
+                    prc_error(ctx, PRC_ERROR_PARSE, "Unknown entity type %d in prc_bit_read_compressed_entity_type\n", value);
+                    return PRC_ERROR_PARSE;
+
+            }
+        }
+    }
+    else
+    {
+        *entity_type = prc_bitread_uint_variable_bit(ctx, state, 4);
+    }
+    return 0;
+}
+
+/* An odd one. Similar to the variable bit case but the number of bits is stored
+   in the stream. 9.15 in the HTML document  */
+uint32_t
+prc_bitread_number_of_bits_then_unsigned_int(prc_context *ctx, prc_bit_state *state)
+{
+    /* The number of bits is written out with 5 bits itself */
+    uint32_t bit_length = prc_bitread_uint_variable_bit(ctx, state, 5);
+    return prc_bitread_uint_variable_bit(ctx, state, bit_length);
+}
+
+/* Inverse of 10.8 Writecompressedintegerarray */
+uint32_t*
+prc_bitread_compressed_integer_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_size)
+{
+    uint8_t *bit_lengths;
+    uint32_t size;
+    uint32_t k;
+    uint32_t *data;
+
+    /* First get the bit length storages. These could be Huffman encoded */
+    bit_lengths = prc_bitread_character_array(ctx, state, &size, 6, true, 0);
+    if (bit_lengths == NULL)
+        return NULL;
+
+    data = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * size);
+    if (data == NULL)
+        return NULL;
+
+    /* Now get the integers of variable lengths */
+   // DEBUG_LOG("prc_bitread_compressed_integer_array\n");
+    for (k = 0; k < size; k++)
+    {
+        data[k] = prc_bitread_int_variable_bit(ctx, state, bit_lengths[k]);
+        //DEBUG_LOG("data[%d] = %d\n", k, data[k]);
+   //     DEBUG_LOG("%d, ", data[k]); /* MATLAB style */
+    }
+
+    prc_free(ctx, bit_lengths);
+
+    *data_size = size;
+    return data;
+}
+
+/* Inverse of 10.7 Writeshortarray */
+int32_t*
+prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_size, uint8_t has_comp_bit, uint8_t number_of_bits)
+{
+    uint32_t size;
+    uint8_t compressed;
+    int32_t *output;
+
+    /* Get the is_compressed bit. */
+    if (has_comp_bit)
+        compressed = prc_bitread_bit(ctx, state);
+    else
+        compressed = false;
+
+    /* Get the storage size. This could be the size of the Huffman data or the array size */
+    size = prc_bitread_uint32(ctx, state);
+    if (size == 0)
+        return NULL;
+
+    /* Split between Huffman and non-Huffman case */
+    if (compressed)
+    {
+        uint32_t *data;
+        uint32_t j;
+
+        data = prc_huffman_data_decoder(ctx, state, number_of_bits, size, data_size);
+        if (data == NULL || *data_size == 0)
+        {
+            /* Force an error */
+            *data_size = 1;
+            prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman decoder\n");
+            return NULL;
+        }
+
+        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * (*data_size));
+        if (output == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
+            return NULL;
+        }
+
+        memcpy(output, data, sizeof(int32_t) * (*data_size));
+        prc_free(ctx, data);
+    }
+    else
+    {
+        uint32_t j;
+        int32_t temp1, temp2;
+
+        /* Need better error handling here */
+        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * size);
+        if (output == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
+            return NULL;
+        }
+        *data_size = size;
+
+        for (j = 0; j < size; j++)
+        {
+            temp1 = prc_bitread_uint8(ctx, state);
+            temp2 = prc_bitread_uint8(ctx, state);
+            output[j] = temp1 + (temp2 << 8);
+        }
+    }
+    return output;
+}
+
+/* Inverse of 10.9 Writecompressedindicearray. These are difference encoded */
+int32_t*
+prc_bitread_compressed_indice_array(prc_context *ctx, prc_bit_state *state,
+                                    uint32_t *data_size, uint8_t has_comp_bit,
+                                    uint32_t num_known)
+{
+    char *bit_lengths;
+    uint32_t size;
+    uint32_t k;
+    int32_t *data;
+    int32_t temp;
+    char bit_count;
+
+    /* First get the bit length storages. These could be Huffman encoded.
+       They are difference encoded */
+    /* This is an odd one. It is possible that there were no reference points and the size
+       here is zero. I would suspect we would not do the readings here then. */
+    bit_lengths = (char*) prc_bitread_character_array(ctx, state, &size, 6, has_comp_bit,
+                                                      num_known);
+    *data_size = size;
+    if (bit_lengths == NULL || size == 0)
+        return NULL;
+
+    data = (int32_t*)prc_malloc(ctx, sizeof(int32_t) * size);
+    if (data == NULL)
+        return NULL;
+
+    /* This is not clear in the spec bit lengths must be less than 32 which 
+       is 1 for the sign bit and 31 for the unsignedinteger.  Make sure we
+       are less than 32. If not, then the encoding is negative??? Looking 
+       carefully at this these are always 6 bits.  If they are negative
+       the sixth bit (32) is set.  In that case, or this with 0xC0 to get
+       the proper negative number */
+    for (k = 0; k < size; k++)
+    {
+        if (bit_lengths[k] >= 32)
+        {
+            bit_lengths[k] = bit_lengths[k] | 0xc0;  /* Crazy this is not in the spec */
+        }
+    }
+
+    /* Read in the first variable encoded value */
+    bit_count = bit_lengths[0];
+ //   DEBUG_LOG("\nprc_bitread_compressed_indice_array\n");
+    data[0] = prc_bitread_int_variable_bit(ctx, state, (uint8_t) bit_count);
+ //   DEBUG_LOG("data[0] = %d\n", data[0]);
+
+    /* Now get the rest which are difference encoded integers of variable lengths */
+    for (k = 1; k < size; k++)
+    {
+        bit_count += (int)bit_lengths[k];
+       // bit_count = (int)bit_lengths[k];
+        temp = prc_bitread_int_variable_bit(ctx, state, (uint8_t) bit_count);
+        data[k] = temp + data[k - 1];
+ //       DEBUG_LOG("data[%d] = %d\n", k, data[k]);
+    }
+
+    prc_free(ctx, bit_lengths);
+
+    return data;
+}

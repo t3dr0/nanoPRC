@@ -1,0 +1,1608 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nano_prc is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nano_prc is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nano_prc. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#include <stdlib.h>
+#include "prc_schema.h"
+
+void
+prc_release_string(prc_context *ctx, prc_string *data)
+{
+    if (data->string != NULL && data->null_flag != 1)
+    {
+        prc_free(ctx, data->string);
+    }
+}
+
+static void
+prc_release_name(prc_context *ctx, prc_name *data)
+{
+    if (data == NULL)
+        return;
+
+    if (!data->same)
+    {
+        prc_release_string(ctx, &data->name);
+    }
+}
+
+static void
+prc_release_attribute_title(prc_context *ctx, prc_attribute_entry *data)
+{
+    if (!data->flag)
+    {
+        prc_release_string(ctx, &data->string_title);
+    }
+}
+
+static void
+prc_release_attribute_key_value(prc_context *ctx, prc_attribute_key_value *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_attribute_title(ctx, &data->title);
+    if (data->type == PRC_ATTRIBUTE_TYPE_CHAR_UTF8)
+    {
+        prc_release_string(ctx, &data->val_string);
+    }
+}
+
+static void
+prc_release_prc_ref_base(prc_context *ctx, prc_content_prc_ref_base *base)
+{
+    size_t k, j;
+
+    if (base == NULL)
+        return;
+
+    prc_release_string(ctx, &base->name.name);
+    prc_attribute_data attribute_data = base->attribute_data;
+
+    for (k = 0; k < attribute_data.attribute_count; k++)
+    {
+        prc_release_attribute_title(ctx, &attribute_data.attributes[k].attribute_title);
+        if (attribute_data.attributes[k].attributes != NULL)
+        {
+            for (j = 0; j < attribute_data.attributes[k].number_attributes; j++)
+            {
+                prc_release_attribute_key_value(ctx, &attribute_data.attributes[k].attributes[j]);
+            }
+        }
+        prc_free(ctx, (attribute_data.attributes[k].attributes));
+    }
+    prc_free(ctx, (attribute_data.attributes));
+}
+
+static void
+prc_release_base_with_graphics(prc_context *ctx, prc_base_with_graphics *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_prc_ref_base(ctx, &data->base);
+}
+
+static void
+prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
+{
+    size_t k;
+
+    if (base == NULL)
+        return;
+
+    prc_release_string(ctx, &base->name.name);
+    prc_attribute_data attribute_data = base->attribute_data;
+
+    for (k = 0; k < attribute_data.attribute_count; k++)
+    {
+        prc_release_string(ctx, &attribute_data.attributes[k].attribute_title.string_title);
+        prc_free(ctx, (attribute_data.attributes[k].attributes));
+        prc_free(ctx, &attribute_data.attributes[k]);
+    }
+}
+
+static void
+prc_release_treat_types(prc_context *ctx, prc_graphics_information *treat_type)
+{
+    if (treat_type == NULL)
+        return;
+
+    if (treat_type->element_information != NULL)
+    {
+        prc_free(ctx, treat_type->element_information);
+        treat_type->element_information = NULL;
+    }
+}
+
+static void
+prc_release_context_graphics(prc_context *ctx, prc_context_graphics *context_graphics)
+{
+    size_t k;
+
+    if (context_graphics == NULL)
+        return;
+
+    for (k = 0; k < context_graphics->number_of_treat_type; k++)
+    {
+        prc_release_treat_types(ctx, &context_graphics->treat_types[k]);
+    }
+    prc_free(ctx, context_graphics->treat_types);
+    context_graphics->treat_types = NULL;
+}
+
+static void
+prc_release_file_struct_desc(prc_context *ctx, prc_file_struct_desc *file_struct_desc)
+{
+    if (file_struct_desc == NULL)
+        return;
+
+    if (file_struct_desc->section_offset != NULL)
+    {
+        prc_free(ctx, file_struct_desc->section_offset);
+        file_struct_desc->section_offset = NULL;
+    }
+    prc_free(ctx, file_struct_desc);
+}
+
+static void
+prc_release_uncomp_block(prc_context *ctx, prc_uncomp_block *uncomp_block)
+{
+    if (uncomp_block == NULL)
+        return;
+
+    if (uncomp_block->block != NULL)
+    {
+        prc_free(ctx, uncomp_block->block);
+    }
+    if (uncomp_block->raw_image != NULL)
+    {
+        prc_free(ctx, uncomp_block->raw_image);
+    }
+}
+
+static void
+prc_release_uncomp_file(prc_context *ctx, prc_uncomp_file *uncomp_file)
+{
+    size_t k;
+
+    if (uncomp_file == NULL)
+        return;
+
+    for (k = 0; k < uncomp_file->file_count; k++)
+    {
+        prc_release_uncomp_block(ctx, &uncomp_file->files[k]);
+        if (uncomp_file->files[k].raw_image != NULL)
+        {
+            prc_free(ctx, uncomp_file->files[k].raw_image);
+        }
+        prc_free(ctx, uncomp_file);
+    }
+}
+
+void
+prc_release_header(prc_context *ctx, prc_header *header)
+{
+    if (header == NULL)
+        return;
+
+    prc_release_file_struct_desc(ctx, header->file_info);
+    header->file_info = NULL;
+
+    prc_release_uncomp_file(ctx, header->files);
+    if (header->files != NULL)
+    {
+        prc_free(ctx, header->files);
+    }
+
+    prc_free(ctx, header);
+}
+
+static void
+prc_release_file_struct_header(prc_context *ctx, prc_file_structure_header *header)
+{
+    size_t k;
+
+    if (header == NULL)
+        return;
+
+    for (k = 0; k < header->file_count; k++)
+    {
+        prc_release_uncomp_block(ctx, &header->files[k]);
+    }
+    prc_free(ctx, header->files);
+}
+
+static void
+prc_release_entity_schema(prc_context *ctx, prc_entity_schema *entity_schema)
+{
+    if (entity_schema == NULL)
+        return;
+
+    if (entity_schema->schema_tokens != NULL)
+    {
+        prc_free(ctx, entity_schema->schema_tokens);
+        entity_schema->schema_tokens = NULL;
+    }
+}
+
+static void
+prc_release_prc_ref_base_name(prc_context *ctx, prc_content_prc_ref_base *base)
+{
+    if (base->name.name.string != NULL)
+    {
+        prc_free(ctx, base->name.name.string);
+        base->name.name.string = NULL;
+        base->name.name.null_flag = true;
+    }
+}
+
+static void
+prc_release_font_keys_same_font(prc_context *ctx, prc_font_keys_same_font *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_string(ctx, &data->font_name);
+    if (data->font_key_list != NULL)
+    {
+        prc_free(ctx, data->font_key_list);
+        data->font_key_list = NULL;
+    }
+}
+
+static void
+prc_release_serialize_help(prc_context *ctx, prc_markup_serialization_helper *data)
+{
+    uint32_t k;
+
+    if (data->font_keys_of_font != NULL)
+    {
+        for (k = 0; k < data->font_keys_count; k++)
+        {
+            prc_release_font_keys_same_font(ctx, &data->font_keys_of_font[k]);
+        }
+        prc_free(ctx, data->font_keys_of_font);
+    }
+}
+
+static void
+prc_release_global_data(prc_context *ctx, prc_file_struct_internal_global_data *global_data)
+{
+    if (global_data == NULL)
+        return;
+
+    prc_release_serialize_help(ctx, &global_data->serialize_help);
+
+    if (global_data->colors != NULL)
+    {
+        prc_free(ctx, global_data->colors);
+        global_data->colors = NULL;
+    }
+    if (global_data->materials != NULL)
+    {
+        prc_free(ctx, global_data->materials);
+        global_data->materials = NULL;
+    }
+    if (global_data->textures != NULL)
+    {
+        prc_free(ctx, global_data->textures);
+        global_data->textures = NULL;
+    }
+    if (global_data->pictures != NULL)
+    {
+        prc_free(ctx, global_data->pictures);
+        global_data->pictures = NULL;
+    }
+    if (global_data->line_patterns != NULL)
+    {
+        prc_release_prc_ref_base_name(ctx, &global_data->line_patterns->base);
+        if (global_data->line_patterns->lengths != NULL)
+        {
+            prc_free(ctx, global_data->line_patterns->lengths);
+            global_data->line_patterns->lengths = NULL;
+        }
+        prc_free(ctx, global_data->line_patterns);
+        global_data->line_patterns = NULL;
+    }
+    if (global_data->styles != NULL)
+    {
+        prc_free(ctx, global_data->styles);
+        global_data->styles = NULL;
+    }
+    if (global_data->fills != NULL)
+    {
+        prc_free(ctx, global_data->fills);
+        global_data->fills = NULL;
+    }
+    if (global_data->ref_coords != NULL)
+    {
+        prc_free(ctx, global_data->ref_coords);
+        global_data->ref_coords = NULL;
+    }
+}
+
+static void
+prc_release_file_struct_model(prc_context *ctx, prc_type_asm_modelfile *model)
+{
+    size_t k;
+
+    if (model == NULL)
+        return;
+
+    if (model->product_occurences != NULL)
+    {
+        prc_free(ctx, model->product_occurences);
+        model->product_occurences = NULL;
+    }
+
+    if (model->file_structure_index_in_model_file != NULL)
+    {
+        prc_free(ctx, model->file_structure_index_in_model_file);
+        model->file_structure_index_in_model_file = NULL;
+    }
+
+    prc_release_content_base(ctx, &model->base);
+
+    prc_free(ctx, model);
+}
+
+static void
+prc_release_file_struct_globals(prc_context *ctx, prc_asm_file_structure_globals *globals)
+{
+    if (globals == NULL)
+        return;
+
+    if (globals->user_data.user_data != NULL)
+    {
+        prc_free(ctx, globals->user_data.user_data);
+        globals->user_data.user_data = NULL;
+    }
+    prc_free(ctx, globals->unique_ids);
+    globals->unique_ids = NULL;
+    prc_release_global_data(ctx, &globals->global_data);
+    prc_release_content_base(ctx, &globals->base);
+    prc_free(ctx, globals);
+}
+
+static void
+prc_release_internal_global_data(prc_context *ctx, prc_type_asm_file_struct_internal_data *global_data)
+{
+
+}
+
+
+static void
+prc_release_representation_item(prc_context *ctx, prc_ri *data)
+{
+    uint32_t k;
+
+    prc_release_base_with_graphics(ctx, &data->item_content.base);
+
+    switch (data->representation_type)
+    {
+    case PRC_TYPE_RI_RepresentationalItem:
+        prc_release_representation_item(ctx, data->ri_rep_item);
+        break;
+    case PRC_TYPE_RI_BrepModel:
+        prc_free(ctx, data->ri_brep_model);
+        break;
+    case PRC_TYPE_RI_Curve:
+        prc_free(ctx, data->ri_curve);
+        break;
+    case PRC_TYPE_RI_Direction:
+        prc_free(ctx, data->ri_direction);
+        break;
+    case PRC_TYPE_RI_Plane:
+        prc_free(ctx, data->ri_plane);
+        break;
+    case PRC_TYPE_RI_PointSet:
+        if (data->ri_point_set->points != NULL)
+        {
+            prc_free(ctx, data->ri_point_set->points);
+        }
+        prc_free(ctx, data->ri_point_set);
+        break;
+    case PRC_TYPE_RI_PolyBrepModel:
+        prc_free(ctx, data->ri_poly_brep_model);
+        break;
+    case PRC_TYPE_RI_PolyWire:
+        prc_free(ctx, data->ri_poly_wire);
+        break;
+    case PRC_TYPE_RI_Set:
+        if (data->ri_set->rep_items != NULL)
+        {
+            for (k = 0; k < data->ri_set->number_of_items; k++)
+            {
+                prc_release_representation_item(ctx, &data->ri_set->rep_items[k]);
+            }
+            prc_free(ctx, data->ri_set->rep_items);
+        }
+        prc_free(ctx, data->ri_set);
+        break;
+    case PRC_TYPE_RI_CoordinateSystem:
+        prc_free(ctx, data->ri_coordinate_system);
+        break;
+    default:
+        prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_release_representation_item\n");
+    }
+}
+
+static void
+prc_release_misc_reference_on_topology(prc_context *ctx, prc_misc_reference_on_topology *data)
+{
+    if (data->data.indices != NULL)
+    {
+        prc_free(ctx, data->data.indices);
+    }
+}
+
+static void
+prc_release_reference_data(prc_context *ctx, prc_reference_data *data)
+{
+    if (data->ref_type == PRC_TYPE_MISC_ReferenceOnTopology)
+    {
+        prc_release_misc_reference_on_topology(ctx, &data->topo_reference);
+    }
+}
+
+static void
+prc_release_content_entity_reference(prc_context *ctx, prc_content_entity_reference *data)
+{
+    prc_release_base_with_graphics(ctx, &data->base);
+
+    if (data->flag)
+    {
+        prc_release_reference_data(ctx, &data->reference_data);
+    }
+}
+
+static void
+prc_release_content_extended_entity_ref(prc_context *ctx, prc_content_extended_entity_ref *data)
+{
+    prc_release_content_entity_reference(ctx, &data->content_entity_ref);
+
+    if (data->has_reference_data)
+    {
+        prc_release_reference_data(ctx, &data->reference_data);
+    }
+}
+
+static void
+prc_release_link_item(prc_context *ctx, prc_misc_markup_linked_item *data)
+{
+    prc_release_content_extended_entity_ref(ctx, &data->content_entity_ref);
+}
+
+static void
+prc_release_markup(prc_context *ctx, prc_mkp_markup *data)
+{
+    int k;
+
+    prc_release_base_with_graphics(ctx, &data->base);
+    if (data->linked_items != NULL)
+    {
+        prc_free(ctx, data->linked_items);
+    }
+    if (data->leaders != NULL)
+    {
+        prc_free(ctx, data->leaders);
+    }
+}
+
+static void
+prc_release_leader(prc_context *ctx, prc_mkp_leader *data)
+{
+    prc_release_base_with_graphics(ctx, &data->base);
+}
+
+static void
+prc_release_annotation_entities(prc_context *ctx, prc_annotation_entity *data)
+{
+    size_t k;
+
+    switch (data->tag)
+    {
+    case PRC_TYPE_MKP_AnnotationItem:
+        prc_release_base_with_graphics(ctx, &data->item.base);
+        break;
+    case PRC_TYPE_MKP_AnnotationSet:
+        prc_release_base_with_graphics(ctx, &data->set.base);
+        if (data->set.annotations != NULL)
+        {
+            for (k = 0; k < data->set.number_of_annotations; k++)
+            {
+                prc_release_annotation_entities(ctx, &data->set.annotations[k]);
+            }
+            prc_free(ctx, data->set.annotations);
+        }
+        break;
+    case PRC_TYPE_MKP_AnnotationReference:
+        prc_release_base_with_graphics(ctx, &data->ref.base);
+        if (data->ref.linked_items != NULL)
+        {
+            prc_free(ctx, data->ref.linked_items);
+        }
+        break;
+    }
+}
+
+static void
+prc_release_attribute_data(prc_context *ctx, prc_attribute_data *data)
+{
+    size_t k, j;
+    if (data->attributes != NULL)
+    {
+        for (k = 0; k < data->attribute_count; k++)
+        {
+            prc_release_string(ctx, &data->attributes[k].attribute_title.string_title);
+            if (data->attributes[k].attributes != NULL)
+            {
+                for (j = 0; j < data->attributes[k].number_attributes; j++)
+                {
+                    if (data->attributes[k].attributes[j].type == PRC_ATTRIBUTE_TYPE_CHAR_UTF8 &&
+                        data->attributes[k].attributes[j].val_string.string != NULL)
+                    {
+                        prc_free(ctx, data->attributes[k].attributes[j].val_string.string);
+                    }
+                }
+                prc_free(ctx, data->attributes[k].attributes);
+            }
+        }
+        prc_free(ctx, data->attributes);
+        data->attributes = NULL;
+    }
+}
+
+static void
+prc_release_content_surface(prc_context *ctx, prc_content_surface *data)
+{
+    if (data->has_base_geometry)
+    {
+        prc_release_attribute_data(ctx, &data->attribute_data);
+        prc_release_string(ctx, &data->name.name);
+    }
+}
+
+static void
+prc_release_markup_data(prc_context *ctx, prc_markup_data *data)
+{
+    int k;
+
+    if (data->linked_items != NULL)
+    {
+        for (k = 0; k < data->number_of_linked_items; k++)
+        {
+            prc_release_link_item(ctx, &data->linked_items[k]);
+        }
+        prc_free(ctx, data->linked_items);
+    }
+
+    if (data->leaders != NULL)
+    {
+        for (size_t k = 0; k < data->number_of_leaders; k++)
+        {
+            prc_release_leader(ctx, &data->leaders[k]);
+        }
+        prc_free(ctx, data->leaders);
+    }
+
+    if (data->markups != NULL)
+    {
+        size_t k;
+        for (k = 0; k < data->number_of_markups; k++)
+        {
+            prc_release_markup(ctx, &data->markups[k]);
+        }
+        prc_free(ctx, data->markups);
+    }
+
+    if (data->annotation_entities != NULL)
+    {
+        for (k = 0; k < data->number_of_annotation_entities; k++)
+        {
+            prc_release_annotation_entities(ctx, &data->annotation_entities[k]);
+        }
+        prc_free(ctx, data->annotation_entities);
+    }
+}
+
+static void
+prc_release_graph_light_object(prc_context *ctx, prc_graph_light_object *data)
+{
+    prc_release_prc_ref_base(ctx, &data->base);
+}
+
+static void
+prc_release_scene_display_parameters(prc_context *ctx, prc_scene_display_parameters *data)
+{
+    size_t k;
+
+    prc_release_prc_ref_base(ctx, &data->base);
+
+    if (data->lights != NULL)
+    {
+        for (k = 0; k < data->number_of_lights; k++)
+        {
+            prc_release_graph_light_object(ctx, &data->lights[k]);
+        }
+        prc_free(ctx, data->lights);
+    }
+
+    if (data->camera_defined)
+    {
+        prc_release_prc_ref_base(ctx, &data->camera.base);
+    }
+
+    if (data->clipping_planes != NULL)
+    {
+        for (k = 0; k < data->number_of_clipping_planes; k++)
+        {
+            prc_release_content_surface(ctx, &data->clipping_planes[k].curve_data);
+        }
+        prc_free(ctx, data->clipping_planes);
+    }
+    if (data->styles != NULL)
+    {
+        prc_free(ctx, data->styles);
+    }
+}
+
+static void
+prc_release_misc_entity_reference(prc_context *ctx, prc_misc_entity_reference *data)
+{
+    prc_release_content_entity_reference(ctx, &data->content_entity_ref);
+}
+
+static void
+prc_release_content_entity_filter_item(prc_context *ctx, prc_content_entity_filter_item *data)
+{
+    uint32_t k;
+
+    if (data->entities != NULL)
+    {
+       for (k = 0; k < data->number_of_entities; k++)
+       {
+           prc_release_misc_entity_reference(ctx, &data->entities[k]);
+       }
+       prc_free(ctx, data->entities);
+    }
+}
+
+static void
+prc_release_content_layer_filter_item(prc_context *ctx, prc_content_layer_filter_item *data)
+{
+    if (data->layers != NULL)
+    {
+        prc_free(ctx, data->layers);
+    }
+}
+
+static void
+prc_release_asm_filter(prc_context *ctx, prc_asm_filter *data)
+{
+    prc_release_prc_ref_base(ctx, &data->base);
+    prc_release_content_entity_filter_item(ctx, &data->entity_filter);
+    prc_release_content_layer_filter_item(ctx, &data->layer_filter);
+}
+
+static void
+prc_release_mkp_view(prc_context *ctx, prc_mkp_view *data)
+{
+    size_t k;
+
+    prc_release_base_with_graphics(ctx, &data->base);
+
+    if (data->annotations != NULL)
+    {
+        prc_free(ctx, data->annotations);
+    }
+
+    if (data->has_parameters)
+    {
+        prc_release_scene_display_parameters(ctx, &data->scene_display_parameters);
+    }
+
+    if (data->linked_items != NULL)
+    {
+        prc_free(ctx, data->linked_items);
+    }
+
+    if (data->filters != NULL)
+    {
+        for (k = 0; k < data->number_of_filters; k++)
+        {
+            prc_release_asm_filter(ctx, &data->filters[k]);
+        }
+        prc_free(ctx, data->filters);
+    }
+}
+
+static void
+prc_release_part(prc_context *ctx, prc_asm_parts_definition *data)
+{
+    size_t k;
+
+    prc_release_base_with_graphics(ctx, &data->base);
+
+    for (k = 0; k < data->num_rep_items; k++)
+    {
+        prc_release_representation_item(ctx, &data->rep_items[k]);
+    }
+
+    if (data->rep_items != NULL)
+    {
+        prc_free(ctx, data->rep_items);
+    }
+
+    if (data->views != NULL)
+    {
+        for (k = 0; k < data->number_views; k++)
+        {
+            prc_release_mkp_view(ctx, &data->views[k]);
+        }
+        prc_free(ctx, data->views);
+    }
+
+    prc_release_markup_data(ctx, &data->markups);
+}
+
+static void
+prc_release_reference_product_occurrence(prc_context *ctx, prc_references_of_product_occurrence *data)
+{
+    if (data->index_child_occurrence != NULL)
+    {
+        prc_free(ctx, data->index_child_occurrence);
+    }
+}
+
+static void
+prc_release_product_occurrence(prc_context *ctx, prc_asm_product_occurrence *data)
+{
+    size_t k;
+
+    prc_release_base_with_graphics(ctx, &data->base);
+
+    prc_release_reference_product_occurrence(ctx, &data->references_product_occurrence);
+
+    if (data->entity_reference != NULL)
+    {
+        for (k = 0; k < data->entity_ref_count; k++)
+        {
+            prc_release_content_entity_reference(ctx, &data->entity_reference[k].content_entity_ref);
+        }
+        prc_free(ctx, data->entity_reference);
+    }
+
+    prc_release_markup_data(ctx, &data->markups);
+
+    if (data->views != NULL)
+    {
+        for (k = 0; k < data->number_of_views; k++)
+        {
+            prc_release_mkp_view(ctx, &data->views[k]);
+        }
+        prc_free(ctx, data->views);
+    }
+
+    if (data->has_filter)
+    {
+        prc_release_asm_filter(ctx, &data->entity_filter);
+    }
+
+    if (data->display_filters != NULL)
+    {
+        for (k = 0; k < data->number_of_display_filters; k++)
+        {
+            prc_release_asm_filter(ctx, &data->display_filters[k]);
+        }
+        prc_free(ctx, data->display_filters);
+    }
+
+    if (data->scene_display_parameters != NULL)
+    {
+        for (k = 0; k < data->number_of_scene_parameters; k++)
+        {
+            prc_release_scene_display_parameters(ctx, &data->scene_display_parameters[k]);
+        }
+        prc_free(ctx, data->scene_display_parameters);
+    }
+}
+
+static void
+prc_release_file_struct_tree(prc_context *ctx, prc_asm_file_structure_tree *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    if (data->user_data.user_data != NULL)
+    {
+        prc_free(ctx, data->user_data.user_data);
+        data->user_data.user_data = NULL;
+    }
+
+    if (data->parts != NULL)
+    {
+        for (k = 0; k < data->parts_count; k++)
+        {
+            prc_release_part(ctx, &data->parts[k]);
+        }
+        prc_free(ctx, data->parts);
+        data->parts = NULL;
+    }
+
+    if (data->products != NULL)
+    {
+        for (k = 0; k < data->product_count; k++)
+        {
+            prc_release_product_occurrence(ctx, &data->products[k]);
+        }
+        prc_free(ctx, data->products);
+        data->products = NULL;
+    }
+    prc_release_internal_global_data(ctx, &data->internal_data);
+    prc_release_content_base(ctx, &data->base);
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_tess_face(prc_context *ctx, prc_tess_face data)
+{
+    if (data.line_attributes != NULL)
+        prc_free(ctx, data.line_attributes);
+
+    if (data.sizes_wire != NULL)
+        prc_free(ctx, data.sizes_wire);
+
+    if (data.triangulateddata != NULL)
+        prc_free(ctx, data.triangulateddata);
+}
+
+static void
+prc_release_tess_3d(prc_context *ctx, prc_tess_3d *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->tessellation_coordinates.coordinates != NULL)
+        prc_free(ctx, data->tessellation_coordinates.coordinates);
+
+    if (data->normal_coordinates != NULL)
+        prc_free(ctx, data->normal_coordinates);
+
+    if (data->wire_indices != NULL)
+        prc_free(ctx, data->wire_indices);
+
+    if (data->triangulated_index_array != NULL)
+        prc_free(ctx, data->triangulated_index_array);
+
+    if (data->texture_coordinates != NULL)
+        prc_free(ctx, data->texture_coordinates);
+
+    if (data->face_tessellation_data != NULL)
+    {
+        for (uint32_t k = 0; k < data->number_of_face_tessellation; k++)
+        {
+            prc_release_tess_face(ctx, data->face_tessellation_data[k]);
+        }
+        prc_free(ctx, data->face_tessellation_data);
+    }
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_tess_3d_wire(prc_context *ctx, prc_tess_3d_wire *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->tessellation_coordinates.coordinates != NULL)
+        prc_free(ctx, data->tessellation_coordinates.coordinates);
+
+    if (data->wire_elements != NULL)
+    {
+        for (uint32_t k = 0; k < data->number_of_wire_indexes; k++)
+        {
+            if (data->wire_elements[k].wire_indexes != NULL)
+                prc_free(ctx, data->wire_elements[k].wire_indexes);
+        }
+        prc_free(ctx, data->wire_elements);
+    }
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_texture_data(prc_context *ctx, prc_compressed_texture_parameter *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->binary_texture_data != NULL)
+    {
+        if (data->binary_texture_data->texture_binary_data != NULL)
+            prc_free(ctx, data->binary_texture_data->texture_binary_data);
+        prc_free(ctx, data->binary_texture_data);
+    }
+
+    if (data->reference_array != NULL)
+        prc_free(ctx, data->reference_array);
+
+    if (data->texture_parameters != NULL)
+        prc_free(ctx, data->texture_parameters);
+
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_tess_3d_compressed(prc_context *ctx, prc_tess_3d_compressed *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->point_array != NULL)
+        prc_free(ctx, data->point_array);
+
+    if (data->edge_status_array != NULL)
+        prc_free(ctx, data->edge_status_array);
+
+    if (data->triangle_face_array != NULL)
+        prc_free(ctx, data->triangle_face_array);
+
+    if (data->points_is_reference_array != NULL)
+        prc_free(ctx, data->points_is_reference_array);
+
+    if (data->point_reference_array != NULL)
+        prc_free(ctx, data->point_reference_array);
+
+    if (data->normal_is_reversed != NULL)
+        prc_free(ctx, data->normal_is_reversed);
+
+    if (data->normal_binary_data != NULL)
+        prc_free(ctx, data->normal_binary_data);
+
+    if (data->normal_angle_array != NULL)
+        prc_free(ctx, data->normal_angle_array);
+
+    if (data->is_face_planar != NULL)
+        prc_free(ctx, data->is_face_planar);
+
+    if (data->is_point_color_on_face != NULL)
+        prc_free(ctx, data->is_point_color_on_face);
+
+    if (data->point_color_array != NULL)
+        prc_free(ctx, data->point_color_array);
+
+    if (data->decoded_point_color_array != NULL)
+        prc_free(ctx, data->decoded_point_color_array);
+
+    if (data->is_multiple_line_attribute_on_face != NULL)
+        prc_free(ctx, data->is_multiple_line_attribute_on_face);
+
+    if (data->line_attribute_array != NULL)
+        prc_free(ctx, data->line_attribute_array);
+
+    if (data->texture_data != NULL)
+        prc_release_texture_data(ctx, data->texture_data);
+
+    if (data->face_has_texture != NULL)
+        prc_free(ctx, data->face_has_texture);
+
+    if (data->has_behaviors)
+        prc_free(ctx, data->behaviors_array);
+
+    if (data->normal_angle_array_scaled != NULL)
+        prc_free(ctx, data->normal_angle_array_scaled);
+
+    if (data->uv_coordinates_3d != NULL)
+        prc_free(ctx, data->uv_coordinates_3d);
+
+    if (data->triangle_indices_prc_compressed_3d != NULL)
+        prc_free(ctx, data->triangle_indices_prc_compressed_3d);
+
+    if (data->point_colors_prc_compressed_3d != NULL)
+        prc_free(ctx, data->point_colors_prc_compressed_3d);
+
+    if (data->normal_indices_prc_compressed_3d != NULL)
+        prc_free(ctx, data->normal_indices_prc_compressed_3d);
+
+    if (data->vertices_prc_compressed_3d != NULL)
+        prc_free(ctx, data->vertices_prc_compressed_3d);
+
+    if (data->normals_prc_compressed_3d != NULL)
+        prc_free(ctx, data->normals_prc_compressed_3d);
+
+    if (data->triangle_styles != NULL)
+        prc_free(ctx, data->triangle_styles);
+
+    if (data->edge_vertices != NULL)
+        prc_free(ctx, data->edge_vertices);
+
+    if (data->edge_indices != NULL)
+        prc_free(ctx, data->edge_indices);
+
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_tess_markup(prc_context *ctx, prc_tess_markup *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->tessellation_coordinates.coordinates != NULL)
+        prc_free(ctx, data->tessellation_coordinates.coordinates);
+
+    if (data->code_numbers != NULL)
+        prc_free(ctx, data->code_numbers);
+
+    if (data->decode_primitives != NULL)
+    {
+        for (uint32_t k = 0; k < data->decode_number_primitives; k++)
+        {
+            if (data->decode_primitives[k].indices != NULL)
+                prc_free(ctx, data->decode_primitives[k].indices);
+            if (data->decode_primitives[k].text != NULL)
+                prc_free(ctx, data->decode_primitives[k].text);
+        }
+        prc_free(ctx, data->decode_primitives);
+    }
+
+    if (data->decode_vertices)
+        prc_free(ctx, data->decode_vertices);
+
+    if (data->text_strings != NULL)
+    {
+        for (uint32_t k = 0; k < data->number_of_text_strings; k++)
+        {
+            prc_release_string(ctx, &data->text_strings[k]);
+        }
+        prc_free(ctx, data->text_strings);
+    }
+
+    if (data->tessellation_label.string != NULL)
+        prc_release_string(ctx, &data->tessellation_label);
+
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_tess(prc_context *ctx, prc_tess *data)
+{
+    if (data == NULL)
+        return;
+
+    switch (data->tess_type)
+    {
+    case PRC_TYPE_TESS_3D:
+        prc_release_tess_3d(ctx, data->tess_3d);
+        break;
+    case PRC_TYPE_TESS_3D_Compressed:
+        prc_release_tess_3d_compressed(ctx, data->tess_3d_compressed);
+        break;
+    case PRC_TYPE_TESS_3D_Wire:
+        prc_release_tess_3d_wire(ctx, data->tess_3d_wire);
+        break;
+    case PRC_TYPE_TESS_MarkUp:
+        prc_release_tess_markup(ctx, data->tess_markup);
+        break;
+    default:
+        prc_error(ctx, PRC_ERROR_PARSE, "Unknown Tessellation type\n");
+        return;
+    }
+}
+
+static void
+prc_release_file_struct_tessallation(prc_context *ctx, prc_asm_file_structure_tessellation *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    if (data->user_data.user_data != NULL)
+    {
+        prc_free(ctx, data->user_data.user_data);
+        data->user_data.user_data = NULL;
+    }
+
+    if (data->tess != NULL)
+    {
+        for (k = 0; k < data->tess_count; k++)
+        {
+            prc_release_tess(ctx, &data->tess[k]);
+        }
+        prc_free(ctx, data->tess);
+        data->tess = NULL;
+    }
+    prc_free(ctx, data);
+}
+
+static void
+prc_release_base_topology(prc_context *ctx, prc_base_topology *data)
+{
+    if (data->has_base)
+    {
+        prc_release_attribute_data(ctx, &data->attribute_data);
+        prc_release_name(ctx, &data->name);
+    }
+}
+
+static void
+prc_release_content_body(prc_context *ctx, prc_content_body *data)
+{
+    prc_release_base_topology(ctx, &data->base_topology);
+}
+
+static void
+prc_release_hcg_bspline_hermite_curve(prc_context *ctx, prc_hcg_bspline_hermite_curve *data)
+{
+    if (data->points != NULL)
+    {
+        prc_free(ctx, data->points);
+    }
+
+    if (data->tangents != NULL)
+    {
+        prc_free(ctx, data->tangents);
+    }
+}
+
+static void
+prc_release_trim_loop_curves(prc_context *ctx, prc_ana_face_trim_loop *data)
+{
+    uint32_t k;
+
+    if (data->trim_curves != NULL)
+    {
+        for (k = 0; k < data->curve_count; k++)
+        {
+            if (data->trim_curves[k].compressed_curve != NULL)
+            {
+                if (data->trim_curves[k].compressed_curve->curve_type == PRC_HCG_BsplineHermiteCurve)
+                {
+                    prc_release_hcg_bspline_hermite_curve(ctx, &data->trim_curves[k].compressed_curve->hcg_bspline_hermite_curve);
+                }
+                prc_free(ctx, data->trim_curves[k].compressed_curve);
+            }
+        }
+        prc_free(ctx, data->trim_curves);
+    }
+}
+
+static void
+prc_release_content_compressed_ana_face(prc_context *ctx, prc_content_compressed_ana_face *data)
+{
+    uint32_t k;
+
+    if (data->is_trimmed)
+    {
+        for (k = 0; k < data->trim_loop_count; k++)
+        {
+            prc_release_trim_loop_curves(ctx, &data->trim_loop[k]);
+        }
+        prc_free(ctx, data->trim_loop);
+    }
+}
+
+static void
+prc_release_compressed_knots(prc_context *ctx, prc_compressed_knots *data)
+{
+    if (data->compressed_knots != NULL)
+    {
+        prc_free(ctx, data->compressed_knots);
+    }
+}
+
+static void
+prc_release_compressed_control_points(prc_context *ctx, prc_compressed_control_points *data)
+{
+    if (data->ccpt_interior != NULL)
+    {
+        prc_free(ctx, data->ccpt_interior);
+    }
+    if (data->ccpt_in_v != NULL)
+    {
+        prc_free(ctx, data->ccpt_in_v);
+    }
+    if (data->ccpt_in_u != NULL)
+    {
+        prc_free(ctx, data->ccpt_in_u);
+    }
+}
+
+static void
+prc_release_compressed_weights(prc_context *ctx, prc_compressed_weights *data)
+{
+    if (data->compressed_weights != NULL)
+    {
+        prc_free(ctx, data->compressed_weights);
+    }
+}
+
+static void
+prc_release_compressed_nurbs(prc_context *ctx, prc_compressed_nurbs *data)
+{
+    if (data->mult_u != NULL)
+    {
+        prc_free(ctx, data->mult_u);
+    }
+    if (data->mult_v != NULL)
+    {
+        prc_free(ctx, data->mult_v);
+    }
+    prc_release_compressed_control_points(ctx, &data->compressed_control_points);
+    prc_release_compressed_knots(ctx, &data->knot_vector_u.knots);
+    prc_release_compressed_knots(ctx, &data->knot_vector_v.knots);
+    prc_release_compressed_weights(ctx, &data->compressed_weights);
+}
+
+static void
+prc_release_compressed_face(prc_context *ctx, prc_compressed_face *data)
+{
+    /* The ANA ones are the only ones that do allocations */
+    switch (data->tag)
+    {
+    case PRC_HCG_AnaPlane:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_plane.face.ana_face);
+        break;
+    case PRC_HCG_AnaCylinder:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_cylinder.face.ana_face);
+        break;
+    case PRC_HCG_AnaCone:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_cone.face.ana_face);
+        break;
+    case PRC_HCG_AnaSphere:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_sphere.face.ana_face);
+        break;
+    case PRC_HCG_AnaTorus:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_torus.face.ana_face);
+        break;
+    case PRC_HCG_AnaNURBS:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_nurbs.face.ana_face);
+        prc_release_compressed_nurbs(ctx, &data->hcg_ana_nurbs.compressed_surface);
+        break;
+    case PRC_HCG_AnaGenericFace:
+        prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_generic_face.face.ana_face);
+        break;
+    case PRC_HCG_IsoNURBS:
+        prc_release_compressed_nurbs(ctx, &data->hcg_iso_nurbs.surface);
+    }
+}
+
+static void
+prc_release_compressed_shell(prc_context *ctx, prc_compressed_shell *data)
+{
+    uint32_t k;
+
+    if (data->faces != NULL)
+    {
+        for (k = 0; k < data->number_of_faces; k++)
+        {
+            prc_release_compressed_face(ctx, &data->faces[k]);
+        }
+        prc_free(ctx, data->faces);
+        prc_free(ctx, data->is_iso_face);
+    }
+}
+
+static void
+prc_release_brep_data_compress(prc_context *ctx, prc_topo_brep_data_compress *data)
+{
+    uint32_t k;
+
+    prc_release_content_body(ctx, &data->base);
+
+    if (data->single_connex_test)
+    {
+        prc_release_compressed_shell(ctx, &data->single_connex);
+    }
+
+    if (data->base_topology != NULL)
+    {
+        for (k = 0; k < data->number_of_faces; k++)
+        {
+            prc_release_base_topology(ctx, &data->base_topology[k]);
+        }
+        prc_free(ctx, data->base_topology);
+    }
+}
+
+static void
+prc_release_nano_brep_data(prc_context *ctx, prc_nano_brep_compressed_data *data)
+{
+    int k;
+
+    if (data->vertices != NULL)
+    {
+        prc_free(ctx, data->vertices);
+        data->vertices = NULL;
+    }
+    if (data->curves != NULL)
+    {
+        prc_free(ctx, data->curves);
+        data->curves = NULL;
+    }
+}
+
+static void
+prc_release_topo(prc_context *ctx, prc_topo *body)
+{
+    if (body == NULL)
+        return;
+
+    switch (body->tag)
+    {
+    case PRC_TYPE_TOPO_SingleWireBody:
+        if (body->topo_single_wire_body != NULL)
+        {
+            prc_free(ctx, body->topo_single_wire_body);
+            body->topo_single_wire_body = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_BrepData:
+        if (body->topo_brep_data != NULL)
+        {
+            if (body->topo_brep_data->connex != NULL)
+            {
+                prc_free(ctx, body->topo_brep_data->connex);
+                body->topo_brep_data->connex = NULL;
+            }
+            prc_free(ctx, body->topo_brep_data);
+            body->topo_brep_data = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_SingleWireBodyCompress:
+        if (body->topo_single_wire_compress != NULL)
+        {
+            if (body->topo_single_wire_compress->connex != NULL)
+            {
+                prc_free(ctx, body->topo_single_wire_compress->connex);
+                body->topo_single_wire_compress->connex = NULL;
+            }
+            prc_free(ctx, body->topo_single_wire_compress);
+            body->topo_single_wire_compress = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_BrepDataCompress:
+        if (ctx->internal.nano_brep_data != NULL)
+        {
+            prc_release_nano_brep_data(ctx, ctx->internal.nano_brep_data);
+            prc_free(ctx, ctx->internal.nano_brep_data);
+            ctx->internal.nano_brep_data = NULL;
+        }
+        if (body->topo_brep_data_compress != NULL)
+        {
+            prc_release_brep_data_compress(ctx, body->topo_brep_data_compress);
+            prc_free(ctx, body->topo_brep_data_compress);
+            body->topo_brep_data_compress = NULL;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static void
+prc_release_topo_contexts(prc_context *ctx, prc_topo_context *topo_context)
+{
+    size_t k;
+
+    if (topo_context == NULL)
+        return;
+
+    if (topo_context->bodies != NULL)
+    {
+        for (k = 0; k < topo_context->number_of_bodies; k++)
+        {
+            prc_release_topo(ctx, &topo_context->bodies[k]);
+        }
+        prc_free(ctx, topo_context->bodies);
+        topo_context->bodies = NULL;
+    }
+}
+
+static void
+prc_release_exact_geometry(prc_context *ctx, prc_file_structure_exact_geometry *exact_geometry)
+{
+    size_t k;
+
+    if (exact_geometry == NULL)
+        return;
+
+    if (exact_geometry->topo_contexts != NULL)
+    {
+        for (k = 0; k < exact_geometry->topo_context_count; k++)
+        {
+            prc_release_topo_contexts(ctx, &exact_geometry->topo_contexts[k]);
+        }
+        prc_free(ctx, exact_geometry->topo_contexts);
+        exact_geometry->topo_contexts = NULL;
+    }
+}
+
+static void
+prc_release_file_struct_geometry(prc_context *ctx, prc_asm_file_structure_geometry *geometry)
+{
+    if (geometry == NULL)
+        return;
+
+    if (geometry->user_data.user_data != NULL)
+    {
+        prc_free(ctx, geometry->user_data.user_data);
+        geometry->user_data.user_data = NULL;
+    }
+
+    prc_release_exact_geometry(ctx, &geometry->exact_geometry);
+    prc_free(ctx, geometry);
+}
+
+static void
+prc_release_extra_geometry(prc_context *ctx, prc_extra_geometry *extra_geometry)
+{
+    if (extra_geometry == NULL)
+        return;
+
+    if (extra_geometry->summary.bodies != NULL)
+    {
+        prc_free(ctx, extra_geometry->summary.bodies);
+        extra_geometry->summary.bodies = NULL;
+    }
+
+    prc_release_context_graphics(ctx, &extra_geometry->context_graphics);
+}
+
+static void
+prc_release_file_struct_extra_geometry(prc_context *ctx, prc_asm_file_structure_extra_geometry *extra_geometry)
+{
+    size_t k;
+
+    if (extra_geometry == NULL)
+        return;
+
+    if (extra_geometry->user_data.user_data != NULL)
+    {
+        prc_free(ctx, extra_geometry->user_data.user_data);
+        extra_geometry->user_data.user_data = NULL;
+    }
+
+    for (k = 0; k < extra_geometry->extra_geom_count; k++)
+    {
+        prc_release_extra_geometry(ctx, &extra_geometry->extra_geom[k]);
+    }
+    prc_free(ctx, extra_geometry->extra_geom);
+    prc_free(ctx, extra_geometry);
+}
+
+static void
+prc_release_file_struct_schema(prc_context *ctx)
+{
+    size_t k;
+    prc_schema *schema = ctx->internal.schema;
+
+    if (schema == NULL)
+        return;
+
+    for (k = 0; k < schema->schema_count; k++)
+    {
+        prc_release_entity_schema(ctx, &schema->entity_schema[k]);
+    }
+    if (schema->entity_schema != NULL)
+    {
+        prc_free(ctx, schema->entity_schema);
+        schema->entity_schema = NULL;
+    }
+    prc_free(ctx, schema);
+}
+
+static void
+prc_release_file_struct(prc_context *ctx, prc_filestructure *file_struct)
+{
+    if (file_struct == NULL)
+        return;
+
+    if (file_struct->schema_globals_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->schema_globals_unzipped);
+        file_struct->schema_globals_unzipped = NULL;
+    }
+    if (file_struct->tree_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->tree_unzipped);
+        file_struct->tree_unzipped = NULL;
+    }
+    if (file_struct->tessellation_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->tessellation_unzipped);
+        file_struct->tessellation_unzipped = NULL;
+    }
+    if (file_struct->geometry_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->geometry_unzipped);
+        file_struct->geometry_unzipped = NULL;
+    }
+    if (file_struct->extra_geometry_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->extra_geometry_unzipped);
+        file_struct->extra_geometry_unzipped = NULL;
+    }
+    if (file_struct->model_unzipped != NULL)
+    {
+        prc_free(ctx, file_struct->model_unzipped);
+        file_struct->model_unzipped = NULL;
+    }
+    if (file_struct->header != NULL)
+    {
+        prc_release_file_struct_header(ctx, file_struct->header);
+        prc_free(ctx, file_struct->header);
+        file_struct->header = NULL;
+    }
+
+    prc_release_file_struct_model(ctx, file_struct->model);
+    file_struct->model = NULL;
+
+    prc_release_file_struct_globals(ctx, file_struct->globals);
+    file_struct->globals = NULL;
+
+    prc_release_file_struct_tree(ctx, file_struct->tree);
+    file_struct->tree = NULL;
+
+    prc_release_file_struct_tessallation(ctx, file_struct->tessellation);
+    file_struct->tessellation = NULL;
+
+    prc_release_file_struct_geometry(ctx, file_struct->geometry);
+    file_struct->geometry = NULL;
+
+    prc_release_file_struct_extra_geometry(ctx, file_struct->extra_geometry);
+    file_struct->extra_geometry = NULL;
+}
+
+/* The root release method */
+void
+prc_release_data(prc_context *ctx, prc_data *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_header(ctx, data->header);
+
+    for (k = 0; k < data->file_structure_count; k++)
+    {
+        prc_release_file_struct(ctx, &data->file_struct[k]);
+    }
+
+    if (data->views != NULL)
+    {
+        for (k = 0; k < data->view_count; k++)
+        {
+            if (data->views[k].external_name != NULL)
+            {
+                prc_free(ctx, data->views[k].external_name);
+            }
+            if (data->views[k].internal_name != NULL)
+            {
+                prc_free(ctx, data->views[k].internal_name);
+            }
+        }
+        prc_free(ctx, data->views);
+    }
+
+    prc_release_file_struct_schema(ctx);
+    prc_free(ctx, data->file_struct);
+    prc_free(ctx, data);
+}

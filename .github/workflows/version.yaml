@@ -1,0 +1,42 @@
+name: version
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute Version Metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(git describe --tags --dirty --always --match 'v[0-9]*' || true)
+          if [ -z "$VERSION" ]; then
+            VERSION="v0.1.0"
+          fi
+          VERSION_NO_V="${VERSION#v}"
+          {
+            echo "PRC_GIT_DESCRIBE=${VERSION}"
+            echo "PRC_VERSION=${VERSION_NO_V}"
+            echo "PRC_GIT_SHA=$(git rev-parse --short HEAD)"
+            echo "PRC_GIT_BRANCH=${GITHUB_REF_NAME}"
+            echo "PRC_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > version.env
+          cat version.env
+
+      - name: Upload Version Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-metadata
+          path: version.env
