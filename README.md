@@ -7,6 +7,11 @@
 nanoPRC is licensed under the GNU Affero General Public License v3.0.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license summaries.
 
+## Contributing
+
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Contributor legal terms and copyright assignment: [CLA.md](CLA.md)
+
 ## Building
 
 Ensure all submodules are checked out:
