@@ -91,8 +91,7 @@ static bool debugMenu(float time, float deltaTime);
 
 static void initSDL()
 {
-    int rc = SDL_Init(SDL_INIT_VIDEO);
-    if (rc != 0)
+    if (!SDL_Init(SDL_INIT_VIDEO))
     {
         printf("SDL_Init failed: %s\n", SDL_GetError());
         exit(1);
@@ -141,15 +140,13 @@ static SDL_GLContext createGLContext(Config &config, SDL_Window *window)
         exit(1);
     }
 
-    int rc = SDL_GL_MakeCurrent(window, gl);
-    if (rc != 0)
+    if (!SDL_GL_MakeCurrent(window, gl))
     {
         printf("SDL_GL_MakeCurrent failed: %s\n", SDL_GetError());
         exit(1);
     }
 
-    rc = gladLoadGLLoader((void *(*)(const char *))SDL_GL_GetProcAddress);
-    if (!rc)
+    if (!gladLoadGLLoader((void *(*)(const char *))SDL_GL_GetProcAddress))
     {
         printf("gladLoadGLLoader failed\n");
         exit(1);

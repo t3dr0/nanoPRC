@@ -23,6 +23,33 @@
 #include "prc_pdf.h"
 #include "prc_parse_file_structure.h"
 
+static void
+pdf_stream_release_uncompressed_list(prc_context *ctx,
+    prc_pdf_uncompressed_object_stream_list *list)
+{
+    if (list->ustream != NULL)
+    {
+        prc_free(ctx, list->ustream);
+        list->ustream = NULL;
+    }
+}
+
+static void
+pdf_stream_release_object_stream(prc_context *ctx,
+    prc_pdf_uncompressed_object_stream *ustream)
+{
+    if (ustream->object_offsets != NULL)
+    {
+        prc_free(ctx, ustream->object_offsets);
+        ustream->object_offsets = NULL;
+    }
+    if (ustream->stream != NULL)
+    {
+        prc_free(ctx, ustream->stream);
+        ustream->stream = NULL;
+    }
+}
+
 /* Below is adapated from pdfium C++ code which has a BSD license */
 static
 void duplicate_span(prc_context *ctx, prc_pdf_span des, prc_pdf_span src)
@@ -333,11 +360,18 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
     }
     else
     {
+        prc_pdf_uncompressed_object_stream *ustream_temp;
         num_found = uncompressed_list->number_streams;
         prev_stream_index = uncompressed_list->number_streams;
         uncompressed_list->number_streams += num_content_streams;
-        uncompressed_list->ustream = (prc_pdf_uncompressed_object_stream *)prc_realloc(ctx,
+        ustream_temp = (prc_pdf_uncompressed_object_stream *)prc_realloc(ctx,
             uncompressed_list->ustream, uncompressed_list->number_streams * sizeof(prc_pdf_uncompressed_object_stream));
+        if (ustream_temp == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate uncompressed stream list\n");
+            return PRC_ERROR_MEMORY;
+        }
+        uncompressed_list->ustream = ustream_temp;
 
         /* Initialize the new entries to zero */
         for (k = num_found; k < uncompressed_list->number_streams; k++)
@@ -391,8 +425,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find byte offset for object %u in PDF file\n",
                     xref_object->object_number);
-                prc_free(ctx, uncompressed_list->ustream);
-                uncompressed_list->ustream = NULL;
+                pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                 return PRC_ERROR_PARSE;
             }
 
@@ -413,8 +446,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             {
                 /* Not found throw error */
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find /N in PDF object stream\n");
-                prc_free(ctx, uncompressed_list->ustream);
-                uncompressed_list->ustream = NULL;
+                pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                 return PRC_ERROR_PARSE;
             }
             else
@@ -427,8 +459,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code != 1)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse /N in PDF object stream\n");
-                    prc_free(ctx, uncompressed_list->ustream);
-                    uncompressed_list->ustream = NULL;
+                    pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                     return PRC_ERROR_PARSE;
                 }
             }
@@ -441,8 +472,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             {
                 /* Not found throw error */
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find /First in PDF object stream\n");
-                prc_free(ctx, uncompressed_list->ustream);
-                uncompressed_list->ustream = NULL;
+                pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                 return PRC_ERROR_PARSE;
             }
             else
@@ -454,8 +484,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code != 1)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse /First in PDF object stream\n");
-                    prc_free(ctx, uncompressed_list->ustream);
-                    uncompressed_list->ustream = NULL;
+                    pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                     return PRC_ERROR_PARSE;
                 }
             }
@@ -467,8 +496,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             if (!found)
             {   /* Not found throw error */
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find /Filter in PDF object stream\n");
-                prc_free(ctx, uncompressed_list->ustream);
-                uncompressed_list->ustream = NULL;
+                pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                 return PRC_ERROR_PARSE;
             }
             else
@@ -481,8 +509,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (!found)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to find FlateDecode in PDF object stream\n");
-                    prc_free(ctx, uncompressed_list->ustream);
-                    uncompressed_list->ustream = NULL;
+                    pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                     return PRC_ERROR_PARSE;
                 }
             }
@@ -526,8 +553,10 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Did not get PRC stream data (encrypted) in PDF file\n");
+                    prc_free(ctx, decrypted_data);
                     return code;
                 }
+                prc_free(ctx, decrypted_data);
             }
             else
             {
@@ -546,8 +575,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             if (ustream->object_offsets == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate object offsets in PDF object stream\n");
-                prc_free(ctx, ustream->stream);
-                ustream->stream = NULL;
+                pdf_stream_release_object_stream(ctx, ustream);
                 return PRC_ERROR_MEMORY;
             }
 
@@ -560,8 +588,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code != 2)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse object offsets in PDF object stream\n");
-                    prc_free(ctx, ustream->stream);
-                    ustream->stream = NULL;
+                    pdf_stream_release_object_stream(ctx, ustream);
                     return PRC_ERROR_PARSE;
                 }
 
@@ -573,8 +600,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
-                    prc_free(ctx, ustream->stream);
-                    ustream->stream = NULL;
+                    pdf_stream_release_object_stream(ctx, ustream);
                     return code;
                 }
 
@@ -589,8 +615,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
-                    prc_free(ctx, ustream->stream);
-                    ustream->stream = NULL;
+                    pdf_stream_release_object_stream(ctx, ustream);
                     return code;
                 }
 
@@ -605,8 +630,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
-                    prc_free(ctx, ustream->stream);
-                    ustream->stream = NULL;
+                    pdf_stream_release_object_stream(ctx, ustream);
                     return code;
                 }
             }

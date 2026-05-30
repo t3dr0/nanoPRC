@@ -510,6 +510,7 @@ prc_pdf_get_hexstring(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         {
             prc_error(ctx, code, "Failed in pdf_decrypt_string\n");
             prc_free(ctx, name);
+            prc_free(ctx, name_decrypted);
             return code;
         }
 
@@ -517,11 +518,31 @@ prc_pdf_get_hexstring(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         code = pdf_parse_text_prc(ctx, decypted_size, name_decrypted,
             name_decrypted + decypted_size, name_out);
 
+        prc_free(ctx, name_decrypted);
         prc_free(ctx, name);
-        return 0;
+        return code;
     }
     *name_out = name;
     return 0;
+}
+
+static void
+pdf_free_view_array_partial(prc_context *ctx, prc_pdf_view_array *views,
+    uint32_t count)
+{
+    uint32_t i;
+
+    if (views == NULL)
+    {
+        return;
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        prc_free(ctx, views[i].external_name);
+        prc_free(ctx, views[i].internal_name);
+    }
+    prc_free(ctx, views);
 }
 
 /* Parse the view object. Ideally things are not references. If they are, this
@@ -755,6 +776,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     if (obj_entries == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Did not allocate entries\n");
+        prc_free(ctx, gen_entries);
         return PRC_ERROR_MEMORY;
     }
 
@@ -765,19 +787,19 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         if (ptr >= pdf_buff_in + size_in)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
-            return PRC_ERROR_PARSE;
+            goto fail;
         }
         code = sscanf((char *)ptr, "%d %d", &val1, &val2);
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read entry in PDF file\n");
-            return PRC_ERROR_PARSE;
+            goto fail;
         }
         /* Eat white space and the R character */
         code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
         if (code < 0)
         {
-            return code;
+            goto fail;
         }
         obj_entries[index] = val1;
         gen_entries[index] = val2;
@@ -790,7 +812,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
             if (ptr >= pdf_buff_in + size_in)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read R in PDF file\n");
-                return PRC_ERROR_PARSE;
+                goto fail;
             }
         }
         ptr++;
@@ -798,17 +820,22 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
         if (code < 0)
         {
-            return code;
+            goto fail;
         }
     }
     if (*ptr != ']')
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
-        return PRC_ERROR_PARSE;
+        goto fail;
     }
     *list_obj = obj_entries;
     *list_gen = gen_entries;
     return 0;
+
+fail:
+    prc_free(ctx, obj_entries);
+    prc_free(ctx, gen_entries);
+    return (code < 0) ? code : PRC_ERROR_PARSE;
 }
 
 /* Working from the object where the 3D stream is defined get the dictionary
@@ -830,7 +857,7 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     uint32_t *dict_gen_num = NULL;
     uint8_t *ptr_temp;
     prc_pdf_view_array *cam_views = NULL;
-    uint32_t k, j;
+    uint32_t k;
     uint8_t found_object = 0;
     uint32_t size_out;
     uint32_t offset;
@@ -955,6 +982,8 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
             if (cam_views == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Did not allocate views\n");
+                prc_free(ctx, dict_obj_num);
+                prc_free(ctx, dict_gen_num);
                 return PRC_ERROR_MEMORY;
             }
             for (k = 0; k < *num_views; k++)
@@ -966,7 +995,9 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
                 if (ptr_temp == NULL)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
-                    prc_free(ctx, cam_views);
+                    pdf_free_view_array_partial(ctx, cam_views, k);
+                    prc_free(ctx, dict_obj_num);
+                    prc_free(ctx, dict_gen_num);
                     return PRC_ERROR_PARSE;
                 }
 
@@ -977,6 +1008,9 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Did not parse view in PDF file\n");
+                    pdf_free_view_array_partial(ctx, cam_views, k + 1);
+                    prc_free(ctx, dict_obj_num);
+                    prc_free(ctx, dict_gen_num);
                     return code;
                 }
             }
@@ -1913,7 +1947,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     if (code < 0)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not count xref sections in PDF file\n");
-        return code;
+        goto fail;
     }
 
     code = pdf_get_file_id(ctx, pdf_buff_in, size_in, decrypt_params.file_id, 
@@ -1921,7 +1955,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     if (code < 0)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not get file ID in PDF file\n");
-        return code;
+        goto fail;
     }
 
     for (k = 0; k < num_xrefs; k++)
@@ -1931,7 +1965,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not parse xref in PDF file\n");
-            return code;
+            goto fail;
         }
         xref_start = pdf_buff_in + xref_offset;
 
@@ -2001,7 +2035,8 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     if (!found_prc)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not find PRC object in PDF file\n");
-        return PRC_ERROR_PARSE;
+        code = PRC_ERROR_PARSE;
+        goto fail;
     }
 
     /* Now we have the offset to the PRC object, we need to get the buffer from 
@@ -2012,7 +2047,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     if (code < 0)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not get stream info in PDF file\n");
-        return code;
+        goto fail;
     }
 
     /* This is an interesting one. I have seen cases there the PRC stream
@@ -2034,7 +2069,8 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         if (decrypted_data == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Did not allocate decrypted data\n");
-            return PRC_ERROR_MEMORY;
+            code = PRC_ERROR_MEMORY;
+            goto fail;
         }
 
         code = pdf_get_decrypted_stream_data(ctx, ptr_stream,
@@ -2045,16 +2081,17 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not get decrypted stream data in PDF file\n");
             prc_free(ctx, decrypted_data);
-            return code;
+            goto fail;
         }
 
         /* Now we need to deflate the decrypted stream */
         code = pdf_get_stream_data(ctx, ptr, file_end, decrypted_data, decypted_size,
                                    buff_out, size_out);
+        prc_free(ctx, decrypted_data);
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not get PRC stream data (encrypted) in PDF file\n");
-            return code;
+            goto fail;
         }
     }
     else
@@ -2064,7 +2101,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not get PRC stream data in PDF file\n");
-            return code;
+            goto fail;
         }
     }
 
@@ -2083,7 +2120,8 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
             if (cam_views == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Did not allocate views\n");
-                return PRC_ERROR_MEMORY;
+                code = PRC_ERROR_MEMORY;
+                goto fail;
             }
 
             /* And now parse the camera view object */
@@ -2092,8 +2130,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
             if (code < 0)
             {
                 prc_error(ctx, code, "Did not parse rich media view\n");
-                prc_free(ctx, cam_views);
-                return code;
+                goto fail;
             }
             *number_views = 1;
         }
@@ -2108,7 +2145,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         if (code < 0)
         {
             prc_error(ctx, code, "Did not get view array\n");
-            return code;
+            goto fail;
         }
     }
 
@@ -2149,4 +2186,49 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     }
 
     return 0;
+
+fail:
+    if (cam_views != NULL)
+    {
+        if (is_richmedia)
+        {
+            pdf_free_view_array_partial(ctx, cam_views, 1);
+        }
+        else if (number_views != NULL && *number_views > 0)
+        {
+            pdf_free_view_array_partial(ctx, cam_views, *number_views);
+        }
+        else
+        {
+            prc_free(ctx, cam_views);
+        }
+    }
+
+    if (stream_list.number_streams > 0)
+    {
+        for (k = 0; k < stream_list.number_streams; k++)
+        {
+            if (stream_list.ustream[k].stream != NULL)
+            {
+                prc_free(ctx, stream_list.ustream[k].stream);
+            }
+            if (stream_list.ustream[k].object_offsets != NULL)
+            {
+                prc_free(ctx, stream_list.ustream[k].object_offsets);
+            }
+        }
+        prc_free(ctx, stream_list.ustream);
+    }
+
+    if (xref_offsets != NULL)
+    {
+        prc_free(ctx, xref_offsets);
+    }
+
+    if (head_xref.xref_objects != NULL)
+    {
+        prc_free(ctx, head_xref.xref_objects);
+    }
+
+    return code;
 }

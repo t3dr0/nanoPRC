@@ -448,7 +448,11 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
     prc_api_data data = prc_api_open_contents(ctx, infile);
     if (data == NULL)
     {
-         printf("Scene::load: prc_api_open_contents failed\n");
+        /* If memory checking enabled this should catch any leaks that might
+           occur due to a parsing error. Those should have been handled
+           but this will provide a report if PRC_DEBUG_MEMORY is defined. */
+        code = prc_api_release_context(ctx);
+        printf("Scene::load: prc_api_open_contents failed\n");
         exit(1);
     }
     prc_api_print_error_stack(ctx);

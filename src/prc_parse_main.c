@@ -29,6 +29,299 @@
 #include "prc_vector_util.h"
 #include "prc_huff.h"
 
+#ifndef PRC_ENABLE_UNZIPPED_FUZZ
+#define PRC_ENABLE_UNZIPPED_FUZZ 0
+#endif
+
+#if PRC_ENABLE_UNZIPPED_FUZZ
+#ifndef PRC_FUZZ_DEFAULT_SEED
+#define PRC_FUZZ_DEFAULT_SEED 0xC0FFEE01u
+#endif
+
+#ifndef PRC_FUZZ_DEFAULT_RATE_DIVISOR
+#define PRC_FUZZ_DEFAULT_RATE_DIVISOR 512u
+#endif
+
+#ifndef PRC_FUZZ_DEFAULT_MAX_MUTATIONS
+#define PRC_FUZZ_DEFAULT_MAX_MUTATIONS 64u
+#endif
+
+#define PRC_FUZZ_SECTION_SCHEMA_GLOBALS (1u << 0)
+#define PRC_FUZZ_SECTION_TREE (1u << 1)
+#define PRC_FUZZ_SECTION_TESSELLATION (1u << 2)
+#define PRC_FUZZ_SECTION_GEOMETRY (1u << 3)
+#define PRC_FUZZ_SECTION_EXTRA_GEOMETRY (1u << 4)
+#define PRC_FUZZ_SECTION_MODEL (1u << 5)
+#define PRC_FUZZ_SECTION_ALL (PRC_FUZZ_SECTION_SCHEMA_GLOBALS | PRC_FUZZ_SECTION_TREE | \
+                              PRC_FUZZ_SECTION_TESSELLATION | PRC_FUZZ_SECTION_GEOMETRY | \
+                              PRC_FUZZ_SECTION_EXTRA_GEOMETRY | PRC_FUZZ_SECTION_MODEL)
+
+static uint32_t
+prc_fuzz_xorshift32(uint32_t *state)
+{
+    if (*state == 0u)
+    {
+        *state = 0xA341316Cu;
+    }
+    *state ^= (*state << 13);
+    *state ^= (*state >> 17);
+    *state ^= (*state << 5);
+    return *state;
+}
+
+static uint32_t
+prc_fuzz_hash_string(const char *str)
+{
+    uint32_t hash = 2166136261u;
+    if (str == NULL)
+    {
+        return hash;
+    }
+
+    while (*str != '\0')
+    {
+        hash ^= (uint8_t)(*str);
+        hash *= 16777619u;
+        str++;
+    }
+    return hash;
+}
+
+static uint32_t
+prc_fuzz_mix_seed(uint32_t seed, uint32_t hash)
+{
+    seed ^= hash + 0x9e3779b9u + (seed << 6) + (seed >> 2);
+    if (seed == 0u)
+    {
+        seed = PRC_FUZZ_DEFAULT_SEED;
+    }
+    return seed;
+}
+
+static uint32_t
+prc_fuzz_read_env_u32(const char *env_name, uint32_t default_value, uint32_t min_value,
+                      uint32_t max_value)
+{
+    const char *text = getenv(env_name);
+    unsigned long parsed;
+    char *endptr;
+
+    if (text == NULL || *text == '\0')
+    {
+        return default_value;
+    }
+
+    parsed = strtoul(text, &endptr, 0);
+    if (endptr == text || *endptr != '\0')
+    {
+        return default_value;
+    }
+    if (parsed < (unsigned long)min_value)
+    {
+        return min_value;
+    }
+    if (parsed > (unsigned long)max_value)
+    {
+        return max_value;
+    }
+    return (uint32_t)parsed;
+}
+
+static uint32_t
+prc_fuzz_read_seed(void)
+{
+    return prc_fuzz_read_env_u32("PRC_FUZZ_SEED", PRC_FUZZ_DEFAULT_SEED, 1u, 0xffffffffu);
+}
+
+static uint32_t
+prc_fuzz_section_bit_from_name(const char *name)
+{
+    if (name == NULL)
+    {
+        return 0u;
+    }
+
+    if (strcmp(name, "schema") == 0 || strcmp(name, "schema_globals") == 0 ||
+        strcmp(name, "schema_globals_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_SCHEMA_GLOBALS;
+    }
+    if (strcmp(name, "tree") == 0 || strcmp(name, "tree_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_TREE;
+    }
+    if (strcmp(name, "tessellation") == 0 || strcmp(name, "tessellation_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_TESSELLATION;
+    }
+    if (strcmp(name, "geometry") == 0 || strcmp(name, "geometry_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_GEOMETRY;
+    }
+    if (strcmp(name, "extra") == 0 || strcmp(name, "extra_geometry") == 0 ||
+        strcmp(name, "extra_geometry_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_EXTRA_GEOMETRY;
+    }
+    if (strcmp(name, "model") == 0 || strcmp(name, "model_unzipped") == 0)
+    {
+        return PRC_FUZZ_SECTION_MODEL;
+    }
+    if (strcmp(name, "all") == 0)
+    {
+        return PRC_FUZZ_SECTION_ALL;
+    }
+
+    return 0u;
+}
+
+static uint32_t
+prc_fuzz_read_section_mask(void)
+{
+    uint32_t mask_override;
+    const char *text = getenv("PRC_FUZZ_SECTION");
+    char buffer[256];
+    char *token;
+    uint32_t mask = 0u;
+
+    mask_override = prc_fuzz_read_env_u32("PRC_FUZZ_SECTION_MASK", 0u, 0u, PRC_FUZZ_SECTION_ALL);
+    if (mask_override != 0u)
+    {
+        return mask_override;
+    }
+
+    if (text == NULL || *text == '\0')
+    {
+        return PRC_FUZZ_SECTION_ALL;
+    }
+
+    strncpy(buffer, text, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    token = strtok(buffer, ", ");
+    while (token != NULL)
+    {
+        uint32_t bit = prc_fuzz_section_bit_from_name(token);
+        if (bit != 0u)
+        {
+            if (bit == PRC_FUZZ_SECTION_ALL)
+            {
+                return PRC_FUZZ_SECTION_ALL;
+            }
+            mask |= bit;
+        }
+        token = strtok(NULL, ", ");
+    }
+
+    if (mask == 0u)
+    {
+        return PRC_FUZZ_SECTION_ALL;
+    }
+    return mask;
+}
+
+static int
+prc_fuzz_should_mutate(uint32_t section_mask, uint32_t section_bit)
+{
+    return (section_mask & section_bit) != 0u;
+}
+
+static const char*
+prc_fuzz_log_path(void)
+{
+    const char *path = getenv("PRC_FUZZ_LOG");
+    if (path == NULL || *path == '\0')
+    {
+        return "prc_unzipped_fuzz.log";
+    }
+    return path;
+}
+
+static void
+prc_fuzz_log_start(const char *infile, uint32_t seed, uint32_t section_mask)
+{
+    FILE *fid = fopen(prc_fuzz_log_path(), "ab");
+    if (fid == NULL)
+    {
+        return;
+    }
+    fprintf(fid, "START seed=%u sections=0x%02X file=%s\n", seed, section_mask,
+            (infile == NULL ? "(null)" : infile));
+    fclose(fid);
+}
+
+static void
+prc_fuzz_log_event(uint32_t file_index, const char *section_name, size_t section_size,
+                   uint32_t before_state, size_t mutation_count)
+{
+    FILE *fid = fopen(prc_fuzz_log_path(), "ab");
+    if (fid == NULL)
+    {
+        return;
+    }
+
+    fprintf(fid,
+            "MUTATE file=%u section=%s size=%zu mutations=%zu state_before=%u\n",
+            file_index,
+            (section_name == NULL ? "(null)" : section_name),
+            section_size,
+            mutation_count,
+            before_state);
+    fclose(fid);
+}
+
+static size_t
+prc_fuzz_mutate_buffer(uint8_t *data, size_t size, uint32_t *state, uint32_t rate_divisor,
+                       uint32_t max_mutations)
+{
+    size_t mutation_budget;
+    size_t mutation_count;
+    size_t i;
+
+    if (data == NULL || state == NULL || size == 0)
+    {
+        return 0;
+    }
+    if (rate_divisor == 0)
+    {
+        rate_divisor = 1;
+    }
+    if (max_mutations == 0)
+    {
+        max_mutations = 1;
+    }
+
+    mutation_budget = (size / rate_divisor) + 1;
+    if (mutation_budget > (size_t)max_mutations)
+    {
+        mutation_budget = (size_t)max_mutations;
+    }
+
+    mutation_count = 1 + (prc_fuzz_xorshift32(state) % mutation_budget);
+    for (i = 0; i < mutation_count; i++)
+    {
+        size_t idx = (size_t)(prc_fuzz_xorshift32(state) % (uint32_t)size);
+        uint32_t op = prc_fuzz_xorshift32(state) % 3u;
+
+        if (op == 0u)
+        {
+            data[idx] ^= (uint8_t)(1u << (prc_fuzz_xorshift32(state) & 7u));
+        }
+        else if (op == 1u)
+        {
+            int delta = (int)(prc_fuzz_xorshift32(state) % 17u) - 8;
+            data[idx] = (uint8_t)(data[idx] + delta);
+        }
+        else
+        {
+            data[idx] = (uint8_t)(prc_fuzz_xorshift32(state) & 0xffu);
+        }
+    }
+
+    return mutation_count;
+}
+#endif
+
 static void
 debug_prc_character_bitstream(prc_context *ctx, prc_bit_state *bit_state, uint8_t find, size_t byte_length)
 {
@@ -134,9 +427,20 @@ prc_uncompress(prc_context *ctx, const unsigned char *src, size_t src_len,
         {
             err = inflate(&zInfo, Z_SYNC_FLUSH);
             if (err == Z_OK) {
+                unsigned char *new_dest;
                 /* I need a second set of eyes to check this */
                 des_len *= 2;
-                dest = prc_realloc(ctx, dest, des_len);
+                new_dest = (unsigned char *)prc_realloc(ctx, dest, des_len);
+                if (new_dest == NULL)
+                {
+                    inflateEnd(&zInfo);
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_uncompress realloc\n");
+                    prc_free(ctx, dest);
+                    dest = NULL;
+                    *dst = NULL;
+                    return PRC_ERROR_MEMORY;
+                }
+                dest = new_dest;
                 *dst = dest;
                 zInfo.next_out = dest + zInfo.total_out;
                 zInfo.avail_out = des_len - zInfo.total_out;
@@ -343,6 +647,13 @@ prc_open_contents(prc_context *ctx, const char* infile)
     uint32_t prc_size;
     prc_pdf_view_array *views = NULL;
     uint32_t number_views = 0;
+#if PRC_ENABLE_UNZIPPED_FUZZ
+    uint32_t fuzz_seed = 0;
+    uint32_t fuzz_state = 0;
+    uint32_t fuzz_rate_divisor = PRC_FUZZ_DEFAULT_RATE_DIVISOR;
+    uint32_t fuzz_max_mutations = PRC_FUZZ_DEFAULT_MAX_MUTATIONS;
+    uint32_t fuzz_section_mask = PRC_FUZZ_SECTION_ALL;
+#endif
 
     output = (prc_data *)prc_calloc(ctx, 1, sizeof(prc_data));
     if (output == NULL)
@@ -406,6 +717,19 @@ prc_open_contents(prc_context *ctx, const char* infile)
 
     /* For debug */
     // prc_dump_file("debug.prc", buff, size);
+
+#if PRC_ENABLE_UNZIPPED_FUZZ
+    fuzz_seed = prc_fuzz_read_seed();
+    fuzz_state = prc_fuzz_mix_seed(fuzz_seed, prc_fuzz_hash_string(infile));
+    fuzz_rate_divisor = prc_fuzz_read_env_u32("PRC_FUZZ_RATE", PRC_FUZZ_DEFAULT_RATE_DIVISOR,
+                                              1u, 1000000u);
+    fuzz_max_mutations = prc_fuzz_read_env_u32("PRC_FUZZ_MAX_MUTATIONS",
+                                               PRC_FUZZ_DEFAULT_MAX_MUTATIONS,
+                                               1u,
+                                               1000000u);
+    fuzz_section_mask = prc_fuzz_read_section_mask();
+    prc_fuzz_log_start(infile, fuzz_seed, fuzz_section_mask);
+#endif
 
     /* The header */
     header = prc_parse_main_header(ctx, buff);
@@ -475,6 +799,20 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 prc_free(ctx, ptr_raw);
                 file_struct[k].model_unzipped = ptr_raw2;
                 file_struct[k].model_size = code;
+
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_MODEL))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].model_unzipped,
+                                                              file_struct[k].model_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "model_unzipped", file_struct[k].model_size,
+                                       before_state, mutations);
+                }
+#endif
 
                 code = prc_parse_model_file(ctx, &file_struct[k], header->filestructure_count, k);
                 if (code < 0)
@@ -575,6 +913,20 @@ prc_open_contents(prc_context *ctx, const char* infile)
             /* Now parse the unzipped sections */
             if (file_struct[k].schema_globals_unzipped != NULL)
             {
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_SCHEMA_GLOBALS))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].schema_globals_unzipped,
+                                                              file_struct[k].schema_globals_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "schema_globals_unzipped",
+                                       file_struct[k].schema_globals_size,
+                                       before_state, mutations);
+                }
+#endif
                 code = prc_parse_file_schema_and_global(ctx, &file_struct[k]);
                 if (code < 0)
                 {
@@ -587,11 +939,21 @@ prc_open_contents(prc_context *ctx, const char* infile)
             }
             if (file_struct[k].tessellation_unzipped != NULL)
             {
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_TESSELLATION))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].tessellation_unzipped,
+                                                              file_struct[k].tessellation_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "tessellation_unzipped",
+                                       file_struct[k].tessellation_size,
+                                       before_state, mutations);
+                }
+#endif
                 uint8_t debug_tess = 0;
-                //if (k == 17)
-                //{
-                //    debug_tess = 1;
-                //}
                 code = prc_parse_file_tessellation(ctx, &file_struct[k], debug_tess);
                 if (code < 0)
                 {
@@ -604,6 +966,19 @@ prc_open_contents(prc_context *ctx, const char* infile)
             }
             if (file_struct[k].tree_unzipped != NULL)
             {
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_TREE))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].tree_unzipped,
+                                                              file_struct[k].tree_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "tree_unzipped", file_struct[k].tree_size,
+                                       before_state, mutations);
+                }
+#endif
                 code = prc_parse_file_tree(ctx, &file_struct[k]);
                 if (code < 0)
                 {
@@ -616,6 +991,19 @@ prc_open_contents(prc_context *ctx, const char* infile)
             }
             if (file_struct[k].geometry_unzipped != NULL)
             {
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_GEOMETRY))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].geometry_unzipped,
+                                                              file_struct[k].geometry_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "geometry_unzipped", file_struct[k].geometry_size,
+                                       before_state, mutations);
+                }
+#endif
                 /* This is the exact geometry data */
                 code = prc_parse_file_geometry(ctx, &file_struct[k]);
                 if (code < 0)
@@ -629,6 +1017,20 @@ prc_open_contents(prc_context *ctx, const char* infile)
             }
             if (file_struct[k].extra_geometry_unzipped != NULL)
             {
+#if PRC_ENABLE_UNZIPPED_FUZZ
+                if (prc_fuzz_should_mutate(fuzz_section_mask, PRC_FUZZ_SECTION_EXTRA_GEOMETRY))
+                {
+                    uint32_t before_state = fuzz_state;
+                    size_t mutations = prc_fuzz_mutate_buffer(file_struct[k].extra_geometry_unzipped,
+                                                              file_struct[k].extra_geometry_size,
+                                                              &fuzz_state,
+                                                              fuzz_rate_divisor,
+                                                              fuzz_max_mutations);
+                    prc_fuzz_log_event(k, "extra_geometry_unzipped",
+                                       file_struct[k].extra_geometry_size,
+                                       before_state, mutations);
+                }
+#endif
                 code = prc_parse_file_extra_geometry(ctx, &file_struct[k]);
                 if (code < 0)
                 {

@@ -172,12 +172,15 @@ prc_malloc(prc_context *ctx, size_t size)
 #if PRC_DEBUG_MEMORY
     if (ctx->current_memory_index >= ctx->debug_memory_size)
     {
-#ifdef PRC_MEMORY_GUARDS
-        ctx->hooks.free(ctx->hooks.opaque, ((prc_guarded_block *)p) - 1);
-#else
-        prc_free(ctx, p);
-#endif
-        return NULL;
+        if (ctx->debug_memory_table_full_warned == 0)
+        {
+            printf("*** PRC_DEBUG_MEMORY TABLE FULL ***\n");
+            printf("    Capacity reached: %zu entries\n", ctx->debug_memory_size);
+            printf("    Further allocations will continue UNTRACKED.\n");
+            ctx->debug_memory_table_full_warned = 1;
+        }
+        ctx->debug_memory_untracked_alloc_count++;
+        return p;
     }
     if (p != NULL)
     {
@@ -229,12 +232,15 @@ prc_calloc(prc_context *ctx, size_t count, size_t size)
 #if PRC_DEBUG_MEMORY
     if (ctx->current_memory_index >= ctx->debug_memory_size)
     {
-#ifdef PRC_MEMORY_GUARDS
-        ctx->hooks.free(ctx->hooks.opaque, ((prc_guarded_block *)p) - 1);
-#else
-        prc_free(ctx, p);
-#endif
-        return NULL;
+        if (ctx->debug_memory_table_full_warned == 0)
+        {
+            printf("*** PRC_DEBUG_MEMORY TABLE FULL ***\n");
+            printf("    Capacity reached: %zu entries\n", ctx->debug_memory_size);
+            printf("    Further allocations will continue UNTRACKED.\n");
+            ctx->debug_memory_table_full_warned = 1;
+        }
+        ctx->debug_memory_untracked_alloc_count++;
+        return p;
     }
     ctx->debug_memory[ctx->current_memory_index].data = p;
     ctx->debug_memory[ctx->current_memory_index].index = ctx->current_memory_index;

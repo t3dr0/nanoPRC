@@ -86,6 +86,8 @@ struct prc_context_s
     prc_debug_memory *debug_memory;
     size_t debug_memory_size;
     size_t current_memory_index;
+    uint8_t debug_memory_table_full_warned;
+    size_t debug_memory_untracked_alloc_count;
  #endif
 };
 

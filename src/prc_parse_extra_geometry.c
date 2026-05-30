@@ -39,6 +39,8 @@ static int prc_parse_content_body(prc_context *ctx, prc_bit_state *bit_state,
 static int prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state,
     prc_topo *data);
 
+void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
+
 /* Table 24 � UVParameterization */
 static void
 prc_parse_uv_parameterization(prc_context *ctx, prc_bit_state *bit_state,
@@ -84,16 +86,18 @@ prc_parse_compressed_vertex(prc_context *ctx, prc_bit_state *bit_state,
         compressed_data->current_vertex_index++;
         if (compressed_data->current_vertex_index >= compressed_data->vertices_capacity)
         {
+            prc_compressed_vertex *new_vertices;
             /* Need to reallocate */
             compressed_data->vertices_capacity *= 2;
-            compressed_data->vertices = (prc_compressed_vertex *)prc_realloc(ctx,
+            new_vertices = (prc_compressed_vertex *)prc_realloc(ctx,
                 compressed_data->vertices,
                 compressed_data->vertices_capacity * sizeof(prc_compressed_vertex));
-            if (compressed_data->vertices == NULL)
+            if (new_vertices == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed to reallocate compressed_data->vertices\n");
                 return PRC_ERROR_MEMORY;
             }
+            compressed_data->vertices = new_vertices;
         }
     }
 
@@ -614,16 +618,18 @@ prc_parse_ref_or_compressed_curve(prc_context *ctx, prc_bit_state *bit_state,
 
         if (compressed_data->current_curve_index >= compressed_data->curves_capacity)
         {
+            prc_compressed_curve *new_curves;
             /* Need to reallocate */
             compressed_data->curves_capacity *= 2;
-            compressed_data->curves = (prc_compressed_curve *)prc_realloc(ctx,
+            new_curves = (prc_compressed_curve *)prc_realloc(ctx,
                 compressed_data->curves,
                 compressed_data->curves_capacity * sizeof(prc_compressed_curve));
-            if (compressed_data->curves == NULL)
+            if (new_curves == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed to reallocate compressed_data->curves\n");
                 return PRC_ERROR_MEMORY;
             }
+            compressed_data->curves = new_curves;
         }
     }
     else
@@ -768,16 +774,18 @@ prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
 
             if (curve_index >= curve_capacity)
             {
+                prc_ref_or_compressed_curve *new_trim_curves;
                 /* Need to reallocate. This is not updating the output structure... */
                 curve_capacity *= 2;
-                current_loop->trim_curves = (prc_ref_or_compressed_curve *)prc_realloc(ctx,
+                new_trim_curves = (prc_ref_or_compressed_curve *)prc_realloc(ctx,
                     current_loop->trim_curves,
                     curve_capacity * sizeof(prc_ref_or_compressed_curve));
-                if (current_loop->trim_curves == NULL)
+                if (new_trim_curves == NULL)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Failed to reallocate current_loop->trim_curves\n");
                     return PRC_ERROR_MEMORY;
                 }
+                current_loop->trim_curves = new_trim_curves;
                 /* Zero allocate the new area */
                 memset(&current_loop->trim_curves[curve_index], 0,
                        (curve_capacity - curve_index) *
@@ -794,15 +802,17 @@ prc_parse_ana_face_trim_loop(prc_context *ctx, prc_bit_state *bit_state,
 
             if (*trim_loop_count >= *trim_loop_capacity)
             {
+                prc_ana_face_trim_loop *new_data_ptr;
                 /* Need to reallocate.   This is not updating the output structure... */
                 *trim_loop_capacity *= 2;
-                *data_ptr = (prc_ana_face_trim_loop *)prc_realloc(ctx, *data_ptr,
+                new_data_ptr = (prc_ana_face_trim_loop *)prc_realloc(ctx, *data_ptr,
                     (*trim_loop_capacity) * sizeof(prc_ana_face_trim_loop));
-                if (*data_ptr == NULL)
+                if (new_data_ptr == NULL)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Failed to reallocate data->trim_loop\n");
                     return PRC_ERROR_MEMORY;
                 }
+                *data_ptr = new_data_ptr;
                 /* Zero allocate the new area */
                 memset(&(*data_ptr)[*trim_loop_count], 0,
                        (*trim_loop_capacity - *trim_loop_count) *
@@ -3484,7 +3494,7 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
         compressed_data->vertices = NULL;
         return PRC_ERROR_MEMORY;
     }
-    compressed_data->curves_capacity = BREP_VERTEX_INITIAL_SIZE;
+    compressed_data->curves_capacity = BREP_EDGE_INITIAL_SIZE;
 
     compressed_data->current_curve_index = 0;
     compressed_data->current_vertex_index = 0;
@@ -5308,6 +5318,26 @@ prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data)
             return PRC_ERROR_MEMORY;
         }
         code = prc_parse_brep_data_compress(ctx, bit_state, data->topo_brep_data_compress, DONT_READ_TAG);
+
+        /* For now, done with this data. Release it */
+        prc_nano_brep_compressed_data *compressed_data = ctx->internal.nano_brep_data;
+        if (compressed_data != NULL)
+        {
+            if (compressed_data->vertices != NULL)
+            {
+                prc_free(ctx, compressed_data->vertices);
+            }
+            if (compressed_data->curves != NULL)
+            {
+                for (uint32_t k = 0; k < compressed_data->current_curve_index; k++)
+                {
+                    prc_release_compressed_curve(ctx, &compressed_data->curves[k]);
+                }
+                prc_free(ctx, compressed_data->curves);
+            }
+            prc_free(ctx, compressed_data);
+            ctx->internal.nano_brep_data = NULL;
+        }
         break;
 
     default:

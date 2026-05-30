@@ -1592,6 +1592,14 @@ DecryptFinish(prc_context *ctx, void *cipher_context,
     return 0;
 }
 
+static void
+pdf_decrypt_release_context_and_output(prc_context *ctx, void *crypt_context,
+    uint8_t *output)
+{
+    prc_free(ctx, crypt_context);
+    prc_free(ctx, output);
+}
+
 int
 pdf_decrypt_string(prc_context *ctx, uint8_t *ptr_in_stream,
     uint32_t stream_length, prc_pdf_decrypt_params *decrypt_params,
@@ -1612,27 +1620,27 @@ pdf_decrypt_string(prc_context *ctx, uint8_t *ptr_in_stream,
         return PRC_ERROR_MEMORY;
     }
 
-    /* Allocate output */
-    output = (uint8_t *)prc_calloc(ctx, output_size, sizeof(uint8_t));
-    if (output == NULL)
-    {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate decrypted data\n");
-        return PRC_ERROR_MEMORY;
-    }
-
     code = pdf_decrypt_start(ctx, decrypt_params, obj_num, gen_num, &crypt_context);
     if (code < 0)
+    {
+        prc_free(ctx, output);
         return code;
+    }
 
     code = pdf_decrypt_stream(ctx, decrypt_params, obj_num, gen_num, crypt_context,
         ptr_in_stream, stream_length, output, output_size, &decrypt_offset);
     if (code < 0)
+    {
+        pdf_decrypt_release_context_and_output(ctx, crypt_context, output);
         return code;
+    }
 
-    code = DecryptFinish(ctx, crypt_context, decrypt_params,
-        output + decrypt_offset);
+    code = DecryptFinish(ctx, crypt_context, decrypt_params, output + decrypt_offset);
     if (code < 0)
+    {
+        pdf_decrypt_release_context_and_output(ctx, crypt_context, output);
         return code;
+    }
 
     *decrypted_data = output;
     *decypted_size = output_size;
@@ -1657,12 +1665,18 @@ pdf_get_decrypted_stream_data(prc_context *ctx, uint8_t *ptr_in_stream,
     code = pdf_decrypt_stream(ctx, decrypt_params, obj_num, gen_num, crypt_context,
         ptr_in_stream, stream_length, decrypted_data, decypted_size, &decrypt_offset);
     if (code < 0)
+    {
+        prc_free(ctx, crypt_context);
         return code;
+    }
 
     code = DecryptFinish(ctx, crypt_context, decrypt_params,
                          decrypted_data + decrypt_offset);
     if (code < 0)
+    {
+        prc_free(ctx, crypt_context);
         return code;
+    }
 
     return 0;
 }

@@ -154,7 +154,6 @@ prc_release_file_struct_desc(prc_context *ctx, prc_file_struct_desc *file_struct
         prc_free(ctx, file_struct_desc->section_offset);
         file_struct_desc->section_offset = NULL;
     }
-    prc_free(ctx, file_struct_desc);
 }
 
 static void
@@ -195,16 +194,44 @@ prc_release_uncomp_file(prc_context *ctx, prc_uncomp_file *uncomp_file)
 void
 prc_release_header(prc_context *ctx, prc_header *header)
 {
+    uint32_t k;
+
     if (header == NULL)
         return;
 
-    prc_release_file_struct_desc(ctx, header->file_info);
-    header->file_info = NULL;
+    if (header->file_info != NULL)
+    {
+        for (k = 0; k < header->filestructure_count; k++)
+        {
+            prc_release_file_struct_desc(ctx, &header->file_info[k]);
+        }
+        prc_free(ctx, header->file_info);
+    }
 
     prc_release_uncomp_file(ctx, header->files);
     if (header->files != NULL)
     {
         prc_free(ctx, header->files);
+    }
+
+    /* At this time release the schema too if there is one */
+    prc_schema *data = ctx->internal.schema;
+    if (data != NULL)
+    {
+        if (data->entity_schema != NULL)
+        {
+            for (k = 0; k < data->schema_count; k++)
+            {
+                if (data->entity_schema[k].schema_tokens != NULL)
+                {
+                    prc_free(ctx, data->entity_schema[k].schema_tokens);
+                    data->entity_schema[k].schema_tokens = NULL;
+                }
+            }
+            prc_free(ctx, data->entity_schema);
+        }
+        prc_free(ctx, data);
+        ctx->internal.schema = NULL;
     }
 
     prc_free(ctx, header);
@@ -279,8 +306,55 @@ prc_release_serialize_help(prc_context *ctx, prc_markup_serialization_helper *da
 }
 
 static void
+prc_release_prc_pattern(prc_context *ctx, prc_graph_fill_pattern *data)
+{
+    if (data == NULL)
+        return;
+
+    switch (data->fill_pattern_type)
+    {
+
+    case PRC_TYPE_GRAPH_DottingPattern:
+        if (data->dotting_pattern != NULL)
+        {
+            prc_release_prc_ref_base(ctx, &data->dotting_pattern->base);
+            prc_free(ctx, data->dotting_pattern);
+            data->dotting_pattern = NULL;
+        }
+        break;
+
+    case PRC_TYPE_GRAPH_VpicturePattern:
+        if (data->picture_pattern != NULL)
+        {
+            prc_release_prc_ref_base(ctx, &data->picture_pattern->base);
+            prc_free(ctx, data->picture_pattern);
+            data->picture_pattern = NULL;
+        }
+        break;
+
+    case PRC_TYPE_GRAPH_HatchingPattern:
+        if (data->hatching_pattern != NULL)
+        {
+            prc_release_prc_ref_base(ctx, &data->hatching_pattern->base);
+            if (data->hatching_pattern->hatch != NULL)
+            {
+                prc_free(ctx, data->hatching_pattern->hatch);
+            }
+            data->hatching_pattern = NULL;
+        }
+        break;
+
+    case PRC_TYPE_GRAPH_FillPattern:
+        /* No additional data to free */
+        break;
+    }
+}
+
+static void
 prc_release_global_data(prc_context *ctx, prc_file_struct_internal_global_data *global_data)
 {
+    uint32_t k;
+
     if (global_data == NULL)
         return;
 
@@ -293,37 +367,70 @@ prc_release_global_data(prc_context *ctx, prc_file_struct_internal_global_data *
     }
     if (global_data->materials != NULL)
     {
+        for (k = 0; k < global_data->material_count; k++)
+        {
+            prc_release_prc_ref_base(ctx, &global_data->materials[k].base);
+        }
         prc_free(ctx, global_data->materials);
         global_data->materials = NULL;
     }
     if (global_data->textures != NULL)
     {
+        for (k = 0; k < global_data->texture_count; k++)
+        {
+            prc_release_prc_ref_base(ctx, &global_data->textures[k].base);
+            if (global_data->textures[k].texture_mapping_attributes_intensities != NULL)
+            {
+                prc_free(ctx, global_data->textures[k].texture_mapping_attributes_intensities);
+                global_data->textures[k].texture_mapping_attributes_intensities = NULL;
+            }
+            if (global_data->textures[k].texture_mapping_attributes_components != NULL)
+            {
+                prc_free(ctx, global_data->textures[k].texture_mapping_attributes_components);
+                global_data->textures[k].texture_mapping_attributes_components = NULL;
+            }
+        }
         prc_free(ctx, global_data->textures);
         global_data->textures = NULL;
     }
     if (global_data->pictures != NULL)
     {
+        for (k = 0; k < global_data->picture_count; k++)
+        {
+            prc_release_string(ctx, &global_data->pictures[k].base.name.name);
+        }
         prc_free(ctx, global_data->pictures);
         global_data->pictures = NULL;
     }
     if (global_data->line_patterns != NULL)
     {
-        prc_release_prc_ref_base_name(ctx, &global_data->line_patterns->base);
-        if (global_data->line_patterns->lengths != NULL)
+        for (k = 0; k < global_data->line_pattern_count; k++)
         {
-            prc_free(ctx, global_data->line_patterns->lengths);
-            global_data->line_patterns->lengths = NULL;
+            prc_release_prc_ref_base(ctx, &global_data->line_patterns[k].base);
+            if (global_data->line_patterns[k].lengths != NULL)
+            {
+                prc_free(ctx, global_data->line_patterns[k].lengths);
+                global_data->line_patterns[k].lengths = NULL;
+            }
         }
         prc_free(ctx, global_data->line_patterns);
         global_data->line_patterns = NULL;
     }
     if (global_data->styles != NULL)
     {
+        for (k = 0; k < global_data->style_count; k++)
+        {
+            prc_release_prc_ref_base(ctx, &global_data->styles[k].base);
+        }
         prc_free(ctx, global_data->styles);
         global_data->styles = NULL;
     }
     if (global_data->fills != NULL)
     {
+        for (k = 0; k < global_data->fill_count; k++)
+        {
+            prc_release_prc_pattern(ctx, &global_data->fills[k]);
+        }
         prc_free(ctx, global_data->fills);
         global_data->fills = NULL;
     }
@@ -922,6 +1029,11 @@ prc_release_tess_3d_wire(prc_context *ctx, prc_tess_3d_wire *data)
         }
         prc_free(ctx, data->wire_elements);
     }
+
+    if (data->has_vertex_colors && data->vertex_color_data.color_data.remaining_vertices != NULL)
+    {
+        prc_free(ctx, data->vertex_color_data.color_data.remaining_vertices);
+    }
     prc_free(ctx, data);
 }
 
@@ -1102,6 +1214,49 @@ prc_release_tess(prc_context *ctx, prc_tess *data)
     default:
         prc_error(ctx, PRC_ERROR_PARSE, "Unknown Tessellation type\n");
         return;
+    }
+}
+
+void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
+
+void
+prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data)
+{
+    uint32_t k;
+
+    if (data == NULL)
+        return;
+
+    switch (data->curve_type)
+    {
+    case PRC_HCG_Line:
+    case PRC_HCG_Circle:
+        break;
+
+    case  PRC_HCG_BsplineHermiteCurve:
+        if (data->hcg_bspline_hermite_curve.points != NULL)
+            prc_free(ctx, data->hcg_bspline_hermite_curve.points);
+        if (data->hcg_bspline_hermite_curve.tangents != NULL)
+            prc_free(ctx, data->hcg_bspline_hermite_curve.tangents);
+        if (data->hcg_bspline_hermite_curve.compressed_points != NULL)
+            prc_free(ctx, data->hcg_bspline_hermite_curve.compressed_points);
+        if (data->hcg_bspline_hermite_curve.compressed_tangents != NULL)
+            prc_free(ctx, data->hcg_bspline_hermite_curve.compressed_tangents);
+        break;
+
+    case PRC_HCG_CompositeCurve:
+        if (data->hcg_composite_curve.curves != NULL)
+        {
+            for (k = 0; k < data->hcg_composite_curve.number_of_curves; k++)
+            {
+                if (data->hcg_composite_curve.curves[k].compressed_curve != NULL)
+                {
+                    prc_release_compressed_curve(ctx, data->hcg_composite_curve.curves[k].compressed_curve);
+                }
+            }
+            prc_free(ctx, data->hcg_composite_curve.curves);
+        }
+        break;
     }
 }
 
@@ -1338,6 +1493,730 @@ prc_release_nano_brep_data(prc_context *ctx, prc_nano_brep_compressed_data *data
     }
 }
 
+static void prc_release_topo(prc_context *ctx, prc_topo *body);
+static void prc_release_ptr_curve(prc_context *ctx, prc_ptr_curve *data);
+static void prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data);
+
+static void
+prc_release_content_curve(prc_context *ctx, prc_content_curve *data)
+{
+    if (data == NULL)
+        return;
+
+    if (data->has_base_geometry)
+    {
+        prc_release_attribute_data(ctx, &data->attribute_data);
+        prc_release_name(ctx, &data->name);
+    }
+}
+
+static void
+prc_release_surf_blend01(prc_context *ctx, prc_surf_blend01 *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->center_curve);
+    prc_release_ptr_curve(ctx, &data->origin_curve);
+    prc_release_ptr_curve(ctx, &data->tangent_curve);
+}
+
+static void
+prc_release_surf_blend02(prc_context *ctx, prc_surf_blend02 *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->bound_surface0);
+    prc_release_ptr_curve(ctx, &data->bound_curve0);
+    prc_release_ptr_surface(ctx, &data->bound_surface1);
+    prc_release_ptr_curve(ctx, &data->bound_curve1);
+    prc_release_ptr_curve(ctx, &data->center_curve);
+    prc_release_ptr_surface(ctx, &data->cliff_surface0);
+    prc_release_ptr_surface(ctx, &data->cliff_surface1);
+}
+
+static void
+prc_release_surf_blend03(prc_context *ctx, prc_surf_blend03 *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    if (data->parameters != NULL)
+        prc_free(ctx, data->parameters);
+    if (data->multiplicities != NULL)
+        prc_free(ctx, data->multiplicities);
+    if (data->points != NULL)
+        prc_free(ctx, data->points);
+    if (data->rail_2_angles_v != NULL)
+        prc_free(ctx, data->rail_2_angles_v);
+    if (data->tangents != NULL)
+        prc_free(ctx, data->tangents);
+    if (data->rail_2_derivatives_v != NULL)
+        prc_free(ctx, data->rail_2_derivatives_v);
+    if (data->second_derivatives != NULL)
+        prc_free(ctx, data->second_derivatives);
+    if (data->rail_2_second_derivatives != NULL)
+        prc_free(ctx, data->rail_2_second_derivatives);
+    if (data->supplemental_doubles != NULL)
+        prc_free(ctx, data->supplemental_doubles);
+}
+
+static void
+prc_release_surf_nurbs(prc_context *ctx, prc_surf_nurbs *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    if (data->p != NULL)
+        prc_free(ctx, data->p);
+    if (data->knot_vector_u != NULL)
+        prc_free(ctx, data->knot_vector_u);
+    if (data->knot_vector_v != NULL)
+        prc_free(ctx, data->knot_vector_v);
+}
+
+static void
+prc_release_surf_cone(prc_context *ctx, prc_surf_cone *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+}
+
+static void
+prc_release_surf_cylinder(prc_context *ctx, prc_surf_cylinder *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+}
+
+static void
+prc_release_surf_cylindrical(prc_context *ctx, prc_surf_cylindrical *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->base_surface);
+}
+
+static void
+prc_release_surf_offset(prc_context *ctx, prc_surf_offset *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->base_surface);
+}
+
+static void
+prc_release_surf_pipe(prc_context *ctx, prc_surf_pipe *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->center_curve);
+    prc_release_ptr_curve(ctx, &data->origin_curve);
+}
+
+static void
+prc_release_surf_plane(prc_context *ctx, prc_surf_plane *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+}
+
+static void
+prc_release_surf_ruled(prc_context *ctx, prc_surf_ruled *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->first_curve);
+    prc_release_ptr_curve(ctx, &data->second_curve);
+}
+
+static void
+prc_release_surf_sphere(prc_context *ctx, prc_surf_sphere *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+}
+
+static void
+prc_release_surf_revolution(prc_context *ctx, prc_surf_revolution *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->base_curve);
+}
+
+static void
+prc_release_surf_extrusion(prc_context *ctx, prc_surf_extrusion *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->base_curve);
+}
+
+static void
+prc_release_surf_fromcurves(prc_context *ctx, prc_surf_fromcurves *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->first_curve);
+    prc_release_ptr_curve(ctx, &data->second_curve);
+}
+
+static void
+prc_release_surf_torus(prc_context *ctx, prc_surf_torus *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+}
+
+static void
+prc_release_surf_transform(prc_context *ctx, prc_surf_transform *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_surface(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->base_surface);
+}
+
+static void
+prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data)
+{
+    if (data == NULL || data->is_referenced)
+        return;
+
+    switch (data->surface_type)
+    {
+    case PRC_TYPE_ROOT:
+        break;
+    case PRC_TYPE_SURF_Blend01:
+        prc_release_surf_blend01(ctx, data->surf_blend01);
+        prc_free(ctx, data->surf_blend01);
+        data->surf_blend01 = NULL;
+        break;
+    case PRC_TYPE_SURF_Blend02:
+        prc_release_surf_blend02(ctx, data->surf_blend02);
+        prc_free(ctx, data->surf_blend02);
+        data->surf_blend02 = NULL;
+        break;
+    case PRC_TYPE_SURF_Blend03:
+        prc_release_surf_blend03(ctx, data->surf_blend03);
+        prc_free(ctx, data->surf_blend03);
+        data->surf_blend03 = NULL;
+        break;
+    case PRC_TYPE_SURF_NURBS:
+        prc_release_surf_nurbs(ctx, data->surf_nurbs);
+        prc_free(ctx, data->surf_nurbs);
+        data->surf_nurbs = NULL;
+        break;
+    case PRC_TYPE_SURF_Cone:
+        prc_release_surf_cone(ctx, data->surf_cone);
+        prc_free(ctx, data->surf_cone);
+        data->surf_cone = NULL;
+        break;
+    case PRC_TYPE_SURF_Cylinder:
+        prc_release_surf_cylinder(ctx, data->surf_cylinder);
+        prc_free(ctx, data->surf_cylinder);
+        data->surf_cylinder = NULL;
+        break;
+    case PRC_TYPE_SURF_Cylindrical:
+        prc_release_surf_cylindrical(ctx, data->surf_cylindrical);
+        prc_free(ctx, data->surf_cylindrical);
+        data->surf_cylindrical = NULL;
+        break;
+    case PRC_TYPE_SURF_Offset:
+        prc_release_surf_offset(ctx, data->surf_offset);
+        prc_free(ctx, data->surf_offset);
+        data->surf_offset = NULL;
+        break;
+    case PRC_TYPE_SURF_Pipe:
+        prc_release_surf_pipe(ctx, data->surf_pipe);
+        prc_free(ctx, data->surf_pipe);
+        data->surf_pipe = NULL;
+        break;
+    case PRC_TYPE_SURF_Plane:
+        prc_release_surf_plane(ctx, data->surf_plane);
+        prc_free(ctx, data->surf_plane);
+        data->surf_plane = NULL;
+        break;
+    case PRC_TYPE_SURF_Ruled:
+        prc_release_surf_ruled(ctx, data->surf_ruled);
+        prc_free(ctx, data->surf_ruled);
+        data->surf_ruled = NULL;
+        break;
+    case PRC_TYPE_SURF_Sphere:
+        prc_release_surf_sphere(ctx, data->surf_sphere);
+        prc_free(ctx, data->surf_sphere);
+        data->surf_sphere = NULL;
+        break;
+    case PRC_TYPE_SURF_Revolution:
+        prc_release_surf_revolution(ctx, data->surf_revolution);
+        prc_free(ctx, data->surf_revolution);
+        data->surf_revolution = NULL;
+        break;
+    case PRC_TYPE_SURF_Extrusion:
+        prc_release_surf_extrusion(ctx, data->surf_extrusion);
+        prc_free(ctx, data->surf_extrusion);
+        data->surf_extrusion = NULL;
+        break;
+    case PRC_TYPE_SURF_FromCurves:
+        prc_release_surf_fromcurves(ctx, data->surf_fromcurves);
+        prc_free(ctx, data->surf_fromcurves);
+        data->surf_fromcurves = NULL;
+        break;
+    case PRC_TYPE_SURF_Torus:
+        prc_release_surf_torus(ctx, data->surf_torus);
+        prc_free(ctx, data->surf_torus);
+        data->surf_torus = NULL;
+        break;
+    case PRC_TYPE_SURF_Transform:
+        prc_release_surf_transform(ctx, data->surf_transform);
+        prc_free(ctx, data->surf_transform);
+        data->surf_transform = NULL;
+        break;
+    default:
+        break;
+    }
+}
+
+static void
+prc_release_crv_blend02_boundary(prc_context *ctx, prc_crv_blend02_boundary *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->surface);
+    prc_release_ptr_surface(ctx, &data->bound_surface);
+    if (data->crossing_points != NULL)
+        prc_free(ctx, data->crossing_points);
+}
+
+static void
+prc_release_crv_nurbs(prc_context *ctx, prc_crv_nurbs *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    if (data->p != NULL)
+        prc_free(ctx, data->p);
+    if (data->u != NULL)
+        prc_free(ctx, data->u);
+}
+
+static void
+prc_release_crv_circle(prc_context *ctx, prc_crv_circle *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_composite(prc_context *ctx, prc_crv_composite *data)
+{
+    uint32_t k;
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    if (data->subcurves != NULL)
+    {
+        for (k = 0; k < data->number_of_subcurves; k++)
+        {
+            prc_release_ptr_curve(ctx, &data->subcurves[k].ptr_curve);
+        }
+        prc_free(ctx, data->subcurves);
+    }
+}
+
+static void
+prc_release_crv_onsurf(prc_context *ctx, prc_crv_onsurf *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->uv_curve);
+    prc_release_ptr_surface(ctx, &data->surface);
+}
+
+static void
+prc_release_crv_ellipse(prc_context *ctx, prc_crv_ellipse *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_equation(prc_context *ctx, prc_crv_equation *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_helix01(prc_context *ctx, prc_crv_helix01 *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_hyperbola(prc_context *ctx, prc_crv_hyperbola *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_intersection(prc_context *ctx, prc_crv_intersection *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_ptr_surface(ctx, &data->surface1);
+    prc_release_ptr_surface(ctx, &data->surface2);
+    if (data->crossing_points != NULL)
+        prc_free(ctx, data->crossing_points);
+}
+
+static void
+prc_release_crv_line(prc_context *ctx, prc_crv_line *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_offset(prc_context *ctx, prc_crv_offset *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->base_curve);
+}
+
+static void
+prc_release_crv_parabola(prc_context *ctx, prc_crv_parabola *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+}
+
+static void
+prc_release_crv_polyline(prc_context *ctx, prc_crv_polyline *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    if (data->points != NULL)
+        prc_free(ctx, data->points);
+}
+
+static void
+prc_release_crv_transform(prc_context *ctx, prc_crv_transform *data)
+{
+    if (data == NULL)
+        return;
+    prc_release_content_curve(ctx, &data->curve_data);
+    prc_release_ptr_curve(ctx, &data->base_curve);
+}
+
+static void
+prc_release_ptr_curve(prc_context *ctx, prc_ptr_curve *data)
+{
+    if (data == NULL || data->is_referenced)
+        return;
+
+    switch (data->curve_type)
+    {
+    case PRC_TYPE_ROOT:
+        break;
+    case PRC_TYPE_CRV_Blend02Boundary:
+        prc_release_crv_blend02_boundary(ctx, data->crv_blend02_boundary);
+        prc_free(ctx, data->crv_blend02_boundary);
+        data->crv_blend02_boundary = NULL;
+        break;
+    case PRC_TYPE_CRV_NURBS:
+        prc_release_crv_nurbs(ctx, data->crv_nurbs);
+        prc_free(ctx, data->crv_nurbs);
+        data->crv_nurbs = NULL;
+        break;
+    case PRC_TYPE_CRV_Circle:
+        prc_release_crv_circle(ctx, data->crv_circle);
+        prc_free(ctx, data->crv_circle);
+        data->crv_circle = NULL;
+        break;
+    case PRC_TYPE_CRV_Composite:
+        prc_release_crv_composite(ctx, data->crv_composite);
+        prc_free(ctx, data->crv_composite);
+        data->crv_composite = NULL;
+        break;
+    case PRC_TYPE_CRV_OnSurf:
+        prc_release_crv_onsurf(ctx, data->crv_onsurf);
+        prc_free(ctx, data->crv_onsurf);
+        data->crv_onsurf = NULL;
+        break;
+    case PRC_TYPE_CRV_Ellipse:
+        prc_release_crv_ellipse(ctx, data->crv_ellipse);
+        prc_free(ctx, data->crv_ellipse);
+        data->crv_ellipse = NULL;
+        break;
+    case PRC_TYPE_CRV_Equation:
+        prc_release_crv_equation(ctx, data->crv_equation);
+        prc_free(ctx, data->crv_equation);
+        data->crv_equation = NULL;
+        break;
+    case PRC_TYPE_CRV_Helix01:
+        prc_release_crv_helix01(ctx, data->crv_helix01);
+        prc_free(ctx, data->crv_helix01);
+        data->crv_helix01 = NULL;
+        break;
+    case PRC_TYPE_CRV_Hyperbola:
+        prc_release_crv_hyperbola(ctx, data->crv_hyperbola);
+        prc_free(ctx, data->crv_hyperbola);
+        data->crv_hyperbola = NULL;
+        break;
+    case PRC_TYPE_CRV_Intersection:
+        prc_release_crv_intersection(ctx, data->crv_intersection);
+        prc_free(ctx, data->crv_intersection);
+        data->crv_intersection = NULL;
+        break;
+    case PRC_TYPE_CRV_Line:
+        prc_release_crv_line(ctx, data->crv_line);
+        prc_free(ctx, data->crv_line);
+        data->crv_line = NULL;
+        break;
+    case PRC_TYPE_CRV_Offset:
+        prc_release_crv_offset(ctx, data->crv_offset);
+        prc_free(ctx, data->crv_offset);
+        data->crv_offset = NULL;
+        break;
+    case PRC_TYPE_CRV_Parabola:
+        prc_release_crv_parabola(ctx, data->crv_parabola);
+        prc_free(ctx, data->crv_parabola);
+        data->crv_parabola = NULL;
+        break;
+    case PRC_TYPE_CRV_PolyLine:
+        prc_release_crv_polyline(ctx, data->crv_polyline);
+        prc_free(ctx, data->crv_polyline);
+        data->crv_polyline = NULL;
+        break;
+    case PRC_TYPE_CRV_Transform:
+        prc_release_crv_transform(ctx, data->crv_transform);
+        prc_free(ctx, data->crv_transform);
+        data->crv_transform = NULL;
+        break;
+    default:
+        break;
+    }
+}
+
+static void
+prc_release_ptr_topology(prc_context *ctx, prc_ptr_topology *data)
+{
+    if (data == NULL)
+        return;
+
+    if (!data->is_stored && data->topo != NULL)
+    {
+        prc_release_topo(ctx, data->topo);
+        prc_free(ctx, data->topo);
+        data->topo = NULL;
+    }
+}
+
+static void
+prc_release_content_wire_edge(prc_context *ctx, prc_content_wire_edge *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    prc_release_ptr_curve(ctx, &data->ptr_curve);
+}
+
+static void
+prc_release_topo_multiple_vertex(prc_context *ctx, prc_topo_multiple_vertex *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    if (data->points != NULL)
+    {
+        prc_free(ctx, data->points);
+        data->points = NULL;
+    }
+}
+
+static void
+prc_release_topo_unique_vertex(prc_context *ctx, prc_topo_unique_vertex *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+}
+
+static void
+prc_release_topo_wire_edge(prc_context *ctx, prc_topo_wire_edge *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_content_wire_edge(ctx, &data->curve);
+}
+
+static void
+prc_release_topo_edge(prc_context *ctx, prc_topo_edge *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_content_wire_edge(ctx, &data->wire_edge);
+    prc_release_ptr_topology(ctx, &data->start_vertex);
+    prc_release_ptr_topology(ctx, &data->end_vertex);
+}
+
+static void
+prc_release_topo_coedge(prc_context *ctx, prc_topo_coedge *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    prc_release_ptr_topology(ctx, &data->ptr_topology);
+    prc_release_ptr_curve(ctx, &data->ptr_curves);
+}
+
+static void
+prc_release_topo_loop(prc_context *ctx, prc_topo_loop *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    if (data->coedge != NULL)
+    {
+        for (k = 0; k < data->number_of_coedges; k++)
+        {
+            prc_release_ptr_topology(ctx, &data->coedge[k].next_coedge);
+        }
+        prc_free(ctx, data->coedge);
+        data->coedge = NULL;
+    }
+}
+
+static void
+prc_release_topo_face(prc_context *ctx, prc_topo_face *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    prc_release_ptr_surface(ctx, &data->surface_geometry);
+    if (data->loops != NULL)
+    {
+        for (k = 0; k < data->number_of_loops; k++)
+        {
+            prc_release_ptr_topology(ctx, &data->loops[k]);
+        }
+        prc_free(ctx, data->loops);
+        data->loops = NULL;
+    }
+}
+
+static void
+prc_release_topo_shell(prc_context *ctx, prc_topo_shell *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    if (data->faces != NULL)
+    {
+        for (k = 0; k < data->number_of_faces; k++)
+        {
+            prc_release_ptr_topology(ctx, &data->faces[k].face);
+        }
+        prc_free(ctx, data->faces);
+        data->faces = NULL;
+    }
+}
+
+static void
+prc_release_topo_connex(prc_context *ctx, prc_topo_connex *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_base_topology(ctx, &data->base);
+    if (data->shells != NULL)
+    {
+        for (k = 0; k < data->number_of_shells; k++)
+        {
+            prc_release_ptr_topology(ctx, &data->shells[k]);
+        }
+        prc_free(ctx, data->shells);
+        data->shells = NULL;
+    }
+}
+
+static void
+prc_release_topo_single_wire_body(prc_context *ctx, prc_topo_single_wire_body *data)
+{
+    if (data == NULL)
+        return;
+
+    prc_release_content_body(ctx, &data->base);
+    prc_release_ptr_topology(ctx, &data->wire_body);
+}
+
+static void
+prc_release_topo_brep_data(prc_context *ctx, prc_topo_brep_data *data)
+{
+    size_t k;
+
+    if (data == NULL)
+        return;
+
+    prc_release_content_body(ctx, &data->base);
+    if (data->connex != NULL)
+    {
+        for (k = 0; k < data->number_of_connex; k++)
+        {
+            prc_release_ptr_topology(ctx, &data->connex[k]);
+        }
+        prc_free(ctx, data->connex);
+        data->connex = NULL;
+    }
+}
+
 static void
 prc_release_topo(prc_context *ctx, prc_topo *body)
 {
@@ -1346,9 +2225,90 @@ prc_release_topo(prc_context *ctx, prc_topo *body)
 
     switch (body->tag)
     {
+    case PRC_TYPE_TOPO_MultipleVertex:
+        if (body->topo_multiple_vertex != NULL)
+        {
+            prc_release_topo_multiple_vertex(ctx, body->topo_multiple_vertex);
+            prc_free(ctx, body->topo_multiple_vertex);
+            body->topo_multiple_vertex = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_UniqueVertex:
+        if (body->topo_unique_vertex != NULL)
+        {
+            prc_release_topo_unique_vertex(ctx, body->topo_unique_vertex);
+            prc_free(ctx, body->topo_unique_vertex);
+            body->topo_unique_vertex = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_WireEdge:
+        if (body->topo_wire_edge != NULL)
+        {
+            prc_release_topo_wire_edge(ctx, body->topo_wire_edge);
+            prc_free(ctx, body->topo_wire_edge);
+            body->topo_wire_edge = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Edge:
+        if (body->topo_edge != NULL)
+        {
+            prc_release_topo_edge(ctx, body->topo_edge);
+            prc_free(ctx, body->topo_edge);
+            body->topo_edge = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_CoEdge:
+        if (body->topo_coedge != NULL)
+        {
+            prc_release_topo_coedge(ctx, body->topo_coedge);
+            prc_free(ctx, body->topo_coedge);
+            body->topo_coedge = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Loop:
+        if (body->topo_loop != NULL)
+        {
+            prc_release_topo_loop(ctx, body->topo_loop);
+            prc_free(ctx, body->topo_loop);
+            body->topo_loop = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Face:
+        if (body->topo_face != NULL)
+        {
+            prc_release_topo_face(ctx, body->topo_face);
+            prc_free(ctx, body->topo_face);
+            body->topo_face = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Shell:
+        if (body->topo_shell != NULL)
+        {
+            prc_release_topo_shell(ctx, body->topo_shell);
+            prc_free(ctx, body->topo_shell);
+            body->topo_shell = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Connex:
+        if (body->topo_connex != NULL)
+        {
+            prc_release_topo_connex(ctx, body->topo_connex);
+            prc_free(ctx, body->topo_connex);
+            body->topo_connex = NULL;
+        }
+        break;
+    case PRC_TYPE_TOPO_Body:
+        if (body->topo_body != NULL)
+        {
+            prc_release_topo(ctx, body->topo_body);
+            prc_free(ctx, body->topo_body);
+            body->topo_body = NULL;
+        }
+        break;
     case PRC_TYPE_TOPO_SingleWireBody:
         if (body->topo_single_wire_body != NULL)
         {
+            prc_release_topo_single_wire_body(ctx, body->topo_single_wire_body);
             prc_free(ctx, body->topo_single_wire_body);
             body->topo_single_wire_body = NULL;
         }
@@ -1356,11 +2316,7 @@ prc_release_topo(prc_context *ctx, prc_topo *body)
     case PRC_TYPE_TOPO_BrepData:
         if (body->topo_brep_data != NULL)
         {
-            if (body->topo_brep_data->connex != NULL)
-            {
-                prc_free(ctx, body->topo_brep_data->connex);
-                body->topo_brep_data->connex = NULL;
-            }
+            prc_release_topo_brep_data(ctx, body->topo_brep_data);
             prc_free(ctx, body->topo_brep_data);
             body->topo_brep_data = NULL;
         }

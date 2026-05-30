@@ -36,6 +36,37 @@ cmake -G "Visual Studio 16 2019" ..
 
 Executables are built to the `bin` directory and libraries to the `lib` directory from within the build directory.
 
+### Deterministic Unzipped-Section Fuzzing
+
+For robustness testing of parser error paths, you can fuzz only the unzipped PRC section buffers
+(`schema_globals_unzipped`, `tree_unzipped`, `tessellation_unzipped`, `geometry_unzipped`,
+`extra_geometry_unzipped`, `model_unzipped`).
+
+Enable the feature at configure time:
+
+```bash
+cmake -S . -B build -DPRC_ENABLE_UNZIPPED_FUZZ=ON
+```
+
+Runtime controls (environment variables):
+
+- `PRC_FUZZ_SEED`: integer seed for deterministic replay (same input + same seed = same mutations)
+- `PRC_FUZZ_RATE`: average mutation spacing in bytes (default `512`; lower = more mutations)
+- `PRC_FUZZ_MAX_MUTATIONS`: per-buffer mutation cap (default `64`)
+- `PRC_FUZZ_SECTION`: choose which section(s) to mutate. Options: `schema`, `tree`, `tessellation`,
+  `geometry`, `extra`, `model`, `all` (default). Multiple values can be comma-separated.
+- `PRC_FUZZ_SECTION_MASK`: optional numeric bitmask override (`1=schema`, `2=tree`,
+  `4=tessellation`, `8=geometry`, `16=extra`, `32=model`)
+- `PRC_FUZZ_LOG`: optional log path (default `prc_unzipped_fuzz.log`)
+
+Example:
+
+```bash
+PRC_FUZZ_SEED=12345 PRC_FUZZ_SECTION=model PRC_FUZZ_RATE=1024 PRC_FUZZ_MAX_MUTATIONS=32 ./your_app
+```
+
+The log records seed and per-buffer mutation events so failures can be reproduced exactly.
+
 ## Versioning (AGPL Repository)
 
 This repository uses Git-tag-driven versioning:

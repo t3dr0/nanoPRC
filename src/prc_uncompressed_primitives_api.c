@@ -253,11 +253,13 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
            Create a new vertex at vertex_out->num_vertices. */
         if (vertex_out->num_vertices >= vertex_out->capacity)
         {
+            prc_api_vertex *new_vertices;
             vertex_out->capacity = vertex_out->capacity * 2;
-            vertex_out->vertices = (prc_api_vertex *)prc_realloc(ctx,
+            new_vertices = (prc_api_vertex *)prc_realloc(ctx,
                 vertex_out->vertices, vertex_out->capacity * sizeof(prc_api_vertex));
-            if (vertex_out->vertices == NULL)
+            if (new_vertices == NULL)
                 return PRC_API_ERROR_MEMORY;
+            vertex_out->vertices = new_vertices;
 
             prc_internal_api_initialize_vertex(ctx, vertex_out);
         }
@@ -413,11 +415,13 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
         /* No match found - create a new vertex for this position */
         if (vertex_out->num_vertices >= vertex_out->capacity)
         {
+            prc_api_vertex *new_vertices;
             vertex_out->capacity = vertex_out->capacity * 2;
-            vertex_out->vertices = (prc_api_vertex *)prc_realloc(ctx,
+            new_vertices = (prc_api_vertex *)prc_realloc(ctx,
                 vertex_out->vertices, vertex_out->capacity * sizeof(prc_api_vertex));
-            if (vertex_out->vertices == NULL)
+            if (new_vertices == NULL)
                 return PRC_API_ERROR_MEMORY;
+            vertex_out->vertices = new_vertices;
 
             prc_internal_api_initialize_vertex(ctx, vertex_out);
         }

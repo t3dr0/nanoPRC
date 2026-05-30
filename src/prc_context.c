@@ -47,6 +47,8 @@ prc_new_context(const prc_hooks *hooks)
     }
     ctx->debug_memory_size = PRC_DEBUG_MEMORY_SIZE;
     ctx->current_memory_index = 0;
+    ctx->debug_memory_table_full_warned = 0;
+    ctx->debug_memory_untracked_alloc_count = 0;
 #endif
 
     ctx->graphics_content.behavior_bit_field1 = 0;

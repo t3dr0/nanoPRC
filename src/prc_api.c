@@ -76,6 +76,14 @@ prc_api_release_context(prc_context *ctx)
             }
         }
 
+        if (ctx->debug_memory_untracked_alloc_count > 0)
+        {
+            fprintf(stderr,
+                "Warning: PRC_DEBUG_MEMORY table saturated; %zu allocation(s) were untracked. "
+                "Leak scan is incomplete.\n",
+                ctx->debug_memory_untracked_alloc_count);
+        }
+
         if (has_leak)
             release_code = PRC_API_MEMORY_LEAK_DETECTED;
     }
@@ -168,22 +176,6 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                     prc_free(ctx, tess->normals_internal);
                     tess->normals_internal = NULL;
                 }
-                if (tess->position_normal_lut.position_normal_pair != NULL)
-                {
-                    for (j = 0; j < tess->position_normal_lut.number_values; j++)
-                    {
-                        prc_internal_api_position_normal_pair *curr =
-                            tess->position_normal_lut.position_normal_pair[j].next;
-                        while (curr != NULL)
-                        {
-                            prc_internal_api_position_normal_pair *next = curr->next;
-                            prc_free(ctx, curr);
-                            curr = next;
-                        }
-                    }
-                    prc_free(ctx, tess->position_normal_lut.position_normal_pair);
-                    tess->position_normal_lut.position_normal_pair = NULL;
-                }
             }
             if (tess->tess_type == PRC_TYPE_TESS_3D_Wire ||
                 tess->tess_type == PRC_TYPE_TESS_MarkUp)
@@ -248,6 +240,11 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                         }
                         prc_free(ctx, face_out_reserved);
                     }
+                    if (tess_in[k].type == PRC_API_TESS_3D)
+                    {
+                        if (tess_in[k].tess_faces[j].face_vertices.vertices != NULL)
+                            prc_free(ctx, tess_in[k].tess_faces[j].face_vertices.vertices);
+                    }
                 }
                 //prc_free(ctx, tess_in[k].tess_faces);
             }
@@ -300,6 +297,12 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
     {
         prc_free(ctx, data->part_details);
         data->part_details = NULL;
+    }
+
+    if (data->markup_details != NULL)
+    {
+        prc_free(ctx, data->markup_details);
+        data->markup_details = NULL;
     }
     prc_release_data(ctx, (prc_data *)data);
 }
@@ -3000,14 +3003,17 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
                     /* We need to add a new one to the part details */
                     if (num_part_tessellations >= num_details)
                     {
+                        tess_style_file_part *new_part_details;
                         num_details *= 2;
-                        data->part_details = (tess_style_file_part *)prc_realloc(ctx, data->part_details,
+                        new_part_details = (tess_style_file_part *)prc_realloc(ctx,
+                            data->part_details,
                             sizeof(tess_style_file_part) * num_details);
-                        if (data->part_details == NULL)
+                        if (new_part_details == NULL)
                         {
                             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_get_number_tessellations\n");
                             return PRC_ERROR_MEMORY;
                         }
+                        data->part_details = new_part_details;
                     }
 
                     part_detail = &data->part_details[num_part_tessellations];

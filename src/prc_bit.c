@@ -676,13 +676,16 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
                     /* Check if we need to grow the linear list */
                     if (linear_list_size >= linear_list_capacity)
                     {
+                        prc_huff_node **new_linear_list;
                         linear_list_capacity *= 2;
-                        linear_list = (prc_huff_node **)prc_realloc(ctx, linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
-                        if (linear_list == NULL)
+                        new_linear_list = (prc_huff_node **)prc_realloc(ctx,
+                            linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
+                        if (new_linear_list == NULL)
                         {
                             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
                             return NULL;
                         }
+                        linear_list = new_linear_list;
                     }
                     linear_list[linear_list_size++] = curr_node->left;
                     curr_node->next = curr_node->left;
@@ -708,13 +711,16 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
                     /* Check if we need to grow the linear list */
                     if (linear_list_size >= linear_list_capacity)
                     {
+                        prc_huff_node **new_linear_list;
                         linear_list_capacity *= 2;
-                        linear_list = (prc_huff_node **)prc_realloc(ctx, linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
-                        if (linear_list == NULL)
+                        new_linear_list = (prc_huff_node **)prc_realloc(ctx,
+                            linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
+                        if (new_linear_list == NULL)
                         {
                             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
                             return NULL;
                         }
+                        linear_list = new_linear_list;
                     }
                     linear_list[linear_list_size++] = curr_node->right;
                     curr_node->next = curr_node->right;
@@ -956,8 +962,16 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                             }
                             if (linear_node_count == linear_node_size - 1)
                             {
+                                prc_huff_node **new_linear_nodes;
                                 linear_node_size = linear_node_size * 2;
-                                linear_nodes = prc_realloc(ctx, linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                                new_linear_nodes = (prc_huff_node **)prc_realloc(ctx,
+                                    linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                                if (new_linear_nodes == NULL)
+                                {
+                                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman creation\n");
+                                    return NULL;
+                                }
+                                linear_nodes = new_linear_nodes;
                             }
                             linear_nodes[linear_node_count] = curr_node->left;
                             linear_node_count++;
@@ -977,8 +991,16 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                             }
                             if (linear_node_count == linear_node_size - 1)
                             {
+                                prc_huff_node **new_linear_nodes;
                                 linear_node_size = linear_node_size * 2;
-                                linear_nodes = prc_realloc(ctx, linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                                new_linear_nodes = (prc_huff_node **)prc_realloc(ctx,
+                                    linear_nodes, linear_node_size * sizeof(prc_huff_node*));
+                                if (new_linear_nodes == NULL)
+                                {
+                                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman creation\n");
+                                    return NULL;
+                                }
+                                linear_nodes = new_linear_nodes;
                             }
                             linear_nodes[linear_node_count] = curr_node->right;
                             linear_node_count++;

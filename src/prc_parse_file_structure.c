@@ -133,6 +133,26 @@ prc_parse_file_schema(prc_context *ctx, prc_filestructure *file_struct, prc_bit_
     prc_schema *data;
 
     /* Place the schema into the context, as we will need to make use of it during the parsing */
+    /* Free the prior schema if there was one from another file section, as we are
+       done with that one */
+    data = ctx->internal.schema;
+    if (data != NULL)
+    {
+        if (data->entity_schema != NULL)
+        {
+            for (k = 0; k < data->schema_count; k++)
+            {
+                if (data->entity_schema[k].schema_tokens != NULL)
+                {
+                    prc_free(ctx, data->entity_schema[k].schema_tokens);
+                    data->entity_schema[k].schema_tokens = NULL;
+                }
+            }
+            prc_free(ctx, data->entity_schema);
+        }
+        prc_free(ctx, data);
+    }
+
     data = ctx->internal.schema = (prc_schema *)prc_calloc(ctx, 1, sizeof(prc_schema));
     if (data == NULL)
     {

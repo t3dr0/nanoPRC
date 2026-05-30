@@ -669,11 +669,13 @@ prc_internal_api_split_vertex(prc_context *ctx, uint32_t *vertex_indices_list,
     /* Ensure capacity */
     if (vertex_out->num_vertices + 1 >= vertex_out->capacity)
     {
+        prc_api_vertex *new_vertices;
         size_t new_capacity = vertex_out->capacity * 2;
-        vertex_out->vertices = (prc_api_vertex *)prc_realloc(ctx,
+        new_vertices = (prc_api_vertex *)prc_realloc(ctx,
             vertex_out->vertices, new_capacity * sizeof(prc_api_vertex));
-        if (vertex_out->vertices == NULL)
+        if (new_vertices == NULL)
             return PRC_API_ERROR_MEMORY;
+        vertex_out->vertices = new_vertices;
 
         /* CRITICAL FIX: Also grow vertex_to_original to match */
         if (uncompressed_data->vertex_to_original != NULL)
@@ -878,11 +880,13 @@ prc_internal_api_split_edge(prc_context *ctx, uint32_t *vertex_indices_list,
     /* Ensure capacity for up to two new vertices */
     if (vertex_out->num_vertices + 2 > vertex_out->capacity)
     {
+        prc_api_vertex *new_vertices;
         size_t new_capacity = vertex_out->capacity * 2;
-        vertex_out->vertices = (prc_api_vertex *)prc_realloc(ctx,
+        new_vertices = (prc_api_vertex *)prc_realloc(ctx,
             vertex_out->vertices, new_capacity * sizeof(prc_api_vertex));
-        if (vertex_out->vertices == NULL)
+        if (new_vertices == NULL)
             return PRC_API_ERROR_MEMORY;
+        vertex_out->vertices = new_vertices;
 
         /* CRITICAL FIX: Also grow vertex_to_original to match */
         if (uncompressed_data->vertex_to_original != NULL)
@@ -3212,6 +3216,22 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             prc_free(ctx, face_texture_indices);
         if (face_vertex_color_indices != NULL)
             prc_free(ctx, face_vertex_color_indices);
+        if (tess->position_normal_lut.position_normal_pair != NULL)
+        {
+            for (j = 0; j < tess->position_normal_lut.number_values; j++)
+            {
+                prc_internal_api_position_normal_pair *curr =
+                    tess->position_normal_lut.position_normal_pair[j].next;
+                while (curr != NULL)
+                {
+                    prc_internal_api_position_normal_pair *next = curr->next;
+                    prc_free(ctx, curr);
+                    curr = next;
+                }
+            }
+            prc_free(ctx, tess->position_normal_lut.position_normal_pair);
+            tess->position_normal_lut.position_normal_pair = NULL;
+        }
     }
     break;
 
@@ -3721,13 +3741,15 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                     /* Check if we need to realloc the vertex_out array */
                     if (vertex_out->num_vertices + 1 > vertex_out->capacity)
                     {
+                        prc_api_vertex *new_vertices;
                         /* Double it */
                         vertex_out->capacity = vertex_out->capacity * 2;
-                        vertex_out->vertices = (prc_api_vertex *)prc_realloc(ctx,
+                        new_vertices = (prc_api_vertex *)prc_realloc(ctx,
                             vertex_out->vertices,
                             vertex_out->capacity * sizeof(prc_api_vertex));
-                        if (vertex_out->vertices == NULL)
+                        if (new_vertices == NULL)
                             return PRC_API_ERROR_MEMORY;
+                        vertex_out->vertices = new_vertices;
 
                         /* Clear out any of the new items */
                         prc_internal_api_initialize_vertex(ctx, vertex_out);

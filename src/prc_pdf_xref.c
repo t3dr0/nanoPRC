@@ -27,6 +27,22 @@
 
 #define PRC_PDF_MAX_NUM_CONTENT_STREAMS 1024
 
+static void
+pdf_xref_free_stream_buffers(prc_context *ctx, uint8_t **buff_out_xref,
+    uint8_t **buff_out_xref_decode)
+{
+    if (*buff_out_xref_decode != NULL && *buff_out_xref_decode != *buff_out_xref)
+    {
+        prc_free(ctx, *buff_out_xref_decode);
+    }
+    if (*buff_out_xref != NULL)
+    {
+        prc_free(ctx, *buff_out_xref);
+    }
+    *buff_out_xref = NULL;
+    *buff_out_xref_decode = NULL;
+}
+
 /* Non compressed xref parsing */
 static int
 pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
@@ -138,12 +154,12 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to find number of objects in PDF file\n");
-            return PRC_ERROR_PARSE;
+            goto fail;
         }
         if (xref_num_objects <= 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to find number of objects in PDF file\n");
-            return PRC_ERROR_PARSE;
+            goto fail;
         }
 
         /* Advance ptr to next line */
@@ -167,7 +183,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
             if (code != 2)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to read object byte offset in PDF file\n");
-                return PRC_ERROR_PARSE;
+                goto fail;
             }
 
             xref_objects[object_count].byte_offset = object_byte_offset;
@@ -190,7 +206,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
             else
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Unknown object type in PDF file\n");
-                return PRC_ERROR_PARSE;
+                goto fail;
             }
 
 #if 0
@@ -221,7 +237,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
         code = pdf_eat_white_space(ctx, &ptr, file_end);
         if (code < 0)
         {
-            return code;
+            goto fail;
         }
     }
 
@@ -229,6 +245,10 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
     xref_head->xref_objects = xref_objects;
 
     return 0;
+
+fail:
+    prc_free(ctx, xref_objects);
+    return (code < 0) ? code : PRC_ERROR_PARSE;
 }
 
 uint8_t*
@@ -344,8 +364,13 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
     xref->num_objects += xref_num_objects;
     if (prev_num_xref_objects > 0)
     {
-        xref->xref_objects = (prc_pdf_xref *)prc_realloc(context, xref->xref_objects,
-                                                xref->num_objects * sizeof(prc_pdf_xref));
+        prc_pdf_xref *new_xref_objects = (prc_pdf_xref *)prc_realloc(context,
+            xref->xref_objects, xref->num_objects * sizeof(prc_pdf_xref));
+        if (new_xref_objects == NULL)
+        {
+            return PRC_ERROR_MEMORY;
+        }
+        xref->xref_objects = new_xref_objects;
     }
     else
     {
@@ -553,6 +578,10 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
 
     for (k = 0; k < num_xrefs; k++)
     {
+        buff_out_xref = NULL;
+        buff_out_xref_decode = NULL;
+        size_out_xref = 0;
+        size_out_xref_decode = 0;
         xref_offset = xref_offsets[k];
 
         /* The xref table could be encoded. Test this by first seeing if xref is present */
@@ -646,8 +675,15 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to apply predictor in PDF file\n");
+                    pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                        &buff_out_xref_decode);
                     return code;
                 }
+            }
+            else
+            {
+                buff_out_xref_decode = buff_out_xref;
+                size_out_xref_decode = size_out_xref;
             }
 
             /* Now we deal with the decoding of the cross-reference stream */
@@ -657,16 +693,15 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
             if (code < 0)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse xref stream in PDF file\n");
+                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                    &buff_out_xref_decode);
                 return code;
             }
 
             if (buff_out_xref != NULL)
             {
-                /* They may be the same if there is a NONE predictor type */
-                if (buff_out_xref_decode != buff_out_xref && buff_out_xref_decode != NULL)
-                    prc_free(ctx, buff_out_xref_decode);
-
-                prc_free(ctx, buff_out_xref);
+                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                    &buff_out_xref_decode);
             }
 
             /* Get a pointer to this offset and then check for the presence of
@@ -690,6 +725,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
                     if (code < 0)
                     {
                         prc_error(ctx, PRC_ERROR_PARSE, "Did not get file ID in PDF file\n");
+                        pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                            &buff_out_xref_decode);
                         return code;
                     }
                 }
@@ -702,6 +739,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
                     if (code < 0)
                     {
                         prc_error(ctx, PRC_ERROR_PARSE, "Did not get encryption information\n");
+                        pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                            &buff_out_xref_decode);
                         return code;
                     }
                 }
@@ -716,6 +755,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to decompress content streams in PDF file\n");
+                    pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                        &buff_out_xref_decode);
                     return code;
                 }
             }
