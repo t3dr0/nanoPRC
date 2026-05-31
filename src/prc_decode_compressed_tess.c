@@ -3282,6 +3282,9 @@ prc_compressed_tess_apply_crease_angle(prc_context *ctx, prc_tess_3d_compressed 
         {
             uint32_t seed_corner = vertex_corner_list[c];
             prc_vec3 sum;
+            prc_vec3 dominant_normal;
+            double dominant_weight = 0.0;
+            uint8_t dominant_normal_set = false;
             uint32_t stack_size = 0;
             uint32_t comp_count = 0;
 
@@ -3311,9 +3314,15 @@ prc_compressed_tess_apply_crease_angle(prc_context *ctx, prc_tess_3d_compressed 
                      /* Area-weighted averaging better matches reference renderers:
                          larger triangles contribute proportionally more to the smooth normal. */
                      tri_area_weight = triangle_area_cache[tri];
-                if (tri_area_weight <= 1.0e-20)
+                 if (!(tri_area_weight > 1.0e-20))
                 {
                     tri_area_weight = 1.0;
+                }
+                if (!dominant_normal_set || tri_area_weight > dominant_weight)
+                {
+                    dominant_normal = tri_n;
+                    dominant_weight = tri_area_weight;
+                    dominant_normal_set = true;
                 }
                 tri_n_weighted = tri_n;
                 prc_vec_scale(tri_area_weight, &tri_n_weighted);
@@ -3393,20 +3402,43 @@ prc_compressed_tess_apply_crease_angle(prc_context *ctx, prc_tess_3d_compressed 
             code = prc_vec_normalize(&sum);
             if (code < 0)
             {
-                prc_free(ctx, edge_list.edge);
-                prc_free(ctx, normals_new);
-                prc_free(ctx, normal_indices_new);
-                prc_free(ctx, corner_used);
-                prc_free(ctx, vertex_corner_counts);
-                prc_free(ctx, vertex_corner_offsets);
-                prc_free(ctx, vertex_corner_work);
-                prc_free(ctx, vertex_corner_list);
-                prc_free(ctx, edge_neighbor_ok);
-                prc_free(ctx, triangle_edge_count);
-                prc_free(ctx, triangle_edges);
-                prc_free(ctx, triangle_area_cache);
-                prc_free(ctx, component_stack);
-                return code;
+                if (!dominant_normal_set)
+                {
+                    prc_free(ctx, edge_list.edge);
+                    prc_free(ctx, normals_new);
+                    prc_free(ctx, normal_indices_new);
+                    prc_free(ctx, corner_used);
+                    prc_free(ctx, vertex_corner_counts);
+                    prc_free(ctx, vertex_corner_offsets);
+                    prc_free(ctx, vertex_corner_work);
+                    prc_free(ctx, vertex_corner_list);
+                    prc_free(ctx, edge_neighbor_ok);
+                    prc_free(ctx, triangle_edge_count);
+                    prc_free(ctx, triangle_edges);
+                    prc_free(ctx, triangle_area_cache);
+                    prc_free(ctx, component_stack);
+                    return code;
+                }
+
+                sum = dominant_normal;
+                code = prc_vec_normalize(&sum);
+                if (code < 0)
+                {
+                    prc_free(ctx, edge_list.edge);
+                    prc_free(ctx, normals_new);
+                    prc_free(ctx, normal_indices_new);
+                    prc_free(ctx, corner_used);
+                    prc_free(ctx, vertex_corner_counts);
+                    prc_free(ctx, vertex_corner_offsets);
+                    prc_free(ctx, vertex_corner_work);
+                    prc_free(ctx, vertex_corner_list);
+                    prc_free(ctx, edge_neighbor_ok);
+                    prc_free(ctx, triangle_edge_count);
+                    prc_free(ctx, triangle_edges);
+                    prc_free(ctx, triangle_area_cache);
+                    prc_free(ctx, component_stack);
+                    return code;
+                }
             }
 
             if (normal_index >= normal_capacity)

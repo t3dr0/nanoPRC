@@ -318,19 +318,15 @@ prc_vec_dot_product(prc_vec3 vec1, prc_vec3 vec2)
 double
 prc_vec_area_of_triangle(prc_vec3 pt1, prc_vec3 pt2, prc_vec3 pt3)
 {
-    double a, b, c, s;
-    prc_vec3 vec1, vec2, vec3;
+    prc_vec3 vec1, vec2, cross;
 
     prc_vec_sub(pt2, pt1, &vec1);
     prc_vec_sub(pt3, pt1, &vec2);
-    prc_vec_sub(pt3, pt2, &vec3);
+    prc_vec_cross(vec1, vec2, &cross);
 
-    a = prc_vec_length(vec1);
-    b = prc_vec_length(vec2);
-    c = prc_vec_length(vec3);
-
-    s = (a + b + c) / 2.0;
-    return sqrt(s * (s - a) * (s - b) * (s - c));
+    /* Cross-product area is more stable than Heron's formula for skinny
+       triangles and avoids NaNs from tiny negative radicands. */
+    return 0.5 * prc_vec_length(cross);
 }
 
 void
