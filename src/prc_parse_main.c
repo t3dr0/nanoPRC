@@ -736,6 +736,7 @@ prc_open_contents(prc_context *ctx, const char* infile)
     if (header == NULL)
     {
         prc_free(ctx, buff);
+        prc_release_data(ctx, output);
         prc_error(ctx, PRC_ERROR_PARSE, "Failed in prc_parse_main_header\n");
         return NULL;
     }
@@ -750,6 +751,8 @@ prc_open_contents(prc_context *ctx, const char* infile)
         if (file_struct == NULL)
         {
             prc_free(ctx, buff);
+            output->header = header;
+            prc_release_data(ctx, output);
             prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate prc_filestructure\n");
             return NULL;
         }
@@ -767,9 +770,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (file_struct[k].header->min_vers_for_read > ctx->internal.reader_version)
                 {
                     prc_error(ctx, PRC_FILE_VERS, "File version not supported\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
 
@@ -779,9 +784,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_uncompress\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
                 ptr_raw2 = (uint8_t*)prc_malloc(ctx, code);
@@ -789,9 +796,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate ptr_raw2\n");
                     prc_free(ctx, ptr_raw);
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
 
@@ -818,9 +827,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Failed in prc_parse_model_file\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
 
@@ -832,9 +843,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                     if (code < 0)
                     {
                         prc_error(ctx, code, "Failed in prc_uncompress\n");
-                        prc_free(ctx, file_struct);
                         prc_free(ctx, buff);
-                        prc_release_header(ctx, header);
+                        output->header = header;
+                        output->file_struct = file_struct;
+                        output->file_structure_count = k + 1;
+                        prc_release_data(ctx, output);
                         return NULL;
                     }
                     ptr_raw2 = (uint8_t*)prc_malloc(ctx, code);
@@ -842,9 +855,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                     {
                         prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate ptr_raw2\n");
                         prc_free(ctx, ptr_raw);
-                        prc_free(ctx, file_struct);
                         prc_free(ctx, buff);
-                        prc_release_header(ctx, header);
+                        output->header = header;
+                        output->file_struct = file_struct;
+                        output->file_structure_count = k + 1;
+                        prc_release_data(ctx, output);
                         return NULL;
                     }
 
@@ -931,9 +946,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Error in prc_parse_file_schema_and_global\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
             }
@@ -958,9 +975,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Error in prc_parse_file_tessellation\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
             }
@@ -983,9 +1002,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Error in prc_parse_file_tree\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
             }
@@ -1009,9 +1030,12 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Error in prc_parse_file_geometry\n");
-                    prc_free(ctx, file_struct);
+
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+                    output->header = header;
+                    output->file_struct = file_struct;
+                    output->file_structure_count = k + 1;
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
             }
@@ -1035,9 +1059,9 @@ prc_open_contents(prc_context *ctx, const char* infile)
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Error in prc_parse_file_extra_geometry\n");
-                    prc_free(ctx, file_struct);
                     prc_free(ctx, buff);
-                    prc_release_header(ctx, header);
+
+                    prc_release_data(ctx, output);
                     return NULL;
                 }
             }
@@ -1046,8 +1070,8 @@ prc_open_contents(prc_context *ctx, const char* infile)
 
     prc_free(ctx, buff);
     output->header = header;
-    output->file_structure_count = header->filestructure_count;
     output->file_struct = file_struct;
+    output->file_structure_count = header->filestructure_count;
 
     return output;
 }
