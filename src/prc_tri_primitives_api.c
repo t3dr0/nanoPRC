@@ -2666,6 +2666,9 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         uint32_t *face_vertex_color_indices;
         uint32_t single_normal_set;
 
+        /* Set to avoid issues during release if this is skipped */
+        face_vertex_out->vertices = NULL;
+
         memset(&uncompressed_data, 0, sizeof(uncompressed_data));
 
         if (face_index > tess3d->number_of_face_tessellation - 1)
