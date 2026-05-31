@@ -253,7 +253,7 @@ int pdf_parse_decryption(prc_context *ctx, prc_pdf_head_xref *head_xref,
 int pdf_get_decrypted_stream_data(prc_context *ctx, uint8_t *ptr_in_stream,
     uint32_t stream_length, prc_pdf_decrypt_params *decrypt_params,
     uint8_t *decrypted_data, size_t decypted_size, uint32_t obj_num,
-    uint32_t gen_num);
+    uint32_t gen_num, uint32_t *actual_decrypted_size);
 
 size_t pdf_decrypt_get_size(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     size_t src_size);

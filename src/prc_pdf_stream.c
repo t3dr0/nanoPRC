@@ -527,6 +527,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             if (has_encryption)
             {
                 size_t decypted_size;
+                uint32_t actual_decrypted_size;
                 uint8_t *decrypted_data;
 
                 decypted_size = pdf_decrypt_get_size(ctx, decryption_params, stream_length);
@@ -539,7 +540,8 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
 
                 code = pdf_get_decrypted_stream_data(ctx, ptr_stream, stream_length,
                                         decryption_params, decrypted_data, decypted_size,
-                                        stream_obj_num, stream_gen_num);
+                                        stream_obj_num, stream_gen_num,
+                                        &actual_decrypted_size);
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Did not get decrypted stream data in PDF file\n");
@@ -548,7 +550,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 }
 
                 /* Now we need to deflate the decrypted stream */
-                code = pdf_get_stream_data(ctx, ptr, file_end, decrypted_data, decypted_size,
+                code = pdf_get_stream_data(ctx, ptr, file_end, decrypted_data, actual_decrypted_size,
                                            &ustream->stream, &ustream->stream_length);
                 if (code < 0)
                 {

@@ -1049,13 +1049,14 @@ size_t
 pdf_decrypt_get_size(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
                      size_t src_size)
 {
-    if (decrypt_params->cipher == PRC_PDF_CIPHER_AES)
+    if (decrypt_params->cipher == PRC_PDF_CIPHER_AES ||
+        decrypt_params->cipher == PRC_PDF_CIPHER_AES2)
     {
-        return src_size;
+        return src_size >= 16 ? src_size - 16 : 0;
     }
     else
     {
-        return src_size - 16;
+        return src_size;
     }
 }
 
@@ -1505,15 +1506,15 @@ pdf_decrypt_stream(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     if (cipher == PRC_PDF_CIPHER_NONE)
     {
         memcpy(des, source, src_len);
+        *des_offset = src_len;
         return 0;
     }
 
     if (cipher == PRC_PDF_CIPHER_RC4)
     {
-        size_t old_size = des_len;
-
         memcpy(des, source, src_len);
         CRYPT_ArcFourCrypt((CRYPT_rc4_context *)cipher_context, des, src_len);
+        *des_offset = src_len;
         return 0;
     }
 
@@ -1559,10 +1560,13 @@ pdf_decrypt_stream(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 
 static int
 DecryptFinish(prc_context *ctx, void *cipher_context,
-    prc_pdf_decrypt_params *decrypt_params, uint8_t *des)
+    prc_pdf_decrypt_params *decrypt_params, uint8_t *des,
+    uint32_t *finish_size)
 {
     prc_pdf_encryption_cipher_t cipher = decrypt_params->cipher;
     int code;
+
+    *finish_size = 0;
 
     if (cipher_context == NULL)
         return PRC_ERROR_PDF;
@@ -1583,9 +1587,8 @@ DecryptFinish(prc_context *ctx, void *cipher_context,
         CRYPT_AESDecrypt(ctx, pContext->aes_ctx, block_buf, pContext->m_block, 16);
         if (block_buf[15] < 16)
         {
-           // dest_buf.AppendSpan(
-           //     pdfium::make_span(block_buf).first(16 - block_buf[15]));
-           memcpy(des, block_buf, 16 - block_buf[15]);
+            *finish_size = 16 - block_buf[15];
+            memcpy(des, block_buf, *finish_size);
         }
     }
     prc_free(ctx, pContext);
@@ -1608,7 +1611,8 @@ pdf_decrypt_string(prc_context *ctx, uint8_t *ptr_in_stream,
 {
     void *crypt_context = NULL;
     int code;
-    int decrypt_offset = 0;
+    uint32_t decrypt_offset = 0;
+    uint32_t finish_size = 0;
     uint8_t *output;
     uint32_t output_size;
 
@@ -1635,7 +1639,8 @@ pdf_decrypt_string(prc_context *ctx, uint8_t *ptr_in_stream,
         return code;
     }
 
-    code = DecryptFinish(ctx, crypt_context, decrypt_params, output + decrypt_offset);
+    code = DecryptFinish(ctx, crypt_context, decrypt_params, output + decrypt_offset,
+                         &finish_size);
     if (code < 0)
     {
         pdf_decrypt_release_context_and_output(ctx, crypt_context, output);
@@ -1643,7 +1648,7 @@ pdf_decrypt_string(prc_context *ctx, uint8_t *ptr_in_stream,
     }
 
     *decrypted_data = output;
-    *decypted_size = output_size;
+    *decypted_size = decrypt_offset + finish_size;
 
     return 0;
 }
@@ -1652,11 +1657,12 @@ int
 pdf_get_decrypted_stream_data(prc_context *ctx, uint8_t *ptr_in_stream,
     uint32_t stream_length, prc_pdf_decrypt_params *decrypt_params,
     uint8_t *decrypted_data, size_t decypted_size, uint32_t obj_num,
-    uint32_t gen_num)
+    uint32_t gen_num, uint32_t *actual_decrypted_size)
 {
     void *crypt_context = NULL;
     int code;
-    int decrypt_offset = 0;
+    uint32_t decrypt_offset = 0;
+    uint32_t finish_size = 0;
 
     code = pdf_decrypt_start(ctx, decrypt_params, obj_num, gen_num, &crypt_context);
     if (code < 0)
@@ -1671,12 +1677,14 @@ pdf_get_decrypted_stream_data(prc_context *ctx, uint8_t *ptr_in_stream,
     }
 
     code = DecryptFinish(ctx, crypt_context, decrypt_params,
-                         decrypted_data + decrypt_offset);
+                         decrypted_data + decrypt_offset, &finish_size);
     if (code < 0)
     {
         prc_free(ctx, crypt_context);
         return code;
     }
+
+    *actual_decrypted_size = decrypt_offset + finish_size;
 
     return 0;
 }
