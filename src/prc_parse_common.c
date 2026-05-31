@@ -267,7 +267,7 @@ prc_parse_content_base_tess_data(prc_context *ctx, prc_bit_state *bit_state, prc
 
     if (data->number_of_coordinates > 0)
     {
-        data->coordinates = (double *)prc_malloc(ctx, sizeof(double) * data->number_of_coordinates);
+        data->coordinates = (double *)prc_calloc(ctx, data->number_of_coordinates, sizeof(double));
         if (data->coordinates == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_content_base_tess_data\n");

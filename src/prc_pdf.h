@@ -189,7 +189,7 @@ int pdf_count_xref_sections(prc_context *ctx, uint8_t *pdf_buff_in,
 
 int pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,
     uint32_t size_in, prc_pdf_head_xref *xref_head,
-    prc_pdf_uncompressed_object_stream_list *stream_list, uint32_t num_xrefs,
+    prc_pdf_uncompressed_object_stream_list *stream_list,
     uint32_t *xref_offsets, uint8_t *streams_are_encrypted,
     prc_pdf_decrypt_params *encryption_params);
 

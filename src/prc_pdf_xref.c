@@ -545,7 +545,7 @@ pdf_count_xref_sections(prc_context *ctx, uint8_t *pdf_buff_in,
 int
 pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
     prc_pdf_head_xref *xref_head,
-    prc_pdf_uncompressed_object_stream_list *stream_list, uint32_t num_xrefs,
+    prc_pdf_uncompressed_object_stream_list *stream_list,
     uint32_t *xref_offsets, uint8_t *streams_are_encrypted,
     prc_pdf_decrypt_params *encryption_params)
 {
@@ -569,192 +569,173 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
     uint32_t stream_obj_num;
     uint32_t stream_gen_num;
     uint32_t num_in_array;
-    uint32_t k;
     uint32_t xref_offset;
     uint32_t xref_head_offset = 0;
     uint32_t encryption_obj_num = 0;
 
     *streams_are_encrypted = 0;
 
-    for (k = 0; k < num_xrefs; k++)
+    buff_out_xref = NULL;
+    buff_out_xref_decode = NULL;
+    size_out_xref = 0;
+    size_out_xref_decode = 0;
+    xref_offset = *xref_offsets;
+
+    /* The xref table could be encoded. Test this by first seeing if xref is present */
+    ptr = pdf_buff_in + xref_offset;
+    if (strncmp((char *)ptr, PDF_XREF_NAME, PDF_XREF_NAME_LEN) != 0)
     {
-        buff_out_xref = NULL;
-        buff_out_xref_decode = NULL;
-        size_out_xref = 0;
-        size_out_xref_decode = 0;
-        xref_offset = xref_offsets[k];
+        /* We have to decode the xref table */
+        xref_encoded = 1;
 
-        /* The xref table could be encoded. Test this by first seeing if xref is present */
+        /* Check if there are DecodeParams */
         ptr = pdf_buff_in + xref_offset;
-        if (strncmp((char *)ptr, PDF_XREF_NAME, PDF_XREF_NAME_LEN) != 0)
+        xref_predictor_offset = pdf_search_for_tag(ctx, ptr, file_end,
+            PDF_DECODE_PARMS_NAME, PDF_DECODE_PARMS_NAME_LEN, PDF_STREAM_NAME,
+            PDF_STREAM_NAME_LEN, &xref_predictor_present);
+
+        if (xref_predictor_present)
         {
-            /* We have to decode the xref table */
-            xref_encoded = 1;
-
-            /* Check if there are DecodeParams */
-            ptr = pdf_buff_in + xref_offset;
-            xref_predictor_offset = pdf_search_for_tag(ctx, ptr, file_end,
-                PDF_DECODE_PARMS_NAME, PDF_DECODE_PARMS_NAME_LEN, PDF_STREAM_NAME,
-                PDF_STREAM_NAME_LEN, &xref_predictor_present);
-
-            if (xref_predictor_present)
+            /* We have to do the crazy prediction decoding. This bit is lifted
+                from pdfium, which has a BSD license */
+                /* Move us past /DecodeParams */
+            ptr += xref_predictor_offset;
+            ptr += PDF_DECODE_PARMS_NAME_LEN;
+            code = pdf_get_decode_params(ctx, ptr, file_end, &decode_params);
+            if (code < 0)
             {
-                /* We have to do the crazy prediction decoding. This bit is lifted
-                   from pdfium, which has a BSD license */
-                   /* Move us past /DecodeParams */
-                ptr += xref_predictor_offset;
-                ptr += PDF_DECODE_PARMS_NAME_LEN;
-                code = pdf_get_decode_params(ctx, ptr, file_end, &decode_params);
+                prc_error(ctx, PRC_ERROR_PARSE, "Failed to get decode params in PDF file\n");
+                return code;
+            }
+        }
+
+        /* Look for /W */
+        ptr = pdf_buff_in + xref_offset;
+        num_in_array = 3;
+        code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_W_NAME,
+            PDF_W_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, byte_widths,
+            &num_in_array, 3);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to read byte widths in PDF file\n");
+            return code;
+        }
+
+        /* Look for /Size */
+        ptr = pdf_buff_in + xref_offset;
+        code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_SIZE_NAME,
+            PDF_SIZE_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &size);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to read size in PDF file\n");
+            return code;
+        }
+
+        /* Look for /Index */
+        ptr = pdf_buff_in + xref_offset;
+        num_in_array = 0;
+        code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_INDEX_NAME,
+            PDF_INDEX_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, index,
+            &num_in_array, 256);
+        if (code < 0)
+        {
+            /* This is an optional element. Set it based upon the PDF_SIZE_NAME */
+            index[0] = 0;
+            index[1] = size;
+            num_in_array = 2;
+        }
+
+        /* Get the actual stream data. Note this stream is not encrypted */
+        ptr = pdf_buff_in + xref_offset;
+        code = pdf_get_stream_info(ctx, ptr, file_end, &ptr_stream, &stream_length,
+            &stream_obj_num, &stream_gen_num);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to get stream info in PDF file\n");
+            return code;
+        }
+
+        ptr = pdf_buff_in + xref_offset;
+        code = pdf_get_stream_data(ctx, ptr, file_end, ptr_stream, stream_length,
+            &buff_out_xref, &size_out_xref);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to get stream data in PDF file\n");
+            return code;
+        }
+
+        /* Now apply the predictor.  There is always one (it could be NONE) */
+        if (xref_predictor_present)
+        {
+            code = pdf_apply_predictor(ctx, buff_out_xref, size_out_xref,
+                &buff_out_xref_decode, &size_out_xref_decode, decode_params);
+            if (code < 0)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Failed to apply predictor in PDF file\n");
+                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                    &buff_out_xref_decode);
+                return code;
+            }
+        }
+        else
+        {
+            buff_out_xref_decode = buff_out_xref;
+            size_out_xref_decode = size_out_xref;
+        }
+
+        /* Now we deal with the decoding of the cross-reference stream */
+        code = prc_pdf_xref_stream_parse(ctx, xref_head, index,
+            num_in_array / 2, byte_widths, buff_out_xref_decode, size_out_xref_decode,
+            &num_object_streams, &xref_head_offset);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse xref stream in PDF file\n");
+            pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                &buff_out_xref_decode);
+            return code;
+        }
+
+        if (buff_out_xref != NULL)
+        {
+            pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                &buff_out_xref_decode);
+        }
+
+        /* Get a pointer to this offset and then check for the presence of
+            a /Encrypt object */
+        if (*streams_are_encrypted == 0)
+        {
+            ptr = pdf_buff_in + xref_offset;
+            code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
+                PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+                &encryption_obj_num);
+            if (code >= 0)
+            {
+                *streams_are_encrypted = 1;
+            }
+
+            /* Also get the fileID as it may be here if we don't yet have it */
+            if (encryption_params->file_id_length == 0)
+            {
+                code = pdf_get_file_id_from_object(ctx, ptr, file_end, encryption_params->file_id,
+                    &encryption_params->file_id_length);
                 if (code < 0)
                 {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to get decode params in PDF file\n");
-                    return code;
-                }
-            }
-
-            /* Look for /W */
-            ptr = pdf_buff_in + xref_offset;
-            num_in_array = 3;
-            code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_W_NAME,
-                PDF_W_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, byte_widths,
-                &num_in_array, 3);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_PARSE, "Failed to read byte widths in PDF file\n");
-                return code;
-            }
-
-            /* Look for /Size */
-            ptr = pdf_buff_in + xref_offset;
-            code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_SIZE_NAME,
-                PDF_SIZE_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &size);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_PARSE, "Failed to read size in PDF file\n");
-                return code;
-            }
-
-            /* Look for /Index */
-            ptr = pdf_buff_in + xref_offset;
-            num_in_array = 0;
-            code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_INDEX_NAME,
-                PDF_INDEX_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, index,
-                &num_in_array, 256);
-            if (code < 0)
-            {
-                /* This is an optional element. Set it based upon the PDF_SIZE_NAME */
-                index[0] = 0;
-                index[1] = size;
-                num_in_array = 2;
-            }
-
-            /* Get the actual stream data. Note this stream is not encrypted */
-            ptr = pdf_buff_in + xref_offset;
-            code = pdf_get_stream_info(ctx, ptr, file_end, &ptr_stream, &stream_length,
-                &stream_obj_num, &stream_gen_num);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_PARSE, "Failed to get stream info in PDF file\n");
-                return code;
-            }
-
-            ptr = pdf_buff_in + xref_offset;
-            code = pdf_get_stream_data(ctx, ptr, file_end, ptr_stream, stream_length,
-                &buff_out_xref, &size_out_xref);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_PARSE, "Failed to get stream data in PDF file\n");
-                return code;
-            }
-
-            /* Now apply the predictor.  There is always one (it could be NONE) */
-            if (xref_predictor_present)
-            {
-                code = pdf_apply_predictor(ctx, buff_out_xref, size_out_xref,
-                    &buff_out_xref_decode, &size_out_xref_decode, decode_params);
-                if (code < 0)
-                {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to apply predictor in PDF file\n");
+                    prc_error(ctx, PRC_ERROR_PARSE, "Did not get file ID in PDF file\n");
                     pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
                         &buff_out_xref_decode);
                     return code;
                 }
             }
-            else
+
+            if (*streams_are_encrypted)
             {
-                buff_out_xref_decode = buff_out_xref;
-                size_out_xref_decode = size_out_xref;
-            }
-
-            /* Now we deal with the decoding of the cross-reference stream */
-            code = prc_pdf_xref_stream_parse(ctx, xref_head, index,
-                num_in_array / 2, byte_widths, buff_out_xref_decode, size_out_xref_decode,
-                &num_object_streams, &xref_head_offset);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse xref stream in PDF file\n");
-                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
-                    &buff_out_xref_decode);
-                return code;
-            }
-
-            if (buff_out_xref != NULL)
-            {
-                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
-                    &buff_out_xref_decode);
-            }
-
-            /* Get a pointer to this offset and then check for the presence of
-               a /Encrypt object */
-            if (*streams_are_encrypted == 0)
-            {
-                ptr = pdf_buff_in + xref_offset;
-                code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
-                    PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
-                    &encryption_obj_num);
-                if (code >= 0)
-                {
-                    *streams_are_encrypted = 1;
-                }
-
-                /* Also get the fileID as it may be here if we don't yet have it */
-                if (encryption_params->file_id_length == 0)
-                {
-                    code = pdf_get_file_id_from_object(ctx, ptr, file_end, encryption_params->file_id,
-                        &encryption_params->file_id_length);
-                    if (code < 0)
-                    {
-                        prc_error(ctx, PRC_ERROR_PARSE, "Did not get file ID in PDF file\n");
-                        pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
-                            &buff_out_xref_decode);
-                        return code;
-                    }
-                }
-
-                if (*streams_are_encrypted)
-                {
-                    /* Parse the encryption object */
-                    code = pdf_parse_decryption(ctx, xref_head, pdf_buff_in, file_end,
-                        encryption_obj_num, encryption_params);
-                    if (code < 0)
-                    {
-                        prc_error(ctx, PRC_ERROR_PARSE, "Did not get encryption information\n");
-                        pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
-                            &buff_out_xref_decode);
-                        return code;
-                    }
-                }
-            }
-
-            /* Lets decompress all the object streams.  These can be encrypted */
-            if (num_object_streams > 0)
-            {
-                code = prc_pdf_object_stream_decompress(ctx, pdf_buff_in, size_in,
-                    xref_head, num_object_streams, stream_list, xref_head_offset,
-                    *streams_are_encrypted, encryption_params);
+                /* Parse the encryption object */
+                code = pdf_parse_decryption(ctx, xref_head, pdf_buff_in, file_end,
+                    encryption_obj_num, encryption_params);
                 if (code < 0)
                 {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to decompress content streams in PDF file\n");
+                    prc_error(ctx, PRC_ERROR_PARSE, "Did not get encryption information\n");
                     pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
                         &buff_out_xref_decode);
                     return code;
@@ -762,37 +743,52 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
             }
         }
 
-        if (!xref_encoded)
+        /* Lets decompress all the object streams.  These can be encrypted */
+        if (num_object_streams > 0)
         {
-            code = pdf_parse_xref_non_compressed(ctx, pdf_buff_in, xref_offset,
-                size_in, xref_head);
+            code = prc_pdf_object_stream_decompress(ctx, pdf_buff_in, size_in,
+                xref_head, num_object_streams, stream_list, xref_head_offset,
+                *streams_are_encrypted, encryption_params);
             if (code < 0)
             {
-                prc_error(ctx, code, "Failed to parse xref in PDF file\n");
+                prc_error(ctx, PRC_ERROR_PARSE, "Failed to decompress content streams in PDF file\n");
+                pdf_xref_free_stream_buffers(ctx, &buff_out_xref,
+                    &buff_out_xref_decode);
                 return code;
             }
+        }
+    }
 
-            /* Check if streams are encrypted here too */
-            if (*streams_are_encrypted == 0)
+    if (!xref_encoded)
+    {
+        code = pdf_parse_xref_non_compressed(ctx, pdf_buff_in, xref_offset,
+            size_in, xref_head);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed to parse xref in PDF file\n");
+            return code;
+        }
+
+        /* Check if streams are encrypted here too */
+        if (*streams_are_encrypted == 0)
+        {
+            ptr = pdf_buff_in + xref_offset;
+            code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
+                PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+                &encryption_obj_num);
+            if (code >= 0)
             {
-                ptr = pdf_buff_in + xref_offset;
-                code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
-                    PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
-                    &encryption_obj_num);
-                if (code >= 0)
+                *streams_are_encrypted = 1;
+            }
+            if (*streams_are_encrypted)
+            {
+                /* Parse the encryption object */
+                code = pdf_parse_decryption(ctx, xref_head, pdf_buff_in, file_end,
+                    encryption_obj_num, encryption_params);
+                if (code < 0)
                 {
-                    *streams_are_encrypted = 1;
-                }
-                if (*streams_are_encrypted)
-                {
-                    /* Parse the encryption object */
-                    code = pdf_parse_decryption(ctx, xref_head, pdf_buff_in, file_end,
-                        encryption_obj_num, encryption_params);
-                    if (code < 0)
-                    {
-                        prc_error(ctx, PRC_ERROR_PARSE, "Did not get encryption information\n");
-                        return code;
-                    }
+                    prc_error(ctx, PRC_ERROR_PARSE, "Did not get encryption information\n");
+                    return code;
                 }
             }
         }

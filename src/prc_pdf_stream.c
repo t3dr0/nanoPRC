@@ -332,7 +332,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
     prc_pdf_decrypt_params *decryption_params)
 {
     uint32_t k, j;
-    uint32_t num_objects = compressed_xref->num_objects - xref_head_offset - 1;
+    uint32_t num_objects = compressed_xref->num_objects;
     uint32_t num_found = 0;
     prc_pdf_xref *xref_object;
     prc_pdf_uncompressed_object_stream *ustream;
@@ -385,6 +385,11 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
         return PRC_ERROR_MEMORY;
     }
 
+    if (xref_head_offset >= num_objects)
+    {
+        return 0;
+    }
+
     for (k = xref_head_offset; k < num_objects; k++)
     {
         xref_object = &compressed_xref->xref_objects[k];
@@ -400,7 +405,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 {
                     /* Already found this one, go to the next object */
                     found = 1;
-                    continue;
+                    break;
                 }
             }
             if (found)
@@ -410,7 +415,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
 
             byte_offset = 0;
             /* We have a new object, so we need to decompress it */
-            for (j = xref_head_offset; j < num_objects; j++)
+            for (j = 0; j < num_objects; j++)
             {
                 if (compressed_xref->xref_objects[j].type == PRC_PDF_XREF_USED_TYPE &&
                     compressed_xref->xref_objects[j].object_number ==

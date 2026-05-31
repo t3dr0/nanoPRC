@@ -1961,21 +1961,13 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     for (k = 0; k < num_xrefs; k++)
     {
         code = pdf_parse_xref(ctx, pdf_buff_in, size_in, &head_xref,
-            &stream_list, 1, &xref_offsets[k], &streams_encrypted, &decrypt_params);
+            &stream_list, &xref_offsets[k], &streams_encrypted, &decrypt_params);
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not parse xref in PDF file\n");
             goto fail;
         }
         xref_start = pdf_buff_in + xref_offset;
-
-        /*
-        streams_encrypted = pdf_is_encrypted(ctx, pdf_buff_in, size_in, &encrypted_object_num);
-        if (streams_encrypted < 0)
-        {
-            prc_error(ctx, PRC_ERROR_PARSE, "Did not check for encryption in PDF file\n");
-            return streams_encrypted;
-        } */
 
         /* We have to search through the xref table for the PRC object. It is
            going to be in an inuse section. It can by deflated and/or encrypted */
@@ -2206,7 +2198,7 @@ fail:
         }
     }
 
-    if (stream_list.number_streams > 0)
+    if (stream_list.number_streams > 0 && stream_list.ustream != NULL)
     {
         for (k = 0; k < stream_list.number_streams; k++)
         {

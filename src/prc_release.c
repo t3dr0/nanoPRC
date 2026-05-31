@@ -295,6 +295,7 @@ prc_release_serialize_help(prc_context *ctx, prc_markup_serialization_helper *da
 {
     uint32_t k;
 
+    prc_release_string(ctx, &data->default_font_family_name);
     if (data->font_keys_of_font != NULL)
     {
         for (k = 0; k < data->font_keys_count; k++)
@@ -308,6 +309,8 @@ prc_release_serialize_help(prc_context *ctx, prc_markup_serialization_helper *da
 static void
 prc_release_prc_pattern(prc_context *ctx, prc_graph_fill_pattern *data)
 {
+    uint32_t k;
+
     if (data == NULL)
         return;
 
@@ -327,6 +330,27 @@ prc_release_prc_pattern(prc_context *ctx, prc_graph_fill_pattern *data)
         if (data->picture_pattern != NULL)
         {
             prc_release_prc_ref_base(ctx, &data->picture_pattern->base);
+
+            if (data->picture_pattern->markup.tessellation_coordinates.coordinates != NULL)
+            {
+                prc_free(ctx, data->picture_pattern->markup.tessellation_coordinates.coordinates);
+                data->picture_pattern->markup.tessellation_coordinates.coordinates = NULL;
+            }
+            if (data->picture_pattern->markup.code_numbers != NULL)
+            {
+                prc_free(ctx, data->picture_pattern->markup.code_numbers);
+                data->picture_pattern->markup.code_numbers = NULL;
+            }
+            if (data->picture_pattern->markup.text_strings != NULL)
+            {
+                for (k = 0; k < data->picture_pattern->markup.number_of_text_strings; k++)
+                {
+                    prc_release_string(ctx, &data->picture_pattern->markup.text_strings[k]);
+                }
+                prc_free(ctx, data->picture_pattern->markup.text_strings);
+                data->picture_pattern->markup.text_strings = NULL;
+            }
+            prc_release_string(ctx, &data->picture_pattern->markup.tessellation_label);
             prc_free(ctx, data->picture_pattern);
             data->picture_pattern = NULL;
         }
@@ -650,6 +674,7 @@ static void
 prc_release_attribute_data(prc_context *ctx, prc_attribute_data *data)
 {
     size_t k, j;
+
     if (data->attributes != NULL)
     {
         for (k = 0; k < data->attribute_count; k++)
@@ -659,6 +684,7 @@ prc_release_attribute_data(prc_context *ctx, prc_attribute_data *data)
             {
                 for (j = 0; j < data->attributes[k].number_attributes; j++)
                 {
+                    prc_release_string(ctx, &data->attributes[k].attributes[j].title.string_title);
                     if (data->attributes[k].attributes[j].type == PRC_ATTRIBUTE_TYPE_CHAR_UTF8 &&
                         data->attributes[k].attributes[j].val_string.string != NULL)
                     {
@@ -977,6 +1003,12 @@ prc_release_tess_face(prc_context *ctx, prc_tess_face data)
 
     if (data.triangulateddata != NULL)
         prc_free(ctx, data.triangulateddata);
+
+    if (data.has_vertex_colors)
+    {
+        if (data.vertex_colors.color_data.remaining_vertices != NULL)
+            prc_free(ctx, data.vertex_colors.color_data.remaining_vertices);
+    }
 }
 
 static void

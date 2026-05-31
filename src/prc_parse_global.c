@@ -175,7 +175,7 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_codes = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_codes > 0)
     {
-        data->code_numbers = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * data->number_of_codes);
+        data->code_numbers = (uint32_t *)prc_calloc(ctx, data->number_of_codes, sizeof(uint32_t));
         if (data->code_numbers == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_tess_markup\n");
@@ -191,7 +191,7 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
     data->number_of_text_strings = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_text_strings > 0)
     {
-        data->text_strings = (prc_string *)prc_malloc(ctx, sizeof(prc_string) * data->number_of_text_strings);
+        data->text_strings = (prc_string *)prc_calloc(ctx, data->number_of_text_strings, sizeof(prc_string));
         if (data->code_numbers == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_tess_markup\n");
@@ -232,7 +232,7 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
     if (data->fill_pattern_type == PRC_TYPE_GRAPH_DottingPattern)
     {
         prc_graph_dotting_pattern *pat_data;
-        pat_data = (prc_graph_dotting_pattern *)prc_malloc(ctx, sizeof(prc_graph_dotting_pattern));
+        pat_data = (prc_graph_dotting_pattern *)prc_calloc(ctx, 1, sizeof(prc_graph_dotting_pattern));
         if (pat_data == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_fills\n");
@@ -255,7 +255,7 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
     else if (data->fill_pattern_type == PRC_TYPE_GRAPH_HatchingPattern)
     {
         prc_graph_hatching_pattern *pat_data;
-        pat_data = (prc_graph_hatching_pattern *)prc_malloc(ctx, sizeof(prc_graph_hatching_pattern));
+        pat_data = (prc_graph_hatching_pattern *)prc_calloc(ctx, 1, sizeof(prc_graph_hatching_pattern));
         if (pat_data == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_fills\n");
@@ -274,7 +274,7 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
         pat_data->number_of_hatching_lines = prc_bitread_uint32(ctx, bit_state);
         if (pat_data->number_of_hatching_lines > 0)
         {
-            pat_data->hatch = (prc_hatch *)prc_malloc(ctx, sizeof(prc_hatch) * pat_data->number_of_hatching_lines);
+            pat_data->hatch = (prc_hatch *)prc_calloc(ctx, pat_data->number_of_hatching_lines, sizeof(prc_hatch));
             if (pat_data->hatch == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_fills\n");
@@ -295,7 +295,7 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
     else if (data->fill_pattern_type == PRC_TYPE_GRAPH_SolidPattern)
     {
         prc_graph_solid_pattern *pat_data;
-        pat_data = (prc_graph_solid_pattern *)prc_malloc(ctx, sizeof(prc_graph_solid_pattern));
+        pat_data = (prc_graph_solid_pattern *)prc_calloc(ctx, 1, sizeof(prc_graph_solid_pattern));
         if (pat_data == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_fills\n");
@@ -324,7 +324,7 @@ prc_parse_fills(prc_context *ctx, prc_bit_state *bit_state, prc_graph_fill_patte
     else if (data->fill_pattern_type == PRC_TYPE_GRAPH_VpicturePattern)
     {
         prc_graph_vpicture_pattern *pat_data;
-        pat_data = (prc_graph_vpicture_pattern *)prc_malloc(ctx, sizeof(prc_graph_vpicture_pattern));
+        pat_data = (prc_graph_vpicture_pattern *)prc_calloc(ctx, 1, sizeof(prc_graph_vpicture_pattern));
         if (pat_data == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_fills\n");
@@ -437,7 +437,7 @@ prc_parse_line_patterns(prc_context *ctx, prc_bit_state *bit_state, prc_graph_li
     data->number_of_elements = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_elements > 0)
     {
-        data->lengths = (double *)prc_malloc(ctx, data->number_of_elements * sizeof(double));
+        data->lengths = (double *)prc_calloc(ctx, data->number_of_elements, sizeof(double));
         if (data->lengths == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_line_patterns\n");
@@ -605,7 +605,7 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
     if (data->number_texture_mapping_attributes_intensities > 0)
     {
         data->texture_mapping_attributes_intensities =
-            (double *)prc_malloc(ctx, data->number_texture_mapping_attributes_intensities * sizeof(double));
+            (double *)prc_calloc(ctx, data->number_texture_mapping_attributes_intensities, sizeof(double));
         if (data->texture_mapping_attributes_intensities == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_graph_textures\n");
@@ -622,7 +622,7 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
     if (data->number_of_texture_mapping_attributes_components > 0)
     {
         data->texture_mapping_attributes_components =
-            (uint8_t *)prc_malloc(ctx, data->number_of_texture_mapping_attributes_components * sizeof(uint8_t));
+            (uint8_t *)prc_calloc(ctx, data->number_of_texture_mapping_attributes_components, sizeof(uint8_t));
         if (data->texture_mapping_attributes_components == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_graph_textures\n");
@@ -775,7 +775,7 @@ prc_parse_font_keys_same_font(prc_context *ctx, prc_bit_state *bit_state, prc_fo
 
     if (data->key_count > 0)
     {
-        data->font_key_list = (prc_font_key *)prc_malloc(ctx, data->key_count * sizeof(prc_font_key));
+        data->font_key_list = (prc_font_key *)prc_calloc(ctx, data->key_count, sizeof(prc_font_key));
         if (data->font_key_list == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_font_keys_same_font\n");
@@ -805,7 +805,7 @@ prc_parse_serialize_help(prc_context *ctx, prc_bit_state *bit_state, prc_markup_
     data->font_keys_count = prc_bitread_uint32(ctx, bit_state);
     if (data->font_keys_count > 0)
     {
-        data->font_keys_of_font = (prc_font_keys_same_font *)prc_malloc(ctx, data->font_keys_count * sizeof(prc_font_keys_same_font));
+        data->font_keys_of_font = (prc_font_keys_same_font *)prc_calloc(ctx, data->font_keys_count, sizeof(prc_font_keys_same_font));
         if (data->font_keys_of_font == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_serialize_help\n");
