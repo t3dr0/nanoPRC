@@ -1023,11 +1023,89 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 }
 
 static int
+pdf_char_to_lower(uint8_t ch)
+{
+    if (ch >= 'A' && ch <= 'Z')
+    {
+        return (uint8_t)(ch - 'A' + 'a');
+    }
+    return ch;
+}
+
+static int
+pdf_buffer_contains_ascii_case_insensitive(const uint8_t *buf, uint32_t buf_len,
+    const char *needle)
+{
+    uint32_t i;
+    uint32_t j;
+    uint32_t needle_len = (uint32_t)strlen(needle);
+
+    if (needle_len == 0 || buf_len < needle_len)
+    {
+        return 0;
+    }
+
+    for (i = 0; i + needle_len <= buf_len; i++)
+    {
+        for (j = 0; j < needle_len; j++)
+        {
+            if (pdf_char_to_lower(buf[i + j]) !=
+                pdf_char_to_lower((uint8_t)needle[j]))
+            {
+                break;
+            }
+        }
+        if (j == needle_len)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+pdf_name_has_prc_extension(const uint8_t *name_start, const uint8_t *name_end)
+{
+    uint32_t len;
+
+    if (name_end < name_start)
+    {
+        return 0;
+    }
+
+    len = (uint32_t)(name_end - name_start);
+    if (len >= 4)
+    {
+        if ((pdf_char_to_lower(name_end[-4]) == '.') &&
+            (pdf_char_to_lower(name_end[-3]) == 'p') &&
+            (pdf_char_to_lower(name_end[-2]) == 'r') &&
+            (pdf_char_to_lower(name_end[-1]) == 'c'))
+        {
+            return 1;
+        }
+        if ((pdf_char_to_lower(name_end[-4]) == '.') &&
+            (pdf_char_to_lower(name_end[-3]) == 'u') &&
+            (pdf_char_to_lower(name_end[-2]) == '3') &&
+            (pdf_char_to_lower(name_end[-1]) == 'd'))
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
 prc_pdf_name_tree_find_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *ptr_end,
+    uint8_t *file_start, uint32_t file_size, prc_pdf_head_xref *head_xref,
+    prc_pdf_uncompressed_object_stream_list *stream_list,
     uint32_t *obj_num, uint32_t *gen_num)
 {
     int code;
     int found_start = 0;
+    uint32_t first_obj_num = 0;
+    uint32_t first_gen_num = 0;
+    uint32_t ext_obj_num = 0;
+    uint32_t ext_gen_num = 0;
 
     *obj_num = 0;
     *gen_num = 0;
@@ -1057,6 +1135,14 @@ prc_pdf_name_tree_find_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *ptr_end,
         {
             uint8_t *str_start = ptr_in + 1;
             uint8_t *str_end = str_start;
+            uint8_t *ptr_filespec;
+            uint8_t subtype_value[PDF_MAX_DICT_VALUE];
+            uint32_t subtype_value_len = 0;
+            uint32_t filespec_obj_num = 0;
+            uint32_t filespec_gen_num = 0;
+            uint32_t filespec_size = 0;
+            uint8_t is_object_stream_item = 0;
+            int has_prc_extension;
             /* Find the end of the string */
             while (str_end < ptr_end && *str_end != ')')
             {
@@ -1067,31 +1153,64 @@ prc_pdf_name_tree_find_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *ptr_end,
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not find end of string in PDF file\n");
                 return PRC_ERROR_PARSE;
             }
-            /* Check if this string ends with .prc */
-            if ((str_end - str_start) >= 4 &&
-                strncmp((char *)(str_end - 4), ".prc", 4) == 0)
+
+            has_prc_extension = pdf_name_has_prc_extension(str_start, str_end);
+
+            ptr_in = str_end + 1;
+            code = sscanf((char *)ptr_in, "%u %u R", &filespec_obj_num, &filespec_gen_num);
+            if (code == 2 && filespec_obj_num != 0)
             {
-                /* We have found a .prc file name. The next entries should be
-                   the object reference */
-                ptr_in = str_end + 1;
-                code = sscanf((char *)ptr_in, "%d %d R", obj_num, gen_num);
-                if (code != 2)
+                if (first_obj_num == 0)
                 {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Did not read object reference in PDF file\n");
-                    return PRC_ERROR_PARSE;
+                    first_obj_num = filespec_obj_num;
+                    first_gen_num = filespec_gen_num;
                 }
-                return 1;
-            }
-            else
-            {
-                /* Move past the string */
-                ptr_in = str_end + 1;
+
+                ptr_filespec = prc_pdf_get_ptr_to_obj(ctx, file_start, file_size,
+                    head_xref, stream_list, filespec_obj_num, &filespec_size,
+                    &is_object_stream_item);
+                if (ptr_filespec != NULL)
+                {
+                    code = prc_pdf_dict_get_type(ctx, ptr_filespec,
+                        ptr_filespec + filespec_size, PDF_SUBTYPE_NAME,
+                        subtype_value, PDF_MAX_DICT_VALUE, &subtype_value_len);
+                    if (code > 0 &&
+                        (pdf_buffer_contains_ascii_case_insensitive(subtype_value,
+                            subtype_value_len, "prc") ||
+                         pdf_buffer_contains_ascii_case_insensitive(subtype_value,
+                            subtype_value_len, "u3d")))
+                    {
+                        *obj_num = filespec_obj_num;
+                        *gen_num = filespec_gen_num;
+                        return 1;
+                    }
+                }
+
+                if (has_prc_extension && ext_obj_num == 0)
+                {
+                    ext_obj_num = filespec_obj_num;
+                    ext_gen_num = filespec_gen_num;
+                }
             }
         }
         else
         {
             ptr_in++;
         }
+    }
+
+    if (ext_obj_num != 0)
+    {
+        *obj_num = ext_obj_num;
+        *gen_num = ext_gen_num;
+        return 1;
+    }
+
+    if (first_obj_num != 0)
+    {
+        *obj_num = first_obj_num;
+        *gen_num = first_gen_num;
+        return 1;
     }
 
     return 0;
@@ -1227,7 +1346,9 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
        a string name e.g. (myfile.prc) and value (obj num, gen num) pairs.
        We want to look for a name that has a .prc file name suffix */
     code = prc_pdf_name_tree_find_prc(ctx, ptr_rich_media_names, dict_end,
-                                      &prc_file_spec_obj_num, &prc_file_spec_gen_num);
+                                      file_start, file_size, head_xref,
+                                      stream_list, &prc_file_spec_obj_num,
+                                      &prc_file_spec_gen_num);
     if (code < 0 || prc_file_spec_obj_num == 0)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not find prc file spec in rich media assets name tree\n");
@@ -1300,7 +1421,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     }
 
     return 0;
-}
+ }
 
 static int
 pdf_object_is_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
@@ -1995,7 +2116,8 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
                this?  On top of that, I see files that claim to be 1.4 version with
                2.0 data types... */
                /* We have to search through the xref table for anno object. It is
-                   going to be in an inuse section. It can by deflated and/or encrypted */
+                   going to be in an inuse section. It can by deflated and/or encrypted.
+                   This needs a little more work. */
             for (j = 0; j < head_xref.num_objects; j++)
             {
                 if (head_xref.xref_objects[j].type == PRC_PDF_XREF_USED_TYPE)
