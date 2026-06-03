@@ -436,6 +436,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
     uint32_t totalTesselations;
     int code;
     uint32_t j, k;
+    int context_release_code;
 
     prc_context *ctx = prc_api_new_context(NULL);
     if (ctx == NULL)
@@ -688,7 +689,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
 
     delete[] tesses;
 
-    int context_release_code = prc_api_release_context(ctx);
+    context_release_code = prc_api_release_context(ctx);
     if (memoryLeakCheck && context_release_code == PRC_API_MEMORY_LEAK_DETECTED)
     {
         printf("Scene::load: memory leak detected while releasing PRC context\n");

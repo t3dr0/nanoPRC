@@ -2820,7 +2820,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* Total number of indices for all the triangles, fans, and strips for
            this face are counted in num_indices. We will use this for our
-           initial allocations */
+           initial allocations. */
 
         /* We have to combine the normal vector, position vector, color and texture
            coordinates into a vertex. For each unique position vector / normal
@@ -2836,8 +2836,14 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         {
             return PRC_API_ERROR_MEMORY;
         }
+
+
+        /* For the mapping tables we have to take the max of the indices and the
+           number of vertices */
+        uint32_t max_mapping_count = max(tess->num_vertices_internal, num_indices);
+        max_mapping_count = max(max_mapping_count, tess->num_normals_internal);
         prc_vertex_indice_to_api_vertex_indice = 
-            (uint32_t *)prc_calloc(ctx, tess->num_vertices_internal, sizeof(uint32_t));
+            (uint32_t *)prc_calloc(ctx, max_mapping_count, sizeof(uint32_t));
         if (prc_vertex_indice_to_api_vertex_indice == NULL)
         {
             return PRC_API_ERROR_MEMORY;
@@ -2845,7 +2851,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         if (tess->num_normals_internal > 0)
         {
             prc_normal_indice_to_api_normal_indice =
-                (uint32_t *)prc_calloc(ctx, tess->num_normals_internal, sizeof(uint32_t));
+                (uint32_t *)prc_calloc(ctx, max_mapping_count, sizeof(uint32_t));
             if (prc_normal_indice_to_api_normal_indice == NULL)
             {
                 return PRC_API_ERROR_MEMORY;
@@ -2855,6 +2861,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         {
             prc_normal_indice_to_api_normal_indice = NULL;
         }
+
         if (has_texture)
         {
             /* Number of texture coordinates / 2 */
@@ -2872,13 +2879,13 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* Initialize prc_vertex_indice_to_api_vertex_indice, and 
            prc_normal_indice_to_api_normal_indice to UINT32MAX */
-        for (k = 0; k < tess->num_vertices_internal; k++)
+        for (k = 0; k < max_mapping_count; k++)
         {
             prc_vertex_indice_to_api_vertex_indice[k] = UINT32_MAX;
         }
-        if (tess->num_normals_internal > 0)
+        if (prc_normal_indice_to_api_normal_indice != NULL)
         {
-            for (k = 0; k < tess->num_normals_internal; k++)
+            for (k = 0; k < max_mapping_count; k++)
             {
                 prc_normal_indice_to_api_normal_indice[k] = UINT32_MAX;
             }
@@ -2894,7 +2901,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
            the normal vectors, and the texture positions prior to any splitting. */
         if (tess->num_normals_internal > 0)
         {
-            face_initial_normals = (float *)prc_calloc(ctx, num_indices, 3 * sizeof(float));
+            face_initial_normals = (float *)prc_calloc(ctx, num_indices * 3, sizeof(float));
             if (face_initial_normals == NULL)
             {
                 return PRC_API_ERROR_MEMORY;
@@ -2905,13 +2912,13 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             face_initial_normals = NULL;
         }
 
-        face_initial_positions = (float *)prc_calloc(ctx, num_indices, 3 * sizeof(float));
+        face_initial_positions = (float *)prc_calloc(ctx, num_indices * 3, sizeof(float));
 
         if (has_texture)
         {
             for (k = 0; k < texture_indice_num_per_position; k++)
             {
-                face_initial_texture_coords = (float *)prc_calloc(ctx, num_indices, 2 * sizeof(float));
+                face_initial_texture_coords = (float *)prc_calloc(ctx, num_indices * 2, sizeof(float));
                 if (face_initial_texture_coords == NULL)
                 {
                     return PRC_API_ERROR_MEMORY;

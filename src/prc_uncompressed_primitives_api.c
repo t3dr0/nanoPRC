@@ -840,7 +840,7 @@ prc_internal_api_vertex_triangle_one_norm(prc_context *ctx,
     size_t vertex_index;
     uint32_t num_text_coord = uncompressed_data->face_out_reserved->num_texture_coords;
     uint32_t *vertex_indices = uncompressed_data->face_out_reserved->vertex_indices;
-    prc_multi_single_norm_type_t single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
+    prc_multi_single_norm_type_t single_norm_state;
     int32_t single_norm_initial_index = -1;
 
     if (num_triangles == 0)
@@ -850,7 +850,9 @@ prc_internal_api_vertex_triangle_one_norm(prc_context *ctx,
        a new set that are specific for this face */
     for (k = 0; k < num_triangles; k++)
     {
-        /* Sets of three vertices */
+        single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
+
+        /* Sets of three vertices each with the same norm */
         for (j = 0; j < 3; j++)
         {
             /* Remap normal and point to new structure for easier splitting etc. */
@@ -906,7 +908,7 @@ prc_internal_api_vertex_fan_one_norm(prc_context *ctx,
     size_t vertex_index;
     uint32_t num_text_coord = uncompressed_data->face_out_reserved->num_texture_coords;
     uint32_t *vertex_indices = uncompressed_data->face_out_reserved->vertex_indices;
-    prc_multi_single_norm_type_t single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
+    prc_multi_single_norm_type_t single_norm_state;
     int32_t single_norm_initial_index = -1;
 
     if (num_fans == 0)
@@ -918,6 +920,7 @@ prc_internal_api_vertex_fan_one_norm(prc_context *ctx,
     {
         /* First read gets 2 and then the rest each get 1 */
         size_t num_points = fan_offsets[2 * k + 1] - 1;
+        single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
 
         for (j = 0; j < num_points; j++)
         {
@@ -962,7 +965,7 @@ prc_internal_api_vertex_strip_one_norm(prc_context *ctx,
     size_t vertex_index;
     uint32_t num_text_coord = uncompressed_data->face_out_reserved->num_texture_coords;
     uint32_t *vertex_indices = uncompressed_data->face_out_reserved->vertex_indices;
-    prc_multi_single_norm_type_t single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
+    prc_multi_single_norm_type_t single_norm_state;
     int32_t single_norm_initial_index = -1;
 
     if (num_strips == 0)
@@ -974,6 +977,7 @@ prc_internal_api_vertex_strip_one_norm(prc_context *ctx,
     {
         /* First read gets 2 and then the rest each get 1 */
         size_t num_points = strip_offsets[2 * k + 1] - 1;
+        single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
 
         for (j = 0; j < num_points; j++)
         {
@@ -1095,7 +1099,7 @@ prc_internal_api_set_triangles(prc_context *ctx, prc_tess_face face,
                     uint8_t is_single_norm, prc_internal_api_tess_entities *entities,
                                size_t *face_tessellation_index, size_t *num_indices)
 {
-    entities->num_triangles = face.triangulateddata[0];
-    *num_indices = entities->num_triangles * 3;
-    *face_tessellation_index = *face_tessellation_index + 1;
+	entities->num_triangles = face.triangulateddata[0];
+	*num_indices = entities->num_triangles * 3; /* 3 indices per triangle */
+ 	*face_tessellation_index = *face_tessellation_index + 1;
 }
