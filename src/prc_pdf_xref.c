@@ -63,7 +63,9 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
     uint32_t gen_num;
     uint8_t *temp_ptr;
     uint32_t total_xref_objects = 0;
+    uint32_t prev_num_xref_objects = xref_head->num_objects;
     prc_pdf_xref *xref_objects;
+    prc_pdf_xref *merged_xref_objects;
     uint8_t *ptr_start;
     uint32_t object_count = 0;
 
@@ -241,8 +243,27 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
         }
     }
 
-    xref_head->num_objects = total_xref_objects;
-    xref_head->xref_objects = xref_objects;
+    if (prev_num_xref_objects == 0)
+    {
+        xref_head->num_objects = total_xref_objects;
+        xref_head->xref_objects = xref_objects;
+    }
+    else
+    {
+        merged_xref_objects = (prc_pdf_xref *)prc_realloc(ctx, xref_head->xref_objects,
+            (prev_num_xref_objects + total_xref_objects) * sizeof(prc_pdf_xref));
+        if (merged_xref_objects == NULL)
+        {
+            prc_free(ctx, xref_objects);
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate xref_objects\n");
+            return PRC_ERROR_MEMORY;
+        }
+        memcpy(merged_xref_objects + prev_num_xref_objects, xref_objects,
+            total_xref_objects * sizeof(prc_pdf_xref));
+        prc_free(ctx, xref_objects);
+        xref_head->xref_objects = merged_xref_objects;
+        xref_head->num_objects = prev_num_xref_objects + total_xref_objects;
+    }
 
     return 0;
 
@@ -321,6 +342,52 @@ prc_pdf_get_ptr_to_obj(prc_context *context, uint8_t *pdf_buff_in, uint32_t size
             if (found_object)
             {
                 break;
+            }
+        }
+
+        if (!found_object)
+        {
+            for (j = 0; j < head_xref->num_objects; j++)
+            {
+                if (head_xref->xref_objects[j].type == PRC_PDF_XREF_COMPRESSED_TYPE &&
+                    head_xref->xref_objects[j].object_number == (uint32_t)object_number)
+                {
+                    uint32_t stream_object_number = head_xref->xref_objects[j].byte_offset;
+                    uint32_t stream_index = head_xref->xref_objects[j].object_stream_index;
+
+                    for (k = 0; k < num_streams; k++)
+                    {
+                        if (stream_list->ustream[k].stream_object_number == stream_object_number)
+                        {
+                            if (stream_index >= stream_list->ustream[k].n)
+                            {
+                                continue;
+                            }
+
+                            ptr_temp = stream_list->ustream[k].stream +
+                                stream_list->ustream[k].object_offsets[stream_index].offset;
+
+                            if (stream_index == stream_list->ustream[k].n - 1)
+                            {
+                                *size_out = stream_list->ustream[k].stream_length -
+                                    stream_list->ustream[k].object_offsets[stream_index].offset;
+                            }
+                            else
+                            {
+                                *size_out = stream_list->ustream[k].object_offsets[stream_index + 1].offset -
+                                    stream_list->ustream[k].object_offsets[stream_index].offset;
+                            }
+                            found_object = 1;
+                            *is_object_stream_item = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (found_object)
+                {
+                    break;
+                }
             }
         }
     }
@@ -465,7 +532,8 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
                 xref_object->is_free = 0;
                 xref_object->is_compressed = 1;
                 xref_object->generation_number = 0;
-                xref_object->object_number = object_number_byte_offset; /* object number of stream in which this is contained */
+                xref_object->object_number = k + first_entry_subsection; /* actual object number */
+                xref_object->byte_offset = object_number_byte_offset; /* containing object stream number */
                 xref_object->object_stream_index = generation_number_index; /* index of the object in the stream */
 
                 if (*num_content_streams >= PRC_PDF_MAX_NUM_CONTENT_STREAMS)
@@ -478,7 +546,7 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
                 {
                     for (j = 0; j < *num_content_streams; j++)
                     {
-                        if (content_stream_obj[j] == xref_object->object_number)
+                        if (content_stream_obj[j] == object_number_byte_offset)
                         {
                             already_added = 1;
                         }
@@ -487,7 +555,7 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
 
                 if (!already_added)
                 {
-                    content_stream_obj[*num_content_streams] = xref_object->object_number;
+                    content_stream_obj[*num_content_streams] = object_number_byte_offset;
                     (*num_content_streams)++;
                 }
             }

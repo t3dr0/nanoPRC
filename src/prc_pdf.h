@@ -49,6 +49,8 @@
 #define PDF_TRAILER_NAME_LEN 7
 #define PDF_STARTXREF_NAME "startxref"
 #define PDF_STARTXREF_NAME_LEN 9
+#define PDF_XREFSTM_NAME "/XRefStm"
+#define PDF_XREFSTM_NAME_LEN 8
 #define PDF_PRC_NAME "/PRC"
 #define PDF_PRC_NAME_LEN 4
 #define PDF_DECODE_PARMS_NAME "/DecodeParms"

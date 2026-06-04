@@ -549,6 +549,8 @@ prc_internal_api_remap_indices(prc_context *ctx,
     uint32_t k;
     uint32_t texture_indices[MAX_NUM_TEXTURE_COORDS];
     uint32_t num_text_coord = uncompressed_data->face_out_reserved->num_texture_coords;
+    uint32_t num_vertices_prc = uncompressed_data->tess->num_vertices_internal;
+    uint32_t num_normals_prc = uncompressed_data->tess->num_normals_internal;
 
     /* This just gets the indices for the normal, position, and texture */
     if (has_texture_indices)
@@ -564,6 +566,13 @@ prc_internal_api_remap_indices(prc_context *ctx,
             prc_internal_api_get_normal_position_index(*(uncompressed_data->src_index_data),
                 &normal_index, &position_index, must_calculate_normals, multi_single_norm_type);
     }
+
+    /* Sanity check for malicious file data */
+    if (position_index >= num_vertices_prc)
+        return PRC_API_ERROR_PARSER;
+
+    if (normal_index != -1 && normal_index >= num_normals_prc)
+        return PRC_API_ERROR_PARSER;
 
     /* Now see if these indices are already mapped */
     if (prc_vertex_indice_to_api_vertex_indice[position_index] == UINT32_MAX)
@@ -915,11 +924,11 @@ prc_internal_api_vertex_fan_one_norm(prc_context *ctx,
         return 0;
 
     /* First go through all our positions and normals and remap them to
-   a new set that are specific for this face */
+       a new set that are specific for this face */
     for (k = 0; k < num_fans; k++)
     {
         /* First read gets 2 and then the rest each get 1 */
-        size_t num_points = fan_offsets[2 * k + 1] - 1;
+        size_t num_points = fan_offsets[2 * k + 1];
         single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
 
         for (j = 0; j < num_points; j++)
@@ -976,7 +985,7 @@ prc_internal_api_vertex_strip_one_norm(prc_context *ctx,
     for (k = 0; k < num_strips; k++)
     {
         /* First read gets 2 and then the rest each get 1 */
-        size_t num_points = strip_offsets[2 * k + 1] - 1;
+        size_t num_points = strip_offsets[2 * k + 1];
         single_norm_state = PRC_INTERNAL_SINGLE_NORM_INITIAL;
 
         for (j = 0; j < num_points; j++)
@@ -1034,8 +1043,8 @@ prc_internal_api_set_fans(prc_context *ctx, prc_tess_face face,
             /* The number of indices in the fan */
             if (is_single_norm)
             {
-                /* One normal plus the rest defined here */
-                uint32_t num_indices_for_fan = (face.triangulateddata[*face_tessellation_index] & ~PRC_FACETESSDATA_NORMAL_Single) + 1;
+                /* Apply the crazy mask */
+                uint32_t num_indices_for_fan = (face.triangulateddata[*face_tessellation_index] & ~PRC_FACETESSDATA_NORMAL_Single);
                 entities->fan_offsets[2 * k + 1] = num_indices_for_fan;
                 *num_indices = *num_indices + num_indices_for_fan;
             }
@@ -1076,8 +1085,8 @@ prc_internal_api_set_strips(prc_context *ctx, prc_tess_face face,
             /* The number of indices in the strip */
             if (is_single_norm)
             {
-                /* One normal plus the rest defined here */
-                uint32_t num_indices_for_strip = (face.triangulateddata[*face_tessellation_index] & ~PRC_FACETESSDATA_NORMAL_Single) + 1;
+                /* Deal with the crazy mask */
+                uint32_t num_indices_for_strip = (face.triangulateddata[*face_tessellation_index] & ~PRC_FACETESSDATA_NORMAL_Single);
                 entities->strip_offsets[2 * k + 1] = num_indices_for_strip;
                 *num_indices = *num_indices + num_indices_for_strip;
             }

@@ -2837,13 +2837,10 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             return PRC_API_ERROR_MEMORY;
         }
 
-
         /* For the mapping tables we have to take the max of the indices and the
            number of vertices */
-        uint32_t max_mapping_count = max(tess->num_vertices_internal, num_indices);
-        max_mapping_count = max(max_mapping_count, tess->num_normals_internal);
         prc_vertex_indice_to_api_vertex_indice = 
-            (uint32_t *)prc_calloc(ctx, max_mapping_count, sizeof(uint32_t));
+            (uint32_t *)prc_calloc(ctx, tess->num_vertices_internal, sizeof(uint32_t));
         if (prc_vertex_indice_to_api_vertex_indice == NULL)
         {
             return PRC_API_ERROR_MEMORY;
@@ -2851,7 +2848,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         if (tess->num_normals_internal > 0)
         {
             prc_normal_indice_to_api_normal_indice =
-                (uint32_t *)prc_calloc(ctx, max_mapping_count, sizeof(uint32_t));
+                (uint32_t *)prc_calloc(ctx, tess->num_normals_internal, sizeof(uint32_t));
             if (prc_normal_indice_to_api_normal_indice == NULL)
             {
                 return PRC_API_ERROR_MEMORY;
@@ -2879,13 +2876,13 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* Initialize prc_vertex_indice_to_api_vertex_indice, and 
            prc_normal_indice_to_api_normal_indice to UINT32MAX */
-        for (k = 0; k < max_mapping_count; k++)
+        for (k = 0; k < tess->num_vertices_internal; k++)
         {
             prc_vertex_indice_to_api_vertex_indice[k] = UINT32_MAX;
         }
         if (prc_normal_indice_to_api_normal_indice != NULL)
         {
-            for (k = 0; k < max_mapping_count; k++)
+            for (k = 0; k < tess->num_normals_internal; k++)
             {
                 prc_normal_indice_to_api_normal_indice[k] = UINT32_MAX;
             }
@@ -3075,6 +3072,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         {
             memcpy(uncompressed_data.texture_transform, face_out->texture.transform, 9 * sizeof(double));
         }
+
         uncompressed_data.prc_vertex_indice_to_api_vertex_indice = prc_vertex_indice_to_api_vertex_indice;
         uncompressed_data.prc_normal_indice_to_api_normal_indice = prc_normal_indice_to_api_normal_indice;
         uncompressed_data.prc_texture_indice_to_api_texture_indice = prc_texture_indice_to_api_texture_indice;

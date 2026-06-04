@@ -401,7 +401,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             for (j = prev_stream_index; j < num_found; j++)
             {
                 if (uncompressed_list->ustream[j].stream_object_number == 
-                                                    xref_object->object_number)
+                                                    xref_object->byte_offset)
                 {
                     /* Already found this one, go to the next object */
                     found = 1;
@@ -419,7 +419,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             {
                 if (compressed_xref->xref_objects[j].type == PRC_PDF_XREF_USED_TYPE &&
                     compressed_xref->xref_objects[j].object_number ==
-                    xref_object->object_number)
+                    xref_object->byte_offset)
                 {
                     /* This is the object we are looking for, so we can get the byte offset */
                     byte_offset = compressed_xref->xref_objects[j].byte_offset;
@@ -429,7 +429,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             if (byte_offset == 0)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find byte offset for object %u in PDF file\n",
-                    xref_object->object_number);
+                    xref_object->byte_offset);
                 pdf_stream_release_uncompressed_list(ctx, uncompressed_list);
                 return PRC_ERROR_PARSE;
             }
@@ -441,7 +441,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 return 0;
             }
             ustream = &uncompressed_list->ustream[num_found];
-            ustream->stream_object_number = xref_object->object_number;
+            ustream->stream_object_number = xref_object->byte_offset;
             ptr = pdf_data + byte_offset;
 
             /* Look for /N */

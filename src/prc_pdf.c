@@ -933,8 +933,17 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 
         if (ptr_temp == NULL)
         {
-            prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
-            return PRC_ERROR_PARSE;
+            /* Fallback for files where this object is not indexed by current xref data.
+               This only finds direct objects (not compressed object stream members). */
+            code = pdf_get_ptr_to_obj(ctx, object_ref_num, pdf_buff_in,
+                pdf_buff_in + size_in, &ptr_temp);
+            if (code < 0 || ptr_temp == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
+                return PRC_ERROR_PARSE;
+            }
+            is_object_stream_item = 0;
+            size_out = size_in - (uint32_t)(ptr_temp - pdf_buff_in);
         }
 
         if (!is_object_stream_item)
@@ -994,11 +1003,19 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
                     &is_object_stream_item);
                 if (ptr_temp == NULL)
                 {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
-                    pdf_free_view_array_partial(ctx, cam_views, k);
-                    prc_free(ctx, dict_obj_num);
-                    prc_free(ctx, dict_gen_num);
-                    return PRC_ERROR_PARSE;
+                    /* Fallback for direct objects missing from xref index state. */
+                    code = pdf_get_ptr_to_obj(ctx, dict_obj_num[k], pdf_buff_in,
+                        pdf_buff_in + size_in, &ptr_temp);
+                    if (code < 0 || ptr_temp == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
+                        pdf_free_view_array_partial(ctx, cam_views, k);
+                        prc_free(ctx, dict_obj_num);
+                        prc_free(ctx, dict_gen_num);
+                        return PRC_ERROR_PARSE;
+                    }
+                    is_object_stream_item = 0;
+                    size_out = size_in - (uint32_t)(ptr_temp - pdf_buff_in);
                 }
 
                 /* And now parse the camera view object */
@@ -2022,6 +2039,8 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     uint8_t is_object_stream_item;
     uint32_t num_xrefs;
     uint32_t *xref_offsets = NULL;
+    uint32_t xref_stm_offset = 0;
+    uint8_t xref_stm_already_listed = 0;
 
     /* Get to the startxref line */
     ptr = pdf_buff_in + size_in - 1;
@@ -2088,61 +2107,93 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
             prc_error(ctx, PRC_ERROR_PARSE, "Did not parse xref in PDF file\n");
             goto fail;
         }
-        xref_start = pdf_buff_in + xref_offset;
 
-        /* We have to search through the xref table for the PRC object. It is
-           going to be in an inuse section. It can by deflated and/or encrypted */
-        for (j = 0; j < head_xref.num_objects; j++)
+        /* Hybrid-reference PDFs can store supplemental xref info in /XRefStm.
+           Parse that stream too when present and not already in our xref list. */
+        ptr = pdf_buff_in + xref_offsets[k];
+        code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_XREFSTM_NAME,
+            PDF_XREFSTM_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+            &xref_stm_offset);
+        if (code >= 0 && xref_stm_offset > 0 && xref_stm_offset < size_in)
         {
-            if (head_xref.xref_objects[j].type == PRC_PDF_XREF_USED_TYPE)
+            xref_stm_already_listed = 0;
+            for (j = 0; j < num_xrefs; j++)
             {
-                ptr = pdf_buff_in + head_xref.xref_objects[j].byte_offset;
-                length = file_end - ptr;
-                code = pdf_object_is_prc(ctx, ptr, length, 0);
-                if (code == 1)
+                if (xref_offsets[j] == xref_stm_offset)
                 {
-                    /* Found the PRC object */
-                    prc_offset = head_xref.xref_objects[j].byte_offset;
-                    found_prc = 1;
+                    xref_stm_already_listed = 1;
                     break;
                 }
             }
-        }
 
-        if (prc_offset == 0)
+            if (!xref_stm_already_listed)
+            {
+                uint32_t xref_stm_offset_local = xref_stm_offset;
+                code = pdf_parse_xref(ctx, pdf_buff_in, size_in, &head_xref,
+                    &stream_list, &xref_stm_offset_local, &streams_encrypted,
+                    &decrypt_params);
+                if (code < 0)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Did not parse XRefStm in PDF file\n");
+                    goto fail;
+                }
+            }
+        }
+        xref_start = pdf_buff_in + xref_offset;
+
+        /* Keep accumulating xref sections first. We can still search for PRC while
+           doing so, but do not stop parsing older sections if already found. */
+        if (!found_prc)
         {
-            /* Did not find it. However we could be in a PDF 2.0 document which
-               can encode this as an RichMedia annotation type. Why would they do
-               this?  On top of that, I see files that claim to be 1.4 version with
-               2.0 data types... */
-               /* We have to search through the xref table for anno object. It is
-                   going to be in an inuse section. It can by deflated and/or encrypted.
-                   This needs a little more work. */
+            /* We have to search through the xref table for the PRC object. It is
+               going to be in an inuse section. It can by deflated and/or encrypted */
             for (j = 0; j < head_xref.num_objects; j++)
             {
                 if (head_xref.xref_objects[j].type == PRC_PDF_XREF_USED_TYPE)
                 {
                     ptr = pdf_buff_in + head_xref.xref_objects[j].byte_offset;
                     length = file_end - ptr;
-                    code = pdf_object_is_rich_media(ctx, &decrypt_params, &stream_list,
-                        &head_xref, ptr, length, 0, pdf_buff_in,
-                        size_in, &prc_offset,
-                        &rich_media_view_obj_num,
-                        &rich_media_view_gen_num);
-                    if (prc_offset != 0)
+                    code = pdf_object_is_prc(ctx, ptr, length, 0);
+                    if (code == 1)
                     {
-                        /* Found the PRC object as a rich media object */
-                        is_richmedia = 1;
+                        /* Found the PRC object */
+                        prc_offset = head_xref.xref_objects[j].byte_offset;
                         found_prc = 1;
                         break;
                     }
                 }
             }
-        }
 
-        if (prc_offset != 0)
-        {
-            break;
+            if (prc_offset == 0)
+            {
+                /* Did not find it. However we could be in a PDF 2.0 document which
+                   can encode this as an RichMedia annotation type. Why would they do
+                   this?  On top of that, I see files that claim to be 1.4 version with
+                   2.0 data types... */
+                /* We have to search through the xref table for anno object. It is
+                   going to be in an inuse section. It can by deflated and/or encrypted.
+                   This needs a little more work. */
+                for (j = 0; j < head_xref.num_objects; j++)
+                {
+                    if (head_xref.xref_objects[j].type == PRC_PDF_XREF_USED_TYPE)
+                    {
+                        ptr = pdf_buff_in + head_xref.xref_objects[j].byte_offset;
+                        length = file_end - ptr;
+                        code = pdf_object_is_rich_media(ctx, &decrypt_params, &stream_list,
+                            &head_xref, ptr, length, 0, pdf_buff_in,
+                            size_in, &prc_offset,
+                            &rich_media_view_obj_num,
+                            &rich_media_view_gen_num);
+                        if (prc_offset != 0)
+                        {
+                            /* Found the PRC object as a rich media object */
+                            is_richmedia = 1;
+                            found_prc = 1;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
