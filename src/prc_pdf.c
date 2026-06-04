@@ -25,6 +25,11 @@
 int prc_uncompress(prc_context *ctx, const unsigned char *src, size_t src_len,
     unsigned char **dst);
 
+static int
+pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
+    uint8_t **buff_out, uint32_t *size_out, prc_pdf_view_array **views,
+    uint32_t *number_views, uint32_t recursive_depth);
+
 int
 pdf_eat_white_space(prc_context *ctx, uint8_t **ptr, uint8_t *boundary)
 {
@@ -1081,6 +1086,333 @@ pdf_buffer_contains_ascii_case_insensitive(const uint8_t *buf, uint32_t buf_len,
 }
 
 static int
+pdf_buffer_looks_like_pdf(const uint8_t *buf, uint32_t buf_len)
+{
+    uint32_t i;
+    uint32_t head_scan_len;
+    uint32_t tail_scan_len;
+    const uint8_t *tail_ptr;
+
+    if (buf == NULL || buf_len < 16)
+    {
+        return 0;
+    }
+
+    head_scan_len = (buf_len < 1024) ? buf_len : 1024;
+    for (i = 0; i + 5 <= head_scan_len; i++)
+    {
+        if (memcmp(buf + i, "%PDF-", 5) == 0)
+        {
+            break;
+        }
+    }
+    if (i + 5 > head_scan_len)
+    {
+        return 0;
+    }
+
+    tail_scan_len = (buf_len < 8192) ? buf_len : 8192;
+    tail_ptr = buf + (buf_len - tail_scan_len);
+    if (!pdf_buffer_contains_ascii_case_insensitive(tail_ptr, tail_scan_len,
+        "startxref"))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int
+pdf_try_extract_from_embedded_pdfs(prc_context *ctx, uint8_t *pdf_buff_in,
+    uint32_t size_in, prc_pdf_head_xref *head_xref,
+    prc_pdf_uncompressed_object_stream_list *stream_list,
+    uint8_t streams_encrypted, prc_pdf_decrypt_params *decrypt_params,
+    uint8_t **buff_out,
+    uint32_t *size_out, prc_pdf_view_array **views, uint32_t *number_views,
+    uint32_t recursive_depth)
+{
+    uint32_t j;
+    uint32_t tried_candidates = 0;
+    const uint32_t max_candidates = 64;
+    uint8_t *file_end = pdf_buff_in + size_in;
+
+    if (head_xref == NULL || head_xref->xref_objects == NULL)
+    {
+        return 0;
+    }
+
+    for (j = 0; j < head_xref->num_objects; j++)
+    {
+        uint8_t *filespec_ptr;
+        uint8_t *ef_dict_start;
+        uint8_t *ef_dict_end;
+        uint8_t keyout[PDF_MAX_DICT_VALUE];
+        uint32_t actual_keyout_len;
+        uint32_t filespec_size;
+        uint32_t embedded_obj_num = 0;
+        uint32_t embedded_gen_num = 0;
+        uint8_t is_object_stream_item = 0;
+        int code;
+
+        if (tried_candidates >= max_candidates)
+        {
+            break;
+        }
+
+        if (head_xref->xref_objects[j].type != PRC_PDF_XREF_USED_TYPE)
+        {
+            continue;
+        }
+
+        filespec_ptr = pdf_buff_in + head_xref->xref_objects[j].byte_offset;
+
+        code = prc_pdf_dict_get_type(ctx, filespec_ptr, file_end,
+            PDF_TYPE_NAME, keyout, PDF_MAX_DICT_VALUE, &actual_keyout_len);
+        if (code <= 0 || strncmp((char *)keyout, "/Filespec", actual_keyout_len) != 0)
+        {
+            continue;
+        }
+
+        filespec_ptr = prc_pdf_get_ptr_to_obj(ctx, pdf_buff_in, size_in, head_xref,
+            stream_list, head_xref->xref_objects[j].object_number,
+            &filespec_size, &is_object_stream_item);
+        if (filespec_ptr == NULL)
+        {
+            continue;
+        }
+
+        code = prc_pdf_dict_get_dict(ctx, filespec_ptr, filespec_ptr + filespec_size,
+            PDF_EF_NAME, &ef_dict_start, &ef_dict_end);
+        if (code <= 0)
+        {
+            continue;
+        }
+
+        code = prc_pdf_dict_get_ref(ctx, ef_dict_start, ef_dict_end, PDF_F_NAME,
+            &embedded_obj_num, &embedded_gen_num);
+        if (code <= 0 || embedded_obj_num == 0)
+        {
+            continue;
+        }
+
+        prc_error(ctx, PRC_ERROR_PARSE,
+            "Embedded Filespec candidate stream ref: %u %u\n",
+            embedded_obj_num, embedded_gen_num);
+
+        {
+            uint8_t *embedded_ptr;
+            uint32_t embedded_size;
+            uint8_t embedded_is_stream_item;
+            uint8_t *ptr_stream;
+            uint32_t stream_length;
+            uint32_t stream_obj_num;
+            uint32_t stream_gen_num;
+            uint8_t *decoded_stream = NULL;
+            uint32_t decoded_size = 0;
+
+            embedded_ptr = prc_pdf_get_ptr_to_obj(ctx, pdf_buff_in, size_in,
+                head_xref, stream_list, embedded_obj_num, &embedded_size,
+                &embedded_is_stream_item);
+            if (embedded_ptr == NULL)
+            {
+                continue;
+            }
+
+            code = pdf_get_stream_info(ctx, embedded_ptr, file_end, &ptr_stream,
+                &stream_length, &stream_obj_num, &stream_gen_num);
+            if (code < 0)
+            {
+                continue;
+            }
+
+            if (stream_length == 0 || stream_length > (64U * 1024U * 1024U))
+            {
+                continue;
+            }
+
+            if (streams_encrypted)
+            {
+                size_t decrypted_size = pdf_decrypt_get_size(ctx, decrypt_params,
+                    stream_length);
+                uint8_t *decrypted_data;
+                uint32_t actual_decrypted_size;
+
+                if (decrypted_size == 0)
+                {
+                    continue;
+                }
+
+                decrypted_data = (uint8_t *)prc_calloc(ctx, decrypted_size,
+                    sizeof(uint8_t));
+                if (decrypted_data == NULL)
+                {
+                    continue;
+                }
+
+                code = pdf_get_decrypted_stream_data(ctx, ptr_stream, stream_length,
+                    decrypt_params, decrypted_data, decrypted_size, stream_obj_num,
+                    stream_gen_num, &actual_decrypted_size);
+                if (code < 0)
+                {
+                    prc_free(ctx, decrypted_data);
+                    continue;
+                }
+
+                code = pdf_get_stream_data(ctx, embedded_ptr, file_end, decrypted_data,
+                    actual_decrypted_size, &decoded_stream, &decoded_size);
+                prc_free(ctx, decrypted_data);
+                if (code < 0)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                code = pdf_get_stream_data(ctx, embedded_ptr, file_end, ptr_stream,
+                    stream_length, &decoded_stream, &decoded_size);
+                if (code < 0)
+                {
+                    continue;
+                }
+            }
+
+            if (decoded_stream == NULL)
+            {
+                continue;
+            }
+
+            if (pdf_buffer_looks_like_pdf(decoded_stream, decoded_size))
+            {
+                tried_candidates++;
+                prc_error(ctx, PRC_ERROR_PARSE,
+                    "Trying embedded child PDF (Filespec path), size=%u, attempt=%u\n",
+                    decoded_size, tried_candidates);
+                code = pdf_extract_prc_internal(ctx, decoded_stream, decoded_size,
+                    buff_out, size_out, views, number_views, recursive_depth);
+                prc_free(ctx, decoded_stream);
+                if (code == 0)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE,
+                        "Embedded child PDF extraction succeeded (Filespec path)\n");
+                    return 1;
+                }
+                continue;
+            }
+
+            prc_free(ctx, decoded_stream);
+        }
+    }
+
+    for (j = 0; j < head_xref->num_objects; j++)
+    {
+        uint8_t *obj_ptr;
+        uint8_t *ptr_stream;
+        uint32_t stream_length;
+        uint32_t stream_obj_num;
+        uint32_t stream_gen_num;
+        uint8_t *decoded_stream = NULL;
+        uint32_t decoded_size = 0;
+        int code;
+
+        if (tried_candidates >= max_candidates)
+        {
+            break;
+        }
+
+        if (head_xref->xref_objects[j].type != PRC_PDF_XREF_USED_TYPE)
+        {
+            continue;
+        }
+
+        obj_ptr = pdf_buff_in + head_xref->xref_objects[j].byte_offset;
+        code = pdf_get_stream_info(ctx, obj_ptr, file_end, &ptr_stream,
+            &stream_length, &stream_obj_num, &stream_gen_num);
+        if (code < 0)
+        {
+            continue;
+        }
+
+        if (stream_length == 0 || stream_length > (64U * 1024U * 1024U))
+        {
+            continue;
+        }
+
+        if (streams_encrypted)
+        {
+            size_t decrypted_size = pdf_decrypt_get_size(ctx, decrypt_params,
+                stream_length);
+            uint8_t *decrypted_data;
+            uint32_t actual_decrypted_size;
+
+            if (decrypted_size == 0)
+            {
+                continue;
+            }
+
+            decrypted_data = (uint8_t *)prc_calloc(ctx, decrypted_size,
+                sizeof(uint8_t));
+            if (decrypted_data == NULL)
+            {
+                continue;
+            }
+
+            code = pdf_get_decrypted_stream_data(ctx, ptr_stream, stream_length,
+                decrypt_params, decrypted_data, decrypted_size, stream_obj_num,
+                stream_gen_num, &actual_decrypted_size);
+            if (code < 0)
+            {
+                prc_free(ctx, decrypted_data);
+                continue;
+            }
+
+            code = pdf_get_stream_data(ctx, obj_ptr, file_end, decrypted_data,
+                actual_decrypted_size, &decoded_stream, &decoded_size);
+            prc_free(ctx, decrypted_data);
+            if (code < 0)
+            {
+                continue;
+            }
+        }
+        else
+        {
+            code = pdf_get_stream_data(ctx, obj_ptr, file_end, ptr_stream,
+                stream_length, &decoded_stream, &decoded_size);
+            if (code < 0)
+            {
+                continue;
+            }
+        }
+
+        if (decoded_stream == NULL)
+        {
+            continue;
+        }
+
+        if (pdf_buffer_looks_like_pdf(decoded_stream, decoded_size))
+        {
+            tried_candidates++;
+            prc_error(ctx, PRC_ERROR_PARSE,
+                "Trying embedded child PDF (stream scan path), size=%u, attempt=%u\n",
+                decoded_size, tried_candidates);
+            code = pdf_extract_prc_internal(ctx, decoded_stream, decoded_size,
+                buff_out, size_out, views, number_views, recursive_depth);
+            prc_free(ctx, decoded_stream);
+            if (code == 0)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE,
+                    "Embedded child PDF extraction succeeded (stream scan path)\n");
+                return 1;
+            }
+            continue;
+        }
+
+        prc_free(ctx, decoded_stream);
+    }
+
+    return 0;
+}
+
+static int
 pdf_name_has_prc_extension(const uint8_t *name_start, const uint8_t *name_end)
 {
     uint32_t len;
@@ -1244,6 +1576,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     uint8_t *ptr = pdf_buff_in + byte_offset;
     int code;
     uint8_t found_obj = 0;
+    uint8_t found_dict_start = 0;
     uint8_t keyout[PDF_MAX_DICT_VALUE];
     uint32_t actual_keyout_len;
     uint32_t object_num_media;
@@ -1280,20 +1613,36 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     }
     if (!found_obj)
     {
-        return 0;
+        ptr = pdf_buff_in + byte_offset;
+        while (ptr + 1 < pdf_buff_in + size_in)
+        {
+            if (*ptr == '<' && *(ptr + 1) == '<')
+            {
+                found_dict_start = 1;
+                break;
+            }
+            ptr++;
+        }
+        if (!found_dict_start)
+        {
+            return 0;
+        }
     }
-    ptr += PDF_OBJECT_NAME_LEN;
+    else
+    {
+        ptr += PDF_OBJECT_NAME_LEN;
 
-    /* Eat any white space */
-    code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
-    if (code < 0)
-    {
-        return code;
-    }
-    /* Is it a dictionary */
-    if (strncmp((char *)ptr, "<<", 2) != 0)
-    {
-        return 0;
+        /* Eat any white space */
+        code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
+        if (code < 0)
+        {
+            return code;
+        }
+        /* Is it a dictionary */
+        if (strncmp((char *)ptr, "<<", 2) != 0)
+        {
+            return 0;
+        }
     }
 
     /* Yes. Lets look for a Annot Type */
@@ -1460,6 +1809,114 @@ pdf_object_is_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     {
         return 0;
     }
+}
+
+static int
+pdf_find_prc_stream_by_used_stream_scan(prc_context *ctx, uint8_t *pdf_buff_in,
+    uint32_t size_in, prc_pdf_head_xref *head_xref, uint8_t streams_encrypted,
+    prc_pdf_decrypt_params *decrypt_params, uint32_t *prc_offset)
+{
+    uint32_t j;
+    uint8_t *file_end = pdf_buff_in + size_in;
+
+    *prc_offset = 0;
+
+    if (head_xref == NULL || head_xref->xref_objects == NULL)
+    {
+        return 0;
+    }
+
+    for (j = 0; j < head_xref->num_objects; j++)
+    {
+        uint8_t *obj_ptr;
+        uint8_t *ptr_stream;
+        uint32_t stream_length;
+        uint32_t stream_obj_num;
+        uint32_t stream_gen_num;
+        uint8_t *decoded_stream = NULL;
+        uint32_t decoded_size = 0;
+        int code;
+
+        if (head_xref->xref_objects[j].type != PRC_PDF_XREF_USED_TYPE)
+        {
+            continue;
+        }
+
+        obj_ptr = pdf_buff_in + head_xref->xref_objects[j].byte_offset;
+        code = pdf_get_stream_info(ctx, obj_ptr, file_end, &ptr_stream,
+            &stream_length, &stream_obj_num, &stream_gen_num);
+        if (code < 0)
+        {
+            continue;
+        }
+
+        if (stream_length >= PDF_PRC_STREAM_HEADER_LEN &&
+            strncmp((char *)ptr_stream, PDF_PRC_STREAM_HEADER,
+                PDF_PRC_STREAM_HEADER_LEN) == 0)
+        {
+            *prc_offset = head_xref->xref_objects[j].byte_offset;
+            return 1;
+        }
+
+        if (streams_encrypted)
+        {
+            size_t decrypted_size = pdf_decrypt_get_size(ctx, decrypt_params, stream_length);
+            uint8_t *decrypted_data;
+            uint32_t actual_decrypted_size;
+
+            if (decrypted_size == 0)
+            {
+                continue;
+            }
+
+            decrypted_data = (uint8_t *)prc_calloc(ctx, decrypted_size, sizeof(uint8_t));
+            if (decrypted_data == NULL)
+            {
+                continue;
+            }
+
+            code = pdf_get_decrypted_stream_data(ctx, ptr_stream, stream_length,
+                decrypt_params, decrypted_data, decrypted_size,
+                stream_obj_num, stream_gen_num, &actual_decrypted_size);
+            if (code < 0)
+            {
+                prc_free(ctx, decrypted_data);
+                continue;
+            }
+
+            code = pdf_get_stream_data(ctx, obj_ptr, file_end, decrypted_data,
+                actual_decrypted_size, &decoded_stream, &decoded_size);
+            prc_free(ctx, decrypted_data);
+            if (code < 0)
+            {
+                continue;
+            }
+        }
+        else
+        {
+            code = pdf_get_stream_data(ctx, obj_ptr, file_end, ptr_stream,
+                stream_length, &decoded_stream, &decoded_size);
+            if (code < 0)
+            {
+                continue;
+            }
+        }
+
+        if (decoded_stream != NULL)
+        {
+            if (decoded_size >= PDF_PRC_STREAM_HEADER_LEN &&
+                strncmp((char *)decoded_stream, PDF_PRC_STREAM_HEADER,
+                    PDF_PRC_STREAM_HEADER_LEN) == 0)
+            {
+                prc_free(ctx, decoded_stream);
+                *prc_offset = head_xref->xref_objects[j].byte_offset;
+                return 1;
+            }
+            prc_free(ctx, decoded_stream);
+        }
+    }
+
+    return 0;
 }
 
 static int32_t
@@ -2004,16 +2461,16 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
    make this more robust.  I don't handle subsections in the xref table or deal
    with free objects properly */
 int
-pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
+pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
                 uint8_t **buff_out, uint32_t *size_out, prc_pdf_view_array **views,
-                uint32_t *number_views)
+                uint32_t *number_views, uint32_t recursive_depth)
 {
     /* Get us to the trailer in the PDF file */
     uint8_t *ptr = pdf_buff_in;
     uint32_t xref_offset = 0;
     int code;
     int8_t found_prc = 0;
-    int32_t prc_offset = 0;
+    uint32_t prc_offset = 0;
     uint8_t *ptr_stream;
     uint32_t stream_length;
     uint8_t xref_encoded = 0;
@@ -2177,6 +2634,13 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
                 {
                     if (head_xref.xref_objects[j].type == PRC_PDF_XREF_USED_TYPE)
                     {
+                        uint8_t *ptr_stream_local;
+                        uint32_t stream_length_local;
+                        uint32_t stream_obj_num_local;
+                        uint32_t stream_gen_num_local;
+                        uint8_t *decoded_richmedia = NULL;
+                        uint32_t decoded_richmedia_size = 0;
+
                         ptr = pdf_buff_in + head_xref.xref_objects[j].byte_offset;
                         length = file_end - ptr;
                         code = pdf_object_is_rich_media(ctx, &decrypt_params, &stream_list,
@@ -2191,6 +2655,79 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
                             found_prc = 1;
                             break;
                         }
+
+                        code = pdf_get_stream_info(ctx, ptr, file_end, &ptr_stream_local,
+                            &stream_length_local, &stream_obj_num_local, &stream_gen_num_local);
+                        if (code < 0)
+                        {
+                            continue;
+                        }
+
+                        if (streams_encrypted)
+                        {
+                            size_t decrypted_size_local = pdf_decrypt_get_size(ctx,
+                                &decrypt_params, stream_length_local);
+                            uint8_t *decrypted_local;
+                            uint32_t actual_decrypted_size_local;
+
+                            if (decrypted_size_local == 0)
+                            {
+                                continue;
+                            }
+
+                            decrypted_local = (uint8_t *)prc_calloc(ctx,
+                                decrypted_size_local, sizeof(uint8_t));
+                            if (decrypted_local == NULL)
+                            {
+                                continue;
+                            }
+
+                            code = pdf_get_decrypted_stream_data(ctx, ptr_stream_local,
+                                stream_length_local, &decrypt_params, decrypted_local,
+                                decrypted_size_local, stream_obj_num_local,
+                                stream_gen_num_local, &actual_decrypted_size_local);
+                            if (code < 0)
+                            {
+                                prc_free(ctx, decrypted_local);
+                                continue;
+                            }
+
+                            code = pdf_get_stream_data(ctx, ptr, file_end, decrypted_local,
+                                actual_decrypted_size_local, &decoded_richmedia,
+                                &decoded_richmedia_size);
+                            prc_free(ctx, decrypted_local);
+                            if (code < 0)
+                            {
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            code = pdf_get_stream_data(ctx, ptr, file_end,
+                                ptr_stream_local, stream_length_local,
+                                &decoded_richmedia, &decoded_richmedia_size);
+                            if (code < 0)
+                            {
+                                continue;
+                            }
+                        }
+
+                        if (decoded_richmedia != NULL)
+                        {
+                            code = pdf_object_is_rich_media(ctx, &decrypt_params,
+                                &stream_list, &head_xref, decoded_richmedia,
+                                decoded_richmedia_size, 0, pdf_buff_in, size_in,
+                                &prc_offset, &rich_media_view_obj_num,
+                                &rich_media_view_gen_num);
+                            prc_free(ctx, decoded_richmedia);
+
+                            if (prc_offset != 0)
+                            {
+                                is_richmedia = 1;
+                                found_prc = 1;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -2199,9 +2736,30 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
 
     if (!found_prc)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Did not find PRC object in PDF file\n");
-        code = PRC_ERROR_PARSE;
-        goto fail;
+        /* Fallback for odd files: scan all used stream objects for a raw PRC header. */
+        code = pdf_find_prc_stream_by_used_stream_scan(ctx, pdf_buff_in, size_in,
+            &head_xref, streams_encrypted, &decrypt_params, &prc_offset);
+        if (code == 1)
+        {
+            found_prc = 1;
+        }
+        else
+        {
+            if (recursive_depth < 1)
+            {
+                code = pdf_try_extract_from_embedded_pdfs(ctx, pdf_buff_in, size_in,
+                    &head_xref, &stream_list, streams_encrypted,
+                    &decrypt_params, buff_out, size_out, views, number_views,
+                    recursive_depth + 1);
+                if (code == 1)
+                {
+                    goto success;
+                }
+            }
+            prc_error(ctx, PRC_ERROR_PARSE, "Did not find PRC object in PDF file\n");
+            code = PRC_ERROR_PARSE;
+            goto fail;
+        }
     }
 
     /* Now we have the offset to the PRC object, we need to get the buffer from 
@@ -2325,6 +2883,7 @@ pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         *views = NULL;
     }
 
+success:
     /* Release the xref data and any streams */
     if (stream_list.number_streams > 0)
     {
@@ -2398,4 +2957,13 @@ fail:
     }
 
     return code;
+}
+
+int
+pdf_extract_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
+                uint8_t **buff_out, uint32_t *size_out, prc_pdf_view_array **views,
+                uint32_t *number_views)
+{
+    return pdf_extract_prc_internal(ctx, pdf_buff_in, size_in, buff_out,
+        size_out, views, number_views, 0);
 }
