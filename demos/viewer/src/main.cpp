@@ -89,6 +89,49 @@ static Camera _camera;
 static void run(Config &config, SDL_Window *window, const char *file, bool headless = false, const char *output_file = NULL, bool memoryLeakCheck = false);
 static bool debugMenu(float time, float deltaTime);
 
+static const char *normalDebugModeLabel(int mode)
+{
+    switch (mode)
+    {
+    default:
+    case 0:
+        return "Off";
+    case 1:
+        return "Normal RGB";
+    case 2:
+        return "Normal Length";
+    case 3:
+        return "Degenerate Mask";
+    case 4:
+        return "Shader Branch";
+    }
+}
+
+static void drawNormalDebugOverlay()
+{
+    const int mode = _scene.normalDebugMode();
+
+    if (mode == 0)
+        return;
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav;
+
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.35f);
+
+    if (ImGui::Begin("Normal Debug Overlay", nullptr, flags))
+    {
+        ImGui::Text("Normals: %s (%d)", normalDebugModeLabel(mode), mode);
+        ImGui::Text("Hotkeys: 0 Off | 1 RGB | 2 Len | 3 Mask | 4 Branch");
+    }
+    ImGui::End();
+}
+
 static void initSDL()
 {
     if (!SDL_Init(SDL_INIT_VIDEO))
@@ -421,6 +464,26 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     _scene.load(file, &_camera, memoryLeakCheck);
     _scene.setCameraInitialPosition(&_camera);
 
+    {
+        float recommendedAmbient = 0.6f;
+        float recommendedDiffuse = 1.0f;
+        float recommendedSunIntensity = 1.0f;
+        _scene.recommendLightingDefaults(&recommendedAmbient,
+            &recommendedDiffuse, &recommendedSunIntensity);
+
+        _scene.ambientWeight() = config.hasKey("Lighting.ambient_weight") ?
+            clamp(config.getFloat("Lighting.ambient_weight", recommendedAmbient), 0.0f, 2.5f) :
+            recommendedAmbient;
+
+        _scene.diffuseWeight() = config.hasKey("Lighting.diffuse_weight") ?
+            clamp(config.getFloat("Lighting.diffuse_weight", recommendedDiffuse), 0.0f, 2.5f) :
+            recommendedDiffuse;
+
+        _atmosphere.sunIntensity = config.hasKey("Lighting.sun_intensity") ?
+            max(config.getFloat("Lighting.sun_intensity", recommendedSunIntensity), 0.0f) :
+            recommendedSunIntensity;
+    }
+
     _renderScale = clamp(config.getFloat("Display.render_scale", 1.0f), 0.25f, 1.0f);
 
     bool enableShadows = config.getBool("Shadows.enable", true);
@@ -441,7 +504,6 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     _atmosphere.sunAltitude = fmodf(config.getFloat("Lighting.sun_altitude", 40.0f), 360.0f);
     _atmosphere.sunAzimuth = fmodf(config.getFloat("Lighting.sun_azimuth", 0.0f), 360.0f);
     _atmosphere.sunColor = clamp(Vector3(config.getIntVector3("Lighting.sun_color", IntVector3(255))) / 255.0f, 0.0f, 1.0f);
-    _atmosphere.sunIntensity = max(config.getFloat("Lighting.sun_intensity", 1.0f), 0.0f);
 
     Bloom *bloom = _scene.bloom();
     Compositor *compositor = _scene.compositor();
@@ -610,6 +672,26 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
                 break;
             case SDL_EVENT_KEY_DOWN:
                 keys[(uint8_t)evt.key.scancode] = true;
+                switch (evt.key.scancode)
+                {
+                default:
+                    break;
+                case SDL_SCANCODE_0:
+                    _scene.normalDebugMode() = 0;
+                    break;
+                case SDL_SCANCODE_1:
+                    _scene.normalDebugMode() = 1;
+                    break;
+                case SDL_SCANCODE_2:
+                    _scene.normalDebugMode() = 2;
+                    break;
+                case SDL_SCANCODE_3:
+                    _scene.normalDebugMode() = 3;
+                    break;
+                case SDL_SCANCODE_4:
+                    _scene.normalDebugMode() = 4;
+                    break;
+                }
                 break;
             case SDL_EVENT_KEY_UP:
                 keys[(uint8_t)evt.key.scancode] = false;
@@ -761,6 +843,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
         glViewport(0, 0, _scene.width(), _scene.height());
 
         mouse_over_debug = debugMenu(time, deltaTime);
+        drawNormalDebugOverlay();
 
         _camera.upDateView(_scene.models()[0]);
 
@@ -790,6 +873,8 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     config.setFloat("Input.turn_speed", kTurnSpeed);
 
     config.setBool("Lighting.fullbright", _scene.fullbright());
+    config.setFloat("Lighting.ambient_weight", _scene.ambientWeight());
+    config.setFloat("Lighting.diffuse_weight", _scene.diffuseWeight());
     config.setFloat("Lighting.sun_altitude", _atmosphere.sunAltitude);
     config.setFloat("Lighting.sun_azimuth", _atmosphere.sunAzimuth);
     config.setIntVector3("Lighting.sun_color", IntVector3(_atmosphere.sunColor * 255.0f));
@@ -956,6 +1041,8 @@ static bool debugMenu(float time, float deltaTime)
             ImGui::SeparatorText("Debug");
             ImGui::Checkbox("Backface Culling", &_scene.backfaceCull());
             ImGui::Checkbox("Wireframe", &_scene.wireframe());
+            ImGui::SliderInt("Normal Debug Mode", &_scene.normalDebugMode(), 0, 4);
+            ImGui::Text("Hotkeys: 0=Off, 1=Normal RGB, 2=Normal Length, 3=Degenerate Mask, 4=Branch");
 
             ImGui::EndTabItem();
         }
@@ -979,6 +1066,13 @@ static bool debugMenu(float time, float deltaTime)
         {
             ImGui::SeparatorText("General");
             ImGui::Checkbox("Fullbright", &_scene.fullbright());
+            if (ImGui::Button("Compute From Current File"))
+            {
+                _scene.recommendLightingDefaults(&_scene.ambientWeight(),
+                    &_scene.diffuseWeight(), &_atmosphere.sunIntensity);
+            }
+            ImGui::SliderFloat("Ambient Weight", &_scene.ambientWeight(), 0.0f, 2.5f, "%.3f");
+            ImGui::SliderFloat("Diffuse Weight", &_scene.diffuseWeight(), 0.0f, 2.5f, "%.3f");
 
             ImGui::SeparatorText("Sun");
             ImGui::SliderFloat("Altitude", &_atmosphere.sunAltitude, 0.0f, 360.0f);

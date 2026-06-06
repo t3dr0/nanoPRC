@@ -71,6 +71,8 @@ public:
 
     constexpr Product **children() const { return _children; }
     constexpr uint32_t numChildren() const { return _nchildren; }
+    constexpr const Material *materials() const { return _material; }
+    constexpr uint32_t numMaterials() const { return _numMaterials; }
 
     void attach(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, Graphics2D &textRenderer);
     void attachTextContent(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, Graphics2D &textRenderer);

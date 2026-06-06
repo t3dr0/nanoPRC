@@ -98,6 +98,93 @@ void Scene::setCameraInitialPosition(Camera *camera)
     camera->setFar(farPlane);
 }
 
+void Scene::recommendLightingDefaults(float *ambientWeight, float *diffuseWeight,
+    float *sunIntensity) const
+{
+    const float defaultAmbient = 0.6f;
+    const float defaultDiffuse = 1.0f;
+    const float defaultSunIntensity = 1.0f;
+
+    double sumDiffuseLuma = 0.0;
+    double sumDiffuseSaturation = 0.0;
+    double sumSpecularLuma = 0.0;
+    uint32_t count = 0;
+
+    if (_products != NULL)
+    {
+        for (uint32_t i = 0; i < _nproducts; i++)
+        {
+            const Product &product = _products[i];
+            const Material *materials = product.materials();
+            uint32_t numMaterials = product.numMaterials();
+
+            if (materials == NULL || numMaterials == 0)
+                continue;
+
+            for (uint32_t m = 0; m < numMaterials; m++)
+            {
+                const Vector3 &d = materials[m].diffuse;
+                const Vector3 &s = materials[m].specular;
+
+                float dMax = fmaxf(d.x, fmaxf(d.y, d.z));
+                float dMin = fminf(d.x, fminf(d.y, d.z));
+                float dSat = (dMax > 1e-5f) ? ((dMax - dMin) / dMax) : 0.0f;
+
+                float dLuma = 0.2126f * d.x + 0.7152f * d.y + 0.0722f * d.z;
+                float sLuma = 0.2126f * s.x + 0.7152f * s.y + 0.0722f * s.z;
+
+                sumDiffuseLuma += dLuma;
+                sumDiffuseSaturation += dSat;
+                sumSpecularLuma += sLuma;
+                count++;
+            }
+        }
+    }
+
+    if (count == 0)
+    {
+        if (ambientWeight)
+            *ambientWeight = defaultAmbient;
+        if (diffuseWeight)
+            *diffuseWeight = defaultDiffuse;
+        if (sunIntensity)
+            *sunIntensity = defaultSunIntensity;
+        return;
+    }
+
+    {
+        float avgDiffuseLuma = (float)(sumDiffuseLuma / count);
+        float avgDiffuseSat = (float)(sumDiffuseSaturation / count);
+        float avgSpecularLuma = (float)(sumSpecularLuma / count);
+
+        float ambient = 0.72f
+            - 0.20f * avgDiffuseLuma
+            - 0.12f * avgDiffuseSat
+            + 0.08f * (1.0f - avgSpecularLuma);
+
+        float diffuse = 0.95f
+            + 0.18f * avgDiffuseSat
+            + 0.10f * (1.0f - avgDiffuseLuma)
+            - 0.06f * avgSpecularLuma;
+
+        float sun = 0.95f
+            + 0.30f * (1.0f - avgDiffuseLuma)
+            - 0.18f * avgSpecularLuma;
+
+        if (ambientWeight)
+            *ambientWeight = clamp(ambient, 0.25f, 0.90f);
+        if (diffuseWeight)
+            *diffuseWeight = clamp(diffuse, 0.80f, 1.35f);
+        if (sunIntensity)
+            *sunIntensity = clamp(sun, 0.45f, 1.35f);
+    }
+}
+
+void Scene::recommendLightingWeights(float *ambientWeight, float *diffuseWeight) const
+{
+    recommendLightingDefaults(ambientWeight, diffuseWeight, NULL);
+}
+
 void Scene::render(Camera *camera)
 {
     glViewport(0, 0, _renderWidth, _renderHeight);
@@ -791,7 +878,8 @@ Scene::Scene() : _products(nullptr), _nproducts(0),
                  _groundHeight(-10.0f), _groundSize(Vector2(100.0f, 100.0f)), _enableGround(false),
                  _shadowShader(nullptr), _shadowMap(nullptr),
                  _compositeShader(nullptr), _compositor(nullptr),
-                 _fullbright(false), _backfaceCull(false),
+                 _fullbright(false), _ambientWeight(1.0f), _diffuseWeight(1.0f),
+                 _normalDebugMode(0), _backfaceCull(false),
                  _enableBloom(true), _bloom(nullptr),
                  _enableToneMapping(true), _enableMotion(true),
                  _width(0), _height(0), _textRenderer(nullptr),
@@ -821,6 +909,9 @@ void Scene::renderModels(Camera *camera) const
 
     _meshShader->setWireframe(_wireframe);
     _meshShader->setFullbright(_fullbright);
+    _meshShader->setAmbientWeight(_ambientWeight);
+    _meshShader->setDiffuseWeight(_diffuseWeight);
+    _meshShader->setDebugMode(_normalDebugMode);
 
     /* Shadow mapping */
     if (_shadowMap)

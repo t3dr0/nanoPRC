@@ -1810,7 +1810,8 @@ static int
 prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data_in,
     uint32_t file_index, uint32_t style_index, float alpha, uint8_t dont_allow_texture,
     uint8_t *is_material, uint8_t *is_texture, prc_api_material *material,
-    prc_internal_graph_style *style, float *color, uint32_t face_index, uint32_t tess_index)
+    prc_internal_graph_style *style, float *color, uint32_t face_index, uint32_t tess_index,
+    uint8_t *had_defined_style)
 {
     prc_data *data = (prc_data *)data_in;
     prc_filestructure *file_struct;
@@ -1818,6 +1819,7 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
     prc_file_structure_header *header;
     int code;
     prc_graph_material prc_material;
+    *had_defined_style = 0;
 
     if (file_index >= data->file_structure_count)
     {
@@ -1888,6 +1890,8 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
 
         return 0;
     }
+
+    *had_defined_style = 1;
 
     /* style_index_in is unbiased */
     if (style_index < global_data->style_count)
@@ -2133,7 +2137,7 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
     uint8_t dont_allow_texture, uint8_t *is_material, uint8_t *is_texture,
     prc_api_material *material, prc_internal_graph_style *style, float *color,
     prc_api_tess *api_tess, prc_api_face *face_out, uint32_t face_index,
-    uint32_t tess_index)
+    uint32_t tess_index, uint8_t *had_defined_style)
 {
     int32_t code;
     prc_data *data = (prc_data *)data_in;
@@ -2142,7 +2146,8 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
 
     code = prc_api_helper_get_material_from_style_index(ctx, data_in,
         file_index, style_index, alpha, dont_allow_texture,
-        is_material, is_texture, material, style, color, face_index, tess_index);
+        is_material, is_texture, material, style, color, face_index, tess_index,
+        had_defined_style);
     if (code < 0)
         return code;
 
@@ -2220,7 +2225,7 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
         if (style->base_with_graphics->base.name.name.size > 0 &&
             style->base_with_graphics->base.name.name.string != NULL)
         {
-            char temp_str[] = "Shock Body\0";
+            char temp_str[] = "mesh (24)\0";
             if (strncmp(style->base_with_graphics->base.name.name.string, temp_str, strlen(temp_str) - 1) == 0)
             {
                 int zz = 1;
@@ -2449,6 +2454,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     uint32_t leaf_style_file_index = 0;
     prc_internal_graph_style graph_style;
     uint8_t has_more_than_one_ref_style = false;
+    uint8_t has_ref_style_defined = false;
 
     api_tess->has_transparency = 0;
 
@@ -2524,7 +2530,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 leaf_style_unbiased_index, alpha, is_uncompressed_with_no_texture_entities,
                 &api_tess->is_material, &has_texture, &api_tess->tess_material,
                 face_out_reserved->style, face_color, api_tess, face_out, face_index,
-                tess_index_in);
+                tess_index_in, &has_ref_style_defined);
             if (code < 0)
             {
                 prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
@@ -2600,7 +2606,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                     leaf_style_unbiased_index, alpha, is_uncompressed_with_no_texture_entities,
                     &api_tess->is_material, &has_texture, &api_tess->tess_material,
                     &face_out_reserved->style[k], face_color, api_tess, face_out, k,
-                    tess_index_in);
+                    tess_index_in, &has_ref_style_defined);
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
@@ -3201,6 +3207,33 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         if (code < 0)
             return code;
 
+#if 0
+        /* DEBUG. Print out all the vertex positions, normals and diffuse color */
+        for (k = 0; k < face_vertex_out->num_vertices; k++)
+        {
+            printf("Vertex %d: Pos(%f, %f, %f) Normal(%f, %f, %f) Diffuse(%f, %f, %f) Color(%f, %f, %f, %f) Style(face_index=%d file_index=%d) tri_has_material = %d\n",
+                k,
+                face_vertex_out->vertices[k].position[0], face_vertex_out->vertices[k].position[1], face_vertex_out->vertices[k].position[2],
+                face_vertex_out->vertices[k].normal[0], face_vertex_out->vertices[k].normal[1], face_vertex_out->vertices[k].normal[2],
+                face_vertex_out->vertices[k].diffuse[0], face_vertex_out->vertices[k].diffuse[1], face_vertex_out->vertices[k].diffuse[2],
+                face_vertex_out->vertices[k].color[0], face_vertex_out->vertices[k].color[1], face_vertex_out->vertices[k].color[2], face_vertex_out->vertices[k].color[3],
+                face_vertex_out->vertices[k].style_index, face_vertex_out->vertices[k].style_file_index,
+                face_vertex_out->vertices[k].tri_has_material);
+
+            if (face_out->is_texture)
+            {
+                printf("    UV(%f, %f)\n", face_vertex_out->vertices[k].uv[0], face_vertex_out->vertices[k].uv[1]);
+                printf(" Color = (%f, %f, %f)\n", face_vertex_out->vertices[k].color[0], face_vertex_out->vertices[k].color[1], face_vertex_out->vertices[k].color[2]);
+            }
+        }
+
+        /* And now print out the indices */
+        for (k = 0; k < face_out_reserved->num_indices; k++)
+        {
+            printf("Index %d: %d\n", k, face_out_reserved->vertex_indices[k]);
+        }
+#endif
+
         /* Free many items. */
         if (uncompressed_data.decoded_colors != NULL)
             prc_free(ctx, uncompressed_data.decoded_colors);
@@ -3395,15 +3428,15 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         }
         else
         {
-            if (has_style)
-            {
-                face_style_index = tess->triangle_styles[0];
-                face_style_file_index = file_index;
-            }
-            else
+            if (has_ref_style_defined)
             {
                 face_style_index = face_out_reserved->style[0].face_style_index;
                 face_style_file_index = face_out_reserved->style[0].face_style_file_index;
+            }
+            else
+            {
+                face_style_index = tess->triangle_styles[0];
+                face_style_file_index = file_index;
             }
         }
 
@@ -3561,23 +3594,23 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 if (position_normal_pair[prc_position_index].style_set == PRC_INTERNAL_API_NO_STYLE &&
                     position_normal_pair[prc_position_index].color_set == PRC_INTERNAL_API_NO_COLOR)
                 {
-                    if (has_style)
+                    if (has_ref_style_defined)
                     {
                         /* Use the style for this entire face get it from 
                            the tessellation data. global data is the 
                            proper place */
-                        prc_api_helper_set_tri_style(ctx, global_data, file_index, header,
-                            vertex_out, prc_position_index, tess, triangle_count,
-                            &position_normal_pair[prc_position_index],
-                            face_out_reserved, PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
-                    }
-                    else
-                    {
                         prc_api_helper_set_vertex_style_from_face_ref(ctx,
                             face_out->vertices_have_style, vertex_out,
                             prc_position_index, tess, triangle_count,
                             &position_normal_pair[prc_position_index],
                             face_out_reserved);
+                    }
+                    else
+                    {
+                        prc_api_helper_set_tri_style(ctx, global_data, file_index, header,
+                            vertex_out, prc_position_index, tess, triangle_count,
+                            &position_normal_pair[prc_position_index],
+                            face_out_reserved, PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
                     }
                 }
             }
@@ -3803,45 +3836,48 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                             prev->next->vertex_color[3] = tess->decoded_point_color_array[k * 4 + 3];
                             prev->next->color_set = PRC_INTERNAL_API_COLOR_SET;
                         }
-                        if (has_more_than_one_tri_style)
-                        {
-                            /* Set the style */
-                            prc_api_helper_set_tri_style(ctx, global_data, file_index, header,
-                                vertex_out, vertex_index, tess, triangle_count,
-                                prev->next, face_out_reserved,
-                                PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
-                        }
-                        else if (has_more_than_one_ref_style)
-                        {
-                            /* Set the style from the reference data */
-                            prc_api_helper_set_vertex_style_from_face_ref(ctx,
-                                face_out->vertices_have_style, vertex_out,
-                                vertex_index, tess, triangle_count,
-                                prev->next, face_out_reserved);
-                        }
                         else
                         {
-                            if (has_style)
+                            if (has_more_than_one_tri_style)
                             {
-                                /* Use the style for this entire face get it from
-                                   the tessellation data. global data is the
-                                   proper place */
+                                /* Set the style */
                                 prc_api_helper_set_tri_style(ctx, global_data, file_index, header,
                                     vertex_out, vertex_index, tess, triangle_count,
-                                    prev->next, face_out_reserved, PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
+                                    prev->next, face_out_reserved,
+                                    PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
                             }
-                            else
+                            else if (has_more_than_one_ref_style)
                             {
-                                /* Set the face color */
-                                vertex_out->vertices[vertex_index].color[0] = face_color[0];
-                                vertex_out->vertices[vertex_index].color[1] = face_color[1];
-                                vertex_out->vertices[vertex_index].color[2] = face_color[2];
-                                vertex_out->vertices[vertex_index].color[3] = face_color[3];
-
+                                /* Set the style from the reference data */
                                 prc_api_helper_set_vertex_style_from_face_ref(ctx,
                                     face_out->vertices_have_style, vertex_out,
                                     vertex_index, tess, triangle_count,
                                     prev->next, face_out_reserved);
+                            }
+                            else
+                            {
+                                if (has_ref_style_defined)
+                                {
+                                    /* Use the style for this entire face get it from
+                                       the tessellation data. global data is the
+                                       proper place */
+                                       /* Set the face color */
+                                      // vertex_out->vertices[vertex_index].color[0] = face_color[0];
+                                     //  vertex_out->vertices[vertex_index].color[1] = face_color[1];
+                                     //  vertex_out->vertices[vertex_index].color[2] = face_color[2];
+                                    //   vertex_out->vertices[vertex_index].color[3] = face_color[3];
+
+                                    prc_api_helper_set_vertex_style_from_face_ref(ctx,
+                                        face_out->vertices_have_style, vertex_out,
+                                        vertex_index, tess, triangle_count,
+                                        prev->next, face_out_reserved);
+                                }
+                                else
+                                {
+                                    prc_api_helper_set_tri_style(ctx, global_data, file_index, header,
+                                        vertex_out, vertex_index, tess, triangle_count,
+                                        prev->next, face_out_reserved, PRC_INTERNAL_API_STYLE_SET_FROM_TESS);
+                                }
                             }
                         }
                     }
@@ -3883,11 +3919,12 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         /* DEBUG. Print out all the vertex positions, normals and diffuse color */
         for (k = 0; k < vertex_out->num_vertices; k++)
         {
-            printf("Vertex %d: Pos(%f, %f, %f) Normal(%f, %f, %f) Diffuse(%f, %f, %f) Style(face_index=%d file_index=%d) tri_has_material = %d\n",
+            printf("Vertex %d: Pos(%f, %f, %f) Normal(%f, %f, %f) Diffuse(%f, %f, %f) Color(%f, %f, %f, %f) Style(face_index=%d file_index=%d) tri_has_material = %d\n",
                 k,
                 vertex_out->vertices[k].position[0], vertex_out->vertices[k].position[1], vertex_out->vertices[k].position[2],
                 vertex_out->vertices[k].normal[0], vertex_out->vertices[k].normal[1], vertex_out->vertices[k].normal[2],
                 vertex_out->vertices[k].diffuse[0], vertex_out->vertices[k].diffuse[1], vertex_out->vertices[k].diffuse[2],
+                vertex_out->vertices[k].color[0], vertex_out->vertices[k].color[1], vertex_out->vertices[k].color[2], vertex_out->vertices[k].color[3],
                 vertex_out->vertices[k].style_index, vertex_out->vertices[k].style_file_index,
                 vertex_out->vertices[k].tri_has_material);
 
@@ -3899,14 +3936,14 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         }
 
         /* And now print out the indices */
-       // for (k = 0; k < face_out_reserved->num_indices; k++)
-       // {
-       //     printf("Index %d: %d\n", k, face_out_reserved->vertex_indices[k]);
-      //  }
+        for (k = 0; k < face_out_reserved->num_indices; k++)
+        {
+            printf("Index %d: %d\n", k, face_out_reserved->vertex_indices[k]);
+        }
 #endif
 
         /* Always the case for the compressed face when we do not have a texture */
-        if (!face_out->is_texture)
+        if (!face_out->is_texture && !has_vertex_colors)
         {
             face_out->vertices_have_style = true;
         }

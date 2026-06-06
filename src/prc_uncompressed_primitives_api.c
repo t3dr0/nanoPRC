@@ -56,6 +56,27 @@ prc_internal_api_calculate_normals_triangles(prc_context *ctx, uint32_t num_tria
     if (code < 0)
         return code;
 
+#if 1
+    /* DEBUG. Print out all the vertex positions, normals and diffuse color */
+    for (k = 0; k < uncompressed_data->vertex_out->num_vertices; k++)
+    {
+        printf("Vertex %d: Pos(%f, %f, %f) Normal(%f, %f, %f) Diffuse(%f, %f, %f) Color(%f, %f, %f, %f) Style(face_index=%d file_index=%d) tri_has_material = %d\n",
+            k,
+            uncompressed_data->vertex_out->vertices[k].position[0], uncompressed_data->vertex_out->vertices[k].position[1], uncompressed_data->vertex_out->vertices[k].position[2],
+            uncompressed_data->vertex_out->vertices[k].normal[0], uncompressed_data->vertex_out->vertices[k].normal[1], uncompressed_data->vertex_out->vertices[k].normal[2],
+            uncompressed_data->vertex_out->vertices[k].diffuse[0], uncompressed_data->vertex_out->vertices[k].diffuse[1], uncompressed_data->vertex_out->vertices[k].diffuse[2],
+            uncompressed_data->vertex_out->vertices[k].color[0], uncompressed_data->vertex_out->vertices[k].color[1], uncompressed_data->vertex_out->vertices[k].color[2], uncompressed_data->vertex_out->vertices[k].color[3],
+            uncompressed_data->vertex_out->vertices[k].style_index, uncompressed_data->vertex_out->vertices[k].style_file_index,
+            uncompressed_data->vertex_out->vertices[k].tri_has_material);
+    }
+
+    /* And now print out the indices */
+    for (k = 0; k < uncompressed_data->face_out_reserved->num_indices; k++)
+    {
+        printf("Index %d: %d\n", k, uncompressed_data->face_out_reserved->vertex_indices[k]);
+    }
+#endif
+
     /* Now we can compute the normals */
     code = prc_internal_api_compute_normals(ctx, uncompressed_data);
     if (code < 0)
@@ -387,17 +408,13 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
                 got_normal_hit = true; /* Normal not an issue in matching */
             }
 
-            int got_color_hit;
+            int got_color_hit = true;
             if (has_vertex_colors)
             {
-                got_color_hit = (current_list->prc_vertex_color_index == 
-                    face_vertex_color_indices[indice_count]);
+                /* All the color vertices have a color assigned, so we can't use this for matching */
+                got_color_hit = false;
             }
-            else
-            {
-                got_color_hit = true; /* We have a single style or texture */
-            }
-
+            
             if (got_normal_hit && got_texture_hit && got_color_hit)
             {
                 /* Found a match - reuse existing vertex */

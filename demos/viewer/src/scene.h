@@ -40,6 +40,9 @@ class Scene
 public:
     void render(Camera *camera);
     void setCameraInitialPosition(Camera *camera);
+    void recommendLightingWeights(float *ambientWeight, float *diffuseWeight) const;
+    void recommendLightingDefaults(float *ambientWeight, float *diffuseWeight,
+        float *sunIntensity) const;
 
     void load(const char *infile, Camera *camera, bool memoryLeakCheck = false);
     void unload();
@@ -62,6 +65,12 @@ public:
 
     constexpr bool &fullbright() { return _fullbright; }
     constexpr bool &backfaceCull() { return _backfaceCull; }
+    constexpr float &ambientWeight() { return _ambientWeight; }
+    constexpr float ambientWeight() const { return _ambientWeight; }
+    constexpr float &diffuseWeight() { return _diffuseWeight; }
+    constexpr float diffuseWeight() const { return _diffuseWeight; }
+    constexpr int &normalDebugMode() { return _normalDebugMode; }
+    constexpr int normalDebugMode() const { return _normalDebugMode; }
 
     constexpr DirLight *dirLight() { return &_dirLight; }
     constexpr const DirLight *dirLight() const { return &_dirLight; }
@@ -122,6 +131,9 @@ private:
 
     /* Lighting */
     bool _fullbright;
+    float _ambientWeight;
+    float _diffuseWeight;
+    int _normalDebugMode;
 
     DirLight _dirLight;
     PointLight _pointLight;

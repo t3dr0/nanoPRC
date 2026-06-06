@@ -135,6 +135,9 @@ void MeshShader::load()
 
     uWireframe = _shader.getUniformLocation("uWireframe");
     uFullbright = _shader.getUniformLocation("uFullbright");
+    uAmbientWeight = _shader.getUniformLocation("uAmbientWeight");
+    uDiffuseWeight = _shader.getUniformLocation("uDiffuseWeight");
+    uDebugMode = _shader.getUniformLocation("uDebugMode");
 }
 
 MeshShader::MeshShader() : uModel(-1), uView(-1), uProjection(-1),
@@ -143,7 +146,8 @@ MeshShader::MeshShader() : uModel(-1), uView(-1), uProjection(-1),
                            uPointLight_position(-1), uPointLight_color(-1), uPointLight_intensity(-1),
                            uMaterial_diffuse(-1), uMaterial_specular(-1), uMaterial_shininess(-1), uMaterial_tint(-1),
                            uMaterial_diffuseMap(-1), uMaterial_hasDiffuseMap(-1), uIsLine(-1), uEnableShadows(-1),
-                           uWireframe(-1), uFullbright(-1), uVertexMaterial(-1), uMaterial_alpha(-1)
+                           uWireframe(-1), uFullbright(-1), uAmbientWeight(-1), uDiffuseWeight(-1),
+                           uDebugMode(-1), uVertexMaterial(-1), uMaterial_alpha(-1)
 {
 }
 

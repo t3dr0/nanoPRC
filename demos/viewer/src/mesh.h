@@ -119,6 +119,9 @@ public:
 
     inline void setWireframe(bool wireframe) { _shader.setBool(uWireframe, wireframe); }
     inline void setFullbright(bool fullbright) { _shader.setBool(uFullbright, fullbright); }
+    inline void setAmbientWeight(float ambientWeight) { _shader.setFloat(uAmbientWeight, ambientWeight); }
+    inline void setDiffuseWeight(float diffuseWeight) { _shader.setFloat(uDiffuseWeight, diffuseWeight); }
+    inline void setDebugMode(int debugMode) { _shader.setInt(uDebugMode, debugMode); }
 
     void load();
 
@@ -164,6 +167,9 @@ private:
 
     int uWireframe;
     int uFullbright;
+    int uAmbientWeight;
+    int uDiffuseWeight;
+    int uDebugMode;
 };
 
 #endif // _MESH_H_

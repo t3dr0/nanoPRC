@@ -1203,8 +1203,9 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         if (code != 0)
             return code;
 
-        /* Dont do this if the normal angles are encoded */
-        if (data->must_recalculate_normals)
+        /* Dont do this if the normal angles are encoded OR if we have
+           vertex colors */
+        if (data->must_recalculate_normals && data->decoded_point_color_array == NULL)
         {
             code = prc_compressed_tess_apply_crease_angle(ctx, data);
             if (code != 0)
