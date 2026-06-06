@@ -1,0 +1,28 @@
+name: legal-attestation
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-legal-attestation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify legal attestation checkbox is checked
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request?.body || "";
+
+            // Require the dedicated legal attestation checkbox from the PR template.
+            const checkboxChecked = /-\s*\[[xX]\]\s*I agree to the contributor legal requirements in\s*\[CLA\.md\]\(\.\.\/CLA\.md\)\./i.test(body);
+
+            if (!checkboxChecked) {
+              core.setFailed(
+                "Missing legal attestation: please check the checkbox `I agree to the contributor legal requirements in [CLA.md](../CLA.md).` in the PR description."
+              );
+            }

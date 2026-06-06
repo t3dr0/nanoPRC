@@ -26,7 +26,7 @@ By submitting a pull request, you confirm that:
 
 Pull requests that do not accept the contributor legal terms are not eligible for merge.
 
-Until automated CLA checks are configured, maintainers may request explicit legal confirmation in PR comments using [.github/LEGAL_CONFIRMATION_COMMENT.md](.github/LEGAL_CONFIRMATION_COMMENT.md).
+The repository enforces this via a required GitHub Actions check on pull requests. Contributors must check the legal attestation checkbox in the PR description template.
 
 ## Coding Expectations
 
