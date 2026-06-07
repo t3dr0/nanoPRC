@@ -91,6 +91,9 @@ public:
     constexpr bool &enableToneMapping() { return _enableToneMapping; }
 
     constexpr bool &enableMotion() { return _enableMotion; }
+
+    void setShowExtraWireOverlays(bool enabled);
+    constexpr bool showExtraWireOverlays() const { return _showExtraWireOverlays; }
     
     constexpr int width() const { return _width; }
     constexpr int height() const { return _height; }
@@ -150,6 +153,8 @@ private:
     bool _enableToneMapping;
 
     bool _enableMotion;
+
+    bool _showExtraWireOverlays;
 
     int _width, _height;
     int _renderWidth, _renderHeight;

@@ -100,7 +100,8 @@ prc_api_open_contents(prc_context *ctx, const char *infile)
 /* Here we release the API visible data that was created. Not the parsed objects. */
 PRC_EXPORT void
 prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_in, 
-    uint32_t num_tess, prc_api_product *product_tree)
+    uint32_t num_tess, prc_api_tess *line_tess, uint32_t num_line_tess,
+    prc_api_product *product_tree)
 {
     prc_data *data = (prc_data *)data_in;
     prc_tess *tess;
@@ -183,6 +184,22 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                 if (tess->vertices_internal != NULL)
                     prc_free(ctx, tess->vertices_internal);
             }
+        }
+    }
+
+    for (k = 0; k < num_line_tess; k++)
+    {
+        if (line_tess[k].tess_vertices.vertices != NULL)
+            prc_free(ctx, line_tess[k].tess_vertices.vertices);
+        if (line_tess[k].reserved != NULL)
+        {
+            prc_internal_api_wire *wire = line_tess[k].reserved;
+            for (j = 0; j < line_tess[k].num_line_primitives; j++)
+            {
+                if (wire[j].vertex_indices != NULL)
+                    prc_free(ctx, wire[j].vertex_indices);
+            }
+            prc_free(ctx, wire);
         }
     }
 
@@ -1450,6 +1467,13 @@ prc_api_get_ri_tessellation(prc_context *ctx, prc_api_part *part,
                             uint32_t rep_item_index)
 {
     return part->rep_items[rep_item_index].tess;
+}
+
+PRC_EXPORT prc_api_tess *
+prc_api_get_ri_line_tessellation(prc_context *ctx, prc_api_part *part,
+    uint32_t rep_item_index)
+{
+    return part->rep_items[rep_item_index].tess_line;
 }
 
 PRC_EXPORT prc_api_tess*
@@ -2865,7 +2889,8 @@ prc_api_helper(prc_context *ctx, prc_data *data_in, uint32_t file_index,
    to add in the Markup tessellations */
 PRC_EXPORT int
 prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
-                                 prc_api_product *model_tree, uint32_t *num_tess)
+                                 prc_api_product *model_tree, uint32_t *num_tess,
+                                 uint32_t *num_line_tess)
 {
     prc_data *data = (prc_data *)data_in;
     uint32_t num_files;
@@ -2893,6 +2918,8 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
     prc_filestructure *file_struct;
     prc_tess *tess;
     prc_tesslation_t tess_type;
+
+    *num_line_tess = 0;
 
     data->part_details = (tess_style_file_part *)prc_calloc(ctx, sizeof(tess_style_file_part), PARTS_DETAIL_INIT_SIZE);
     if (data->part_details == NULL)
@@ -3064,7 +3091,7 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
 
                         if (tess_compressed->number_of_edges > 0)
                         {
-                          //  num_part_tessellations++;
+                            (*num_line_tess)++;
                         }
                     }
                 }
@@ -3270,7 +3297,7 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
             prc_tess_3d *tess_3d = tessellation->tess_3d;
             if (tess_3d->number_of_wire_indices > 0)
             {
-                *has_line = 1;
+                *has_line = 0;
             }
             break;
         case PRC_TYPE_TESS_3D_Compressed:
@@ -3332,7 +3359,6 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
         /* Associate this api_tess with the part now */
         reserve->parts[part_detail->part_reserve_index].tess = api_tess;
 
-#if 0
         if (*has_line)
         {
             api_tess_line->tess_vertices.num_vertices = 0;
@@ -3350,7 +3376,6 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
             api_tess_line->text_primitives = NULL;
             reserve->parts[part_detail->part_reserve_index].tess_line = api_tess_line;
         }
-#endif
     }
     else
     {

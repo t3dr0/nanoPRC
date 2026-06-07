@@ -2923,8 +2923,9 @@ prc_compressed_tess_float_equal(float a, float b, double epsilon)
 #define PRC_COMPRESSED_TESS_COLOR_EPSILON 1.0e-4
 #define PRC_COMPRESSED_TESS_UV_EPSILON 1.0e-5
 #define PRC_COMPRESSED_TESS_CREASE_HYSTERESIS_DEGREES 0.25
-#define PRC_LINE_EDGE_NORMAL_ANGLE_MIN_DEGREES 70.0
-#define PRC_LINE_EDGE_CONCAVE_DOT_EPSILON 1.0e-8
+#define PRC_LINE_EDGE_NORMAL_ANGLE_MIN_DEGREES 90.0
+#define PRC_LINE_EDGE_CONCAVE_DOT_EPSILON 1000
+#define PRC_ENABLE_CONCAVE_EDGE_DETECTION 0
 #define PRC_LINE_EDGE_REASON_NOT_LINE 0
 #define PRC_LINE_EDGE_REASON_BOUNDARY 1
 #define PRC_LINE_EDGE_REASON_ANGLE 2
@@ -3643,8 +3644,8 @@ prc_compressed_tess_edge_is_line(prc_context *ctx, prc_tess_3d_compressed *data,
         return 0;
     }
 
-    /* Concavity test: if tri1 normal points toward tri2 centroid and tri2 normal
-       points toward tri1 centroid, this is an interior fold (sawtooth-like edge). */
+    /* Optional concavity test: disabled by default for better Adobe parity. */
+#if PRC_ENABLE_CONCAVE_EDGE_DETECTION
     {
         prc_vec3 c1, c2, d12;
         double dot1, dot2;
@@ -3668,6 +3669,7 @@ prc_compressed_tess_edge_is_line(prc_context *ctx, prc_tess_3d_compressed *data,
             }
         }
     }
+#endif
 
     return 0;
 }

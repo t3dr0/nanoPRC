@@ -1195,13 +1195,6 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         if (code != 0)
             return code;
 
-        /* Lets compute edges for this tessellation. These are computed by 
-           looking at the triangle normals and those that are greater than a
-           particular theshold will define a line */
-
-        code = prc_compute_edges_compressed_tess(ctx, data);
-        if (code != 0)
-            return code;
 
         /* Dont do this if the normal angles are encoded OR if we have
            vertex colors */
@@ -1211,6 +1204,14 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
             if (code != 0)
                 return code;
         }
+
+        /* Lets compute edges for this tessellation. These are computed by
+          looking at the triangle normals and those that are greater than a
+          particular theshold will define a line */
+        code = prc_compute_edges_compressed_tess(ctx, data);
+        if (code != 0)
+            return code;
+
 
         /* If we have texture coordinates for the vertices, then copy them over now */
         if (!data->no_texture && data->texture_data->texture_parameters != NULL)

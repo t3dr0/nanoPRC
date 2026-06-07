@@ -71,6 +71,8 @@ public:
 
     constexpr Product **children() const { return _children; }
     constexpr uint32_t numChildren() const { return _nchildren; }
+    constexpr void setRenderCompanion(Product *companion) { _renderCompanion = companion; }
+    constexpr Product *renderCompanion() const { return _renderCompanion; }
     constexpr const Material *materials() const { return _material; }
     constexpr uint32_t numMaterials() const { return _numMaterials; }
 
@@ -111,6 +113,10 @@ private:
 
     Product **_children;
     uint32_t _nchildren;
+
+     /* Optional non-UI child-like Product rendered with this Product.
+         Used for auxiliary overlays (e.g. extra wire edges). */
+     Product *_renderCompanion;
 
     bool _dirty;
 

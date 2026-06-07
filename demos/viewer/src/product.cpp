@@ -138,6 +138,11 @@ void Product::render(MeshShader *shader) const
         }
     }
 
+    if (_renderCompanion && _renderCompanion->_enabled)
+    {
+        _renderCompanion->render(shader);
+    }
+
     // Recursively render children
     for (uint32_t i = 0; i < _nchildren; i++)
     {
@@ -168,6 +173,12 @@ void Product::update()
         // if (child->_dirty)
         child->_dirty = true;
         child->update();
+    }
+
+    if (_renderCompanion)
+    {
+        _renderCompanion->_dirty = true;
+        _renderCompanion->update();
     }
 }
 
@@ -423,7 +434,8 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
        we set the whole part (tessellation) to have a material. Probably OK but
        there could be a case where we have different faces with textures and
        materials and solid colors.  Fun! */
-    if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp)
+    if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp ||
+        tess->type == PRC_API_TESS_3D_Wire_Extra)
     {
         face_max = 1;
     }
@@ -478,7 +490,8 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
         /* The vertices could have material definitions assigned to them */
         verticesHaveMaterial = prc_api_vertices_have_material(ctx, tess, i);
 
-        if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp)
+        if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp ||
+            tess->type == PRC_API_TESS_3D_Wire_Extra)
         {
             num_graphic_primitives = tess->num_line_primitives;
             if (tess->type == PRC_API_TESS_MarkUp)
@@ -598,6 +611,7 @@ Product::Product() :
     _name(nullptr),
     _parent(nullptr),
     _children(nullptr), _nchildren(0),
+    _renderCompanion(nullptr),
     _dirty(true),
     _vao(0), _vbo(0), _ebo(0),
     _meshes(nullptr), _numMeshes(0),

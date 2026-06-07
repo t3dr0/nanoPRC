@@ -2369,7 +2369,7 @@ prc_internal_api_set_vertex_texture_coords(prc_context *ctx,
    and that we create for the 3D compressed data */
 PRC_EXPORT int
 prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
-    prc_api_product *api_tree, uint32_t tess_ndex_in, prc_api_tess *tess_line)
+    prc_api_product *api_tree, uint32_t tess_index_in, prc_api_tess *tess_line)
 {
     prc_data *data = (prc_data *)data_in;
     prc_tesslation_t tess_type;
@@ -2387,7 +2387,7 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
     tess_line->has_transparency = 0;
 
-    code = prc_api_helper_get_tess_and_file_index2(ctx, data_in, tess_ndex_in,
+    code = prc_api_helper_get_tess_and_file_index2(ctx, data_in, tess_index_in,
         &file_index, &tess_index);
     if (code < 0)
         return code;
@@ -2411,12 +2411,57 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     if (tess_type == PRC_TYPE_TESS_3D_Compressed)
     {
         prc_tess_3d_compressed *tess3d_compressed = tess->tess_3d_compressed;
+        uint32_t num_of_edges = tess3d_compressed->number_of_edges;
+        uint32_t num_vertices = (uint32_t)tess3d_compressed->num_vertices_prc_compressed_3d;
 
+        vertex_out->num_vertices = num_vertices;
+        vertex_out->capacity = num_vertices;
+        vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, num_vertices, sizeof(prc_api_vertex));
+        if (vertex_out->vertices == NULL)
+            return PRC_API_ERROR_MEMORY;
+
+        for (k = 0; k < num_vertices; k++)
+        {
+            vertex_out->vertices[k].position[0] = tess3d_compressed->edge_vertices[k * 3];
+            vertex_out->vertices[k].position[1] = tess3d_compressed->edge_vertices[k * 3 + 1];
+            vertex_out->vertices[k].position[2] = tess3d_compressed->edge_vertices[k * 3 + 2];
+
+            vertex_out->vertices[k].color[0] = 0;
+            vertex_out->vertices[k].color[1] = 0;
+            vertex_out->vertices[k].color[2] = 0;
+            vertex_out->vertices[k].color[3] = 1;
+        }
+
+        prc_internal_api_wire *wire = (prc_internal_api_wire *)prc_calloc(ctx,
+            num_of_edges, sizeof(prc_internal_api_wire));
+        if (wire == NULL)
+            return PRC_API_ERROR_MEMORY;
+
+        for (k = 0; k < num_of_edges; k++)
+        {
+            wire[k].num_indices = 2;
+            wire[k].capacity = 2;
+            wire[k].vertex_indices = (uint32_t *)prc_calloc(ctx, 2, sizeof(uint32_t));
+            if (wire[k].vertex_indices == NULL)
+                return PRC_API_ERROR_MEMORY;
+
+            for (j = 0; j < 2; j++)
+            {
+                wire[k].vertex_indices[j] = tess3d_compressed->edge_indices[k * 2 + j];
+            }
+            wire[k].type = PRC_API_LINE;
+
+        }
+        /* Set the reserved data */
+        tess_line->num_line_primitives = num_of_edges;
+        tess_line->reserved = (void *)wire;
     }
     else if (tess_type == PRC_TYPE_TESS_3D)
     {
         prc_tess_3d *tess3d = tess->tess_3d;
     }
+
+    tess_line->type = PRC_API_TESS_3D_Wire_Extra;
     return 0;
 }
 
@@ -4360,7 +4405,8 @@ prc_api_number_of_materials(prc_context *ctx, prc_api_data data_in, const prc_ap
 
     tess_type = tess->type;
 
-    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp)
+    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp ||
+        tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
         return 0;
     }
@@ -4390,7 +4436,8 @@ prc_api_get_num_graphics_primitives(prc_context *ctx, prc_api_data data_in,
         return 1;
     }
 
-    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp)
+    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp ||
+        tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
         //return tess->num_line_primitives + tess->num_text_primitives;
         return tess->num_line_primitives;
@@ -4433,7 +4480,8 @@ prc_api_get_face_vertices(prc_context *ctx, const prc_api_tess *tess,
 
     if (tess_type == PRC_API_TESS_3D_Compressed ||
         tess_type == PRC_API_TESS_3D_Wire ||
-        tess_type == PRC_API_TESS_MarkUp)
+        tess_type == PRC_API_TESS_MarkUp ||
+        tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
         *vertices = tess->tess_vertices.vertices;
         *vertex_count = tess->tess_vertices.num_vertices;
@@ -4474,7 +4522,8 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
         return 0;
     }
 
-    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp)
+    if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp ||
+        tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
         prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->reserved;
         if (graphics_index > tess->num_line_primitives - 1)

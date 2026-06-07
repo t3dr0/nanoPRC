@@ -501,6 +501,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     _atmosphere.sunTightness = config.getFloat("Atmosphere.sun_tightness", 500.0f);
 
     _scene.fullbright() = config.getBool("Lighting.fullbright", false);
+    _scene.setShowExtraWireOverlays(config.getBool("Display.extra_wire_overlays", true));
     _atmosphere.sunAltitude = fmodf(config.getFloat("Lighting.sun_altitude", 40.0f), 360.0f);
     _atmosphere.sunAzimuth = fmodf(config.getFloat("Lighting.sun_azimuth", 0.0f), 360.0f);
     _atmosphere.sunColor = clamp(Vector3(config.getIntVector3("Lighting.sun_color", IntVector3(255))) / 255.0f, 0.0f, 1.0f);
@@ -866,6 +867,7 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
     config.setFloat("Camera.near", _camera.near());
 
     config.setFloat("Display.render_scale", _renderScale);
+    config.setBool("Display.extra_wire_overlays", _scene.showExtraWireOverlays());
 
     config.setFloat("Input.mouse_sensitivity", kMouseSensitivity);
     config.setFloat("Input.move_speed", kMoveSpeed);
@@ -1041,6 +1043,9 @@ static bool debugMenu(float time, float deltaTime)
             ImGui::SeparatorText("Debug");
             ImGui::Checkbox("Backface Culling", &_scene.backfaceCull());
             ImGui::Checkbox("Wireframe", &_scene.wireframe());
+            bool showExtraWireOverlays = _scene.showExtraWireOverlays();
+            if (ImGui::Checkbox("Extra Wire Overlays", &showExtraWireOverlays))
+                _scene.setShowExtraWireOverlays(showExtraWireOverlays);
             ImGui::SliderInt("Normal Debug Mode", &_scene.normalDebugMode(), 0, 4);
             ImGui::Text("Hotkeys: 0=Off, 1=Normal RGB, 2=Normal Length, 3=Degenerate Mask, 4=Branch");
 

@@ -61,6 +61,21 @@ static const GLuint kPlaneIndices[] = {
     0, 2, 1,
     0, 3, 2};
 
+static void setCompanionVisibilityRecursive(Product *product, bool enabled)
+{
+    if (product == NULL)
+        return;
+
+    Product *companion = product->renderCompanion();
+    if (companion)
+        companion->setEnabled(enabled);
+
+    for (uint32_t i = 0; i < product->numChildren(); i++)
+    {
+        setCompanionVisibilityRecursive(product->children()[i], enabled);
+    }
+}
+
 
 void Scene::setCameraInitialPosition(Camera *camera)
 {
@@ -183,6 +198,16 @@ void Scene::recommendLightingDefaults(float *ambientWeight, float *diffuseWeight
 void Scene::recommendLightingWeights(float *ambientWeight, float *diffuseWeight) const
 {
     recommendLightingDefaults(ambientWeight, diffuseWeight, NULL);
+}
+
+void Scene::setShowExtraWireOverlays(bool enabled)
+{
+    _showExtraWireOverlays = enabled;
+
+    if (_products != NULL && _nproducts > 0)
+    {
+        setCompanionVisibilityRecursive(&_products[0], enabled);
+    }
 }
 
 void Scene::render(Camera *camera)
@@ -310,6 +335,7 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
 {
     uint32_t k;
     prc_api_tess *tess;
+    prc_api_tess *tess_line;
 
     app_product->createChildren(api_part->num_rep_items);
 
@@ -324,6 +350,8 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
 
         /* Get the tessellation for this model (part) */
         tess = prc_api_get_ri_tessellation(ctx, api_part, k);
+        tess_line = prc_api_get_ri_line_tessellation(ctx, api_part, k);
+
         if (tess != NULL)
         {
             setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
@@ -331,6 +359,20 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
 
             /* Attach the model */
             app_child->attach(ctx, data, tess, *getTextRenderPtr());
+
+            if (tess_line != NULL && tess_line->type == PRC_API_TESS_3D_Wire_Extra)
+            {
+                Product *line_companion = &heap[*product_count];
+                *product_count += 1;
+
+                line_companion->setParent(app_child);
+                line_companion->setEnabled(_showExtraWireOverlays);
+                line_companion->setModel(Matrix4(1.0f));
+                line_companion->setBoundingBox(app_child->bboxMin(), app_child->bboxMax());
+                line_companion->attach(ctx, data, tess_line, *getTextRenderPtr());
+
+                app_child->setRenderCompanion(line_companion);
+            }
         }
         if (api_part->rep_items[k].num_rep_items > 0)
         {
@@ -521,6 +563,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
     char *model_name = NULL;
     prc_api_product *model_tree;
     uint32_t totalTesselations;
+    uint32_t totalLineTesselations;
     int code;
     uint32_t j, k;
     int context_release_code;
@@ -570,13 +613,31 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
        The compressed ones, we add line data for the extreme crease angles (not
        in the spec but Adobe does this) and we can have line data in the uncompressed
        tessellation */
-    code = prc_api_get_number_tessellations(ctx, data, model_tree, &totalTesselations);
+    code = prc_api_get_number_tessellations(ctx, data, model_tree, &totalTesselations,
+                                            &totalLineTesselations);
     if (code < 0)
     {
         printf("Scene::load: prc_api_get_number_tessellations failed\n");
         exit(1);
     }
     prc_api_tess *tesses = new prc_api_tess[totalTesselations];
+    prc_api_tess *tesses_line = NULL;
+    uint32_t line_tess_index = 0;
+
+    if (tesses == NULL)
+    {
+        printf("Scene::load: failed to allocate tessellation array\n");
+        exit(1);
+    }
+    if (totalLineTesselations > 0)
+    {
+        tesses_line = new prc_api_tess[totalLineTesselations];
+        if (tesses_line == NULL)
+        {
+            printf("Scene::load: failed to allocate line tessellation array\n");
+            exit(1);
+        }
+    }
 
     /* Lets go through all the tessellations and get the data assigning it to 
        the part and markups. We have to worry about different faces due to 
@@ -585,15 +646,24 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
     for (k = 0; k < totalTesselations; k++)
     {
         prc_api_tess &tess = tesses[k];
-       // prc_api_tess &tess_line = tesses[k + 1];  /* Only if needed */
         uint8_t has_line = 0;
+        prc_api_tess *tess_line;
+
+        if (totalLineTesselations > 0)
+        {
+            tess_line = &tesses_line[line_tess_index];
+        }
+        else
+        {
+            tess_line = NULL;
+        }
 
         uint32_t nFaces = prc_api_get_number_faces(ctx, data, k);
         tess.num_faces = nFaces;
         tess.tess_faces = new prc_api_face[nFaces];
 
         int code = prc_api_initialize_tessellation(ctx, data, model_tree, k, &tess,
-                                              NULL, &has_line);
+                                                   tess_line, &has_line);
         if (code < 0)
         {
             printf("Scene::load: prc_api_initialize_tessellation failed\n");
@@ -633,22 +703,21 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
             }
         }
 
-#if 0
         /* This is a special case where we have wire data in the 3D tessellation
            data, or we have added wire data in the compressed 3D tessellation */
         if (has_line)
         {
             /* We have a line tessellation to add for this model. Get the line
                tessellation data */
-            int code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree, k, &tess_line);
-            k++; /* Increment the index as we are using the next one for the line tessellation */
+            int code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree, k, tess_line);
+            line_tess_index++;
             if (code < 0)
             {
                 printf("Scene::load: prc_api_get_line_tessallation_vertices failed\n");
                 exit(1);
             }
         }
-#endif
+
     }
 
     Vector4 min_bound;
@@ -663,7 +732,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
 
     /* Allocate 3x on the markups in case we have text and lines (parent plus
        one for text and one for lines)*/
-    _nproducts = num_products + num_parts + 3 * num_markups;
+    _nproducts = num_products + num_parts + 3 * num_markups + totalLineTesselations;
     _products = new Product[_nproducts];
     uint32_t product_index = 0;
     uint8_t font_atlas_created = 0;
@@ -769,12 +838,17 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
    // setCameraInitialPosition(camera);
 
     /* Clean up */
-    prc_api_release_data(ctx, data, tesses, totalTesselations, model_tree);
+    prc_api_release_data(ctx, data, tesses, totalTesselations, tesses_line, 
+        totalLineTesselations, model_tree);
 
     for (uint32_t i = 0; i < totalTesselations; i++)
         delete[] tesses[i].tess_faces;
-
     delete[] tesses;
+
+    if (totalLineTesselations > 0)
+    {
+        delete[] tesses_line;
+    }
 
     context_release_code = prc_api_release_context(ctx);
     if (memoryLeakCheck && context_release_code == PRC_API_MEMORY_LEAK_DETECTED)
@@ -882,6 +956,7 @@ Scene::Scene() : _products(nullptr), _nproducts(0),
                  _normalDebugMode(0), _backfaceCull(false),
                  _enableBloom(true), _bloom(nullptr),
                  _enableToneMapping(true), _enableMotion(true),
+                 _showExtraWireOverlays(true),
                  _width(0), _height(0), _textRenderer(nullptr),
                  _renderWidth(0), _renderHeight(0)
 {
