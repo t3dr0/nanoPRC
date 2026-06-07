@@ -3082,7 +3082,7 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
                         prc_tess_3d *tess3d = tess->tess_3d;
                         if (tess3d->number_of_wire_indices > 0)
                         {
-                           // num_part_tessellations++;
+                            //(*num_line_tess)++;
                         }
                     }
                     else if (tess_type == PRC_TYPE_TESS_3D_Compressed)

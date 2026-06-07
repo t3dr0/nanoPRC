@@ -1196,7 +1196,7 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
             return code;
 
 
-        /* Dont do this if the normal angles are encoded OR if we have
+        /* Don't do this if the normal angles are encoded OR if we have
            vertex colors */
         if (data->must_recalculate_normals && data->decoded_point_color_array == NULL)
         {

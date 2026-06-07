@@ -2413,29 +2413,96 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         prc_tess_3d_compressed *tess3d_compressed = tess->tess_3d_compressed;
         uint32_t num_of_edges = tess3d_compressed->number_of_edges;
         uint32_t num_vertices = (uint32_t)tess3d_compressed->num_vertices_prc_compressed_3d;
+        uint32_t used_vertex_count = 0;
+        uint32_t *vertex_remap = NULL;
+        prc_internal_api_wire *wire = NULL;
 
-        vertex_out->num_vertices = num_vertices;
-        vertex_out->capacity = num_vertices;
-        vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, num_vertices, sizeof(prc_api_vertex));
-        if (vertex_out->vertices == NULL)
+        vertex_out->num_vertices = 0;
+        vertex_out->capacity = 0;
+        vertex_out->vertices = NULL;
+        tess_line->num_line_primitives = 0;
+        tess_line->reserved = NULL;
+
+        if (num_of_edges == 0)
+        {
+            /* Nothing to export for this tessellation. */
+            tess_line->num_line_primitives = 0;
+            tess_line->reserved = NULL;
+            return 0;
+        }
+
+        if (tess3d_compressed->edge_indices == NULL ||
+            tess3d_compressed->edge_vertices == NULL)
+        {
+            return PRC_API_ERROR_PARAMETER;
+        }
+
+        vertex_remap = (uint32_t *)prc_malloc(ctx, num_vertices * sizeof(uint32_t));
+        if (vertex_remap == NULL)
             return PRC_API_ERROR_MEMORY;
 
         for (k = 0; k < num_vertices; k++)
         {
-            vertex_out->vertices[k].position[0] = tess3d_compressed->edge_vertices[k * 3];
-            vertex_out->vertices[k].position[1] = tess3d_compressed->edge_vertices[k * 3 + 1];
-            vertex_out->vertices[k].position[2] = tess3d_compressed->edge_vertices[k * 3 + 2];
-
-            vertex_out->vertices[k].color[0] = 0;
-            vertex_out->vertices[k].color[1] = 0;
-            vertex_out->vertices[k].color[2] = 0;
-            vertex_out->vertices[k].color[3] = 1;
+            vertex_remap[k] = (uint32_t)-1;
         }
 
-        prc_internal_api_wire *wire = (prc_internal_api_wire *)prc_calloc(ctx,
-            num_of_edges, sizeof(prc_internal_api_wire));
-        if (wire == NULL)
+        /* First pass: build old->new index remap for edge endpoints only. */
+        for (k = 0; k < num_of_edges; k++)
+        {
+            for (j = 0; j < 2; j++)
+            {
+                uint32_t old_index = tess3d_compressed->edge_indices[k * 2 + j];
+                if (old_index >= num_vertices)
+                {
+                    prc_free(ctx, vertex_remap);
+                    return PRC_API_ERROR_PARAMETER;
+                }
+                if (vertex_remap[old_index] == (uint32_t)-1)
+                {
+                    vertex_remap[old_index] = used_vertex_count;
+                    used_vertex_count++;
+                }
+            }
+        }
+
+        vertex_out->num_vertices = used_vertex_count;
+        vertex_out->capacity = used_vertex_count;
+        vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, used_vertex_count,
+            sizeof(prc_api_vertex));
+        if (vertex_out->vertices == NULL)
+        {
+            prc_free(ctx, vertex_remap);
             return PRC_API_ERROR_MEMORY;
+        }
+
+        /* Materialize only used vertices into compact vertex buffer. */
+        for (k = 0; k < num_vertices; k++)
+        {
+            uint32_t new_index = vertex_remap[k];
+            if (new_index == (uint32_t)-1)
+                continue;
+
+            vertex_out->vertices[new_index].position[0] = tess3d_compressed->edge_vertices[k * 3];
+            vertex_out->vertices[new_index].position[1] = tess3d_compressed->edge_vertices[k * 3 + 1];
+            vertex_out->vertices[new_index].position[2] = tess3d_compressed->edge_vertices[k * 3 + 2];
+
+            vertex_out->vertices[new_index].color[0] = 0;
+            vertex_out->vertices[new_index].color[1] = 0;
+            vertex_out->vertices[new_index].color[2] = 0;
+            vertex_out->vertices[new_index].color[3] = 1;
+        }
+
+        wire = (prc_internal_api_wire *)prc_calloc(ctx, num_of_edges,
+            sizeof(prc_internal_api_wire));
+        if (wire == NULL)
+        {
+            prc_free(ctx, vertex_out->vertices);
+            vertex_out->vertices = NULL;
+            vertex_out->num_vertices = 0;
+            vertex_out->capacity = 0;
+            prc_free(ctx, vertex_remap);
+            return PRC_API_ERROR_MEMORY;
+        }
 
         for (k = 0; k < num_of_edges; k++)
         {
@@ -2443,15 +2510,27 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             wire[k].capacity = 2;
             wire[k].vertex_indices = (uint32_t *)prc_calloc(ctx, 2, sizeof(uint32_t));
             if (wire[k].vertex_indices == NULL)
-                return PRC_API_ERROR_MEMORY;
-
-            for (j = 0; j < 2; j++)
             {
-                wire[k].vertex_indices[j] = tess3d_compressed->edge_indices[k * 2 + j];
+                for (j = 0; j < k; j++)
+                {
+                    prc_free(ctx, wire[j].vertex_indices);
+                }
+                prc_free(ctx, wire);
+                prc_free(ctx, vertex_out->vertices);
+                vertex_out->vertices = NULL;
+                vertex_out->num_vertices = 0;
+                vertex_out->capacity = 0;
+                prc_free(ctx, vertex_remap);
+                return PRC_API_ERROR_MEMORY;
             }
-            wire[k].type = PRC_API_LINE;
 
+            wire[k].vertex_indices[0] = vertex_remap[tess3d_compressed->edge_indices[k * 2]];
+            wire[k].vertex_indices[1] = vertex_remap[tess3d_compressed->edge_indices[k * 2 + 1]];
+            wire[k].type = PRC_API_LINE;
         }
+
+        prc_free(ctx, vertex_remap);
+
         /* Set the reserved data */
         tess_line->num_line_primitives = num_of_edges;
         tess_line->reserved = (void *)wire;
