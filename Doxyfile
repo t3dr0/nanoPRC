@@ -1,0 +1,71 @@
+# ---- Project ----
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "nanoPRC"
+PROJECT_BRIEF          = "PRC parsing, tessellation decode, and API library"
+PROJECT_NUMBER         =
+OUTPUT_DIRECTORY       = docs/doxygen
+CREATE_SUBDIRS         = NO
+OUTPUT_LANGUAGE        = English
+OPTIMIZE_OUTPUT_FOR_C  = YES
+ALLOW_UNICODE_NAMES    = NO
+
+# ---- Input ----
+INPUT                  = include/prc_api.h include/prc_context.h src/prc_internal_proto_api.h
+FILE_PATTERNS          = *.h
+RECURSIVE              = NO
+EXCLUDE                =
+EXCLUDE_PATTERNS       = */.git/* */build/* */out/* */CMakeFiles/*
+
+# ---- Extraction ----
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+INTERNAL_DOCS          = NO
+
+# ---- Warnings ----
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+QUIET                  = NO
+WARN_LOGFILE           = docs/doxygen/warnings.log
+
+# ---- Comment behavior ----
+JAVADOC_AUTOBRIEF      = YES
+MULTILINE_CPP_IS_BRIEF = YES
+QT_AUTOBRIEF           = NO
+
+# ---- Output: HTML only ----
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+FULL_SIDEBAR           = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+GENERATE_MAN           = NO
+GENERATE_RTF           = NO
+
+# ---- Source browsing ----
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# ---- Graphviz ----
+HAVE_DOT               = NO
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+DOT_CLEANUP            = YES
+
+# ---- Preprocessing ----
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+EXPAND_ONLY_PREDEF     = NO
+SKIP_FUNCTION_MACROS   = YES

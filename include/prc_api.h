@@ -19,6 +19,17 @@
 
 #include "../include/prc_context.h"
 
+/**
+ * @file prc_api.h
+ * @brief Public C API for loading PRC/PDF content and extracting tessellation data.
+ */
+
+/** @defgroup public_api Public API
+ *  @brief Public entry points for context management, loading, model tree creation,
+ *  and tessellation/primitive extraction.
+ *  @{
+ */
+
 #define PRC_API_ERROR_MEMORY -1
 #define PRC_API_ERROR_PARAMETER -2
 #define PRC_API_ERROR_PARSER -3
@@ -273,42 +284,346 @@ extern "C"
 {
 #endif
 
+/**
+ * @brief Create a new API context.
+ *
+ * @param hooks Optional allocation/logging hooks; pass NULL for defaults.
+ * @return A valid context pointer on success, or NULL on failure.
+ */
 PRC_EXPORT prc_context *prc_api_new_context(const prc_hooks *hooks);
+
+/**
+ * @brief Release a context and all resources owned by it.
+ *
+ * @param ctx Context returned by prc_api_new_context.
+ * @return 0 on success. May return PRC_API_MEMORY_LEAK_DETECTED when leak
+ * detection is enabled and unreleased allocations remain.
+ */
 PRC_EXPORT int prc_api_release_context(prc_context *ctx);
+
+/**
+ * @brief Print and clear the current context error stack.
+ *
+ * @param ctx Active API context.
+ */
 PRC_EXPORT void prc_api_print_error_stack(prc_context *ctx);
 
+/**
+ * @brief Open input contents (PRC or supported container) and prepare API data.
+ *
+ * @param ctx Active API context.
+ * @param infile Input file path.
+ * @return Opaque API data handle on success, NULL on failure.
+ */
 PRC_EXPORT prc_api_data prc_api_open_contents(prc_context *ctx, const char *infile);
+
+/**
+ * @brief Release API data and optional tessellation/model-tree allocations.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle returned by prc_api_open_contents.
+ * @param tess Optional tessellation array previously allocated by caller.
+ * @param num_tess Number of entries in tess.
+ * @param line_tess Optional line tessellation array previously allocated by caller.
+ * @param num_line_tess Number of entries in line_tess.
+ * @param product_tree Optional model tree previously allocated by caller.
+ */
 PRC_EXPORT void prc_api_release_data(prc_context *ctx, prc_api_data data, prc_api_tess *tess, uint32_t num_tess, prc_api_tess *line_tess, uint32_t num_line_tess, prc_api_product *product_tree);
 
+/**
+ * @brief Print an API product tree for diagnostics.
+ *
+ * @param ctx Active API context.
+ * @param product Product subtree root to print.
+ * @param level Initial indentation level.
+ */
 PRC_EXPORT void prc_api_print_tree(prc_context *ctx, prc_api_product *product, int level);
+
+/**
+ * @brief Return number of stored camera views.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @return Number of views in the data set.
+ */
 PRC_EXPORT uint32_t prc_api_get_number_of_view(prc_context *ctx, prc_api_data data);
+
+/**
+ * @brief Fetch view metadata and transform for one view index.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param view_index Zero-based view index.
+ * @param name Output view name.
+ * @param matrix Output 4x4 transform matrix pointer.
+ * @param camera_z Output camera distance along z.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_view(prc_context *ctx, prc_api_data data, uint32_t view_index, char **name, double **matrix, double *camera_z);
+
+/**
+ * @brief Set a transform structure to identity.
+ *
+ * @param ctx Active API context.
+ * @param transform Transform object to initialize.
+ */
 PRC_EXPORT void prc_api_set_transform_identity(prc_context *ctx, prc_api_transform *transform);
+
+/**
+ * @brief Concatenate/apply a new transform into an existing transform.
+ *
+ * @param ctx Active API context.
+ * @param concate_transform In/out accumulated transform.
+ * @param new_transform Transform to apply.
+ */
 PRC_EXPORT void prc_api_update_transform(prc_context *ctx, prc_api_transform *concate_transform, prc_api_transform *new_transform);
+
+/**
+ * @brief Get tessellation pointer for a part representation item.
+ *
+ * @param ctx Active API context.
+ * @param part Part object.
+ * @param rep_item_index Representation-item index.
+ * @return Tessellation pointer, or NULL when unavailable.
+ */
 PRC_EXPORT prc_api_tess *prc_api_get_ri_tessellation(prc_context *ctx, prc_api_part *part, uint32_t rep_item_index);
+
+/**
+ * @brief Get optional extra wire tessellation pointer for a representation item.
+ *
+ * @param ctx Active API context.
+ * @param part Part object.
+ * @param rep_item_index Representation-item index.
+ * @return Extra wire tessellation pointer, or NULL when unavailable.
+ */
 PRC_EXPORT prc_api_tess *prc_api_get_ri_line_tessellation(prc_context *ctx, prc_api_part *part, uint32_t rep_item_index);
+
+/**
+ * @brief Get a model-level tessellation associated with a product node.
+ *
+ * @param ctx Active API context.
+ * @param parent Product node.
+ * @return Tessellation pointer, or NULL when unavailable.
+ */
 PRC_EXPORT prc_api_tess* prc_api_get_model_tessellation(prc_context* ctx, prc_api_product *parent);
+
+/**
+ * @brief Get markup tessellation by index.
+ *
+ * @param ctx Active API context.
+ * @param product Product node containing markups.
+ * @param markup_index Markup index.
+ * @return Markup tessellation pointer, or NULL when unavailable.
+ */
 PRC_EXPORT prc_api_tess* prc_api_get_markup_tessellation(prc_context *ctx, prc_api_product *product, uint32_t markup_index);
+
+/**
+ * @brief Check whether a model item corresponds to a part.
+ *
+ * @param ctx Active API context.
+ * @param parent Model node.
+ * @return Non-zero if node represents a part.
+ */
 PRC_EXPORT uint8_t prc_api_model_item_is_part(prc_context *ctx, prc_api_product *parent);
+
+/**
+ * @brief Return number of markups attached to a model item.
+ *
+ * @param ctx Active API context.
+ * @param api_product Product/model node.
+ * @return Number of markups attached to the node.
+ */
 PRC_EXPORT uint32_t prc_api_model_item_number_of_markups(prc_context *ctx, prc_api_product *api_product);
+
+/**
+ * @brief Initialize one tessellation entry and optional extra-line companion.
+ *
+ * @param ctx Active API context.
+ * @param data_in Data handle from prc_api_open_contents.
+ * @param model_tree Model tree created by prc_api_create_model_tree.
+ * @param tess_index Tessellation index in prepared model data.
+ * @param api_tess Output tessellation object.
+ * @param api_tess_line Optional output for extra line tessellation.
+ * @param has_line Output flag indicating whether extra line tessellation exists.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_initialize_tessellation(prc_context* ctx, prc_api_data data_in, prc_api_product *model_tree, uint32_t tess_index, prc_api_tess *api_tess, prc_api_tess *api_tess_line, uint8_t *has_line);
+
+/**
+ * @brief Get counts of tessellations and extra line tessellations.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param modeltree Model tree root.
+ * @param num_tess Output count of tessellations.
+ * @param num_line_tess Output count of line tessellations.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data, prc_api_product *modeltree, uint32_t *num_tess, uint32_t *num_line_tess);
+
+/**
+ * @brief Return number of faces for a tessellation.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param tess_index Tessellation index.
+ * @return Number of faces for the tessellation.
+ */
 PRC_EXPORT uint32_t prc_api_get_number_faces(prc_context *ctx, prc_api_data data, uint32_t tess_index);
+
+/**
+ * @brief Build face wire primitive data for one tessellation face.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param api_tree Model tree root.
+ * @param tess_index Tessellation index.
+ * @param face_index Face index in tessellation.
+ * @param face_out Output face metadata.
+ * @param tess_line Output line tessellation data.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data, prc_api_product *api_tree, uint32_t tess_index, uint32_t face_index, prc_api_face *face_out, prc_api_tess *tess_line);
+
+/**
+ * @brief Build tessellation vertices/primitives for one tessellation face.
+ *
+ * @param ctx Active API context.
+ * @param data_in Data handle.
+ * @param api_tree Model tree root.
+ * @param tess_index Tessellation index.
+ * @param face_index Face index in tessellation.
+ * @param face_out Output face metadata.
+ * @param api_tess Output tessellation data.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in, prc_api_product *api_tree, uint32_t tess_index, uint32_t face_index, prc_api_face *face_out, prc_api_tess *api_tess);
+
+/**
+ * @brief Get one graphics primitive descriptor by index.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param tess Tessellation object.
+ * @param face_index Face index.
+ * @param graphics_primitive_index Primitive index for the face.
+ * @param graphics_primitive Output primitive descriptor.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, uint32_t face_index, size_t graphics_primitive_index, prc_api_graphic_primitive *graphics_primitive);
+
+/**
+ * @brief Return number of graphics primitives for a tessellation object.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param tess Tessellation object.
+ * @return Number of graphics primitives available.
+ */
 PRC_EXPORT size_t prc_api_get_num_graphics_primitives(prc_context *ctx, prc_api_data data, const prc_api_tess *tess);
+
+/**
+ * @brief Return whether a face uses material properties.
+ *
+ * @param ctx Active API context.
+ * @param api_tess Tessellation object.
+ * @param face_index Face index.
+ * @return Non-zero when material data is present.
+ */
 PRC_EXPORT int prc_api_face_is_material(prc_context *ctx, const prc_api_tess *api_tess, uint32_t face_index);
+
+/**
+ * @brief Return whether a face should be skipped for rendering.
+ *
+ * @param ctx Active API context.
+ * @param api_tess Tessellation object.
+ * @param face_index Face index.
+ * @return Non-zero when face should be skipped.
+ */
 PRC_EXPORT uint8_t prc_api_skip_face(prc_context *ctx, const prc_api_tess *api_tess, uint32_t face_index);
+
+/**
+ * @brief Get material values for a tessellation face.
+ *
+ * @param ctx Active API context.
+ * @param api_tess Tessellation object.
+ * @param material Output material payload.
+ * @param face_index Face index.
+ */
 PRC_EXPORT void prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess, prc_api_material *material, uint32_t face_index);
+
+/**
+ * @brief Get one text primitive from a tessellation.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param tess Tessellation object.
+ * @param text_index Text primitive index.
+ * @param text_primitive Output text primitive.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_text_primitive(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, uint32_t text_index, prc_api_text_primitive *text_primitive);
+
+/**
+ * @brief Return number of materials represented by a tessellation.
+ *
+ * @param ctx Active API context.
+ * @param data_in Data handle.
+ * @param tess Tessellation object.
+ * @return Number of materials represented.
+ */
 PRC_EXPORT uint32_t prc_api_number_of_materials(prc_context *ctx, prc_api_data data_in, const prc_api_tess *tess);
+
+/**
+ * @brief Return whether per-vertex material/style payload is present on a face.
+ *
+ * @param ctx Active API context.
+ * @param api_tess Tessellation object.
+ * @param face_index Face index.
+ * @return Non-zero when vertices carry style/material data.
+ */
 PRC_EXPORT uint8_t prc_api_vertices_have_material(prc_context *ctx, const prc_api_tess *api_tess, uint32_t face_index);
+
+/**
+ * @brief Get expanded face vertices for a tessellation face.
+ *
+ * @param ctx Active API context.
+ * @param tess Tessellation object.
+ * @param face_index Face index.
+ * @param vertex_count Output number of expanded vertices.
+ * @param vertices Output allocated vertex array.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_get_face_vertices(prc_context *ctx, const prc_api_tess *tess, uint32_t face_index, uint32_t *vertex_count, prc_api_vertex **vertices);
+
+/**
+ * @brief Precompute counts needed to allocate model tree arrays.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param num_parts Output part count.
+ * @param num_products Output product count.
+ * @param num_markups Output markup count.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_prep_model_tree(prc_context *ctx, prc_api_data data, uint32_t *num_parts, uint32_t *num_products, uint32_t *num_markups);
+
+/**
+ * @brief Build the API model tree from parsed data.
+ *
+ * @param ctx Active API context.
+ * @param data Data handle.
+ * @param parent Output root pointer for the created model tree.
+ * @param num_parts Preallocated part capacity from prc_api_prep_model_tree.
+ * @param num_products Preallocated product capacity from prc_api_prep_model_tree.
+ * @param num_markups Preallocated markup capacity from prc_api_prep_model_tree.
+ * @return 0 on success, negative PRC_API_ERROR_* code on failure.
+ */
 PRC_EXPORT int prc_api_create_model_tree(prc_context *ctx, prc_api_data data, prc_api_product **parent, uint32_t num_parts, uint32_t num_products, uint32_t num_markups);
 #ifdef __cplusplus
 }
 #endif
+
+/** @} */
 
 #endif

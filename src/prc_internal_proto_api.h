@@ -20,6 +20,22 @@
 #include <stdint.h>
 #include "prc_data.h"
 
+/**
+ * @file prc_internal_proto_api.h
+ * @brief Internal tessellation/API conversion helpers used by nanoPRC.
+ *
+ * This header declares non-public helpers that convert PRC tessellation data
+ * into API-facing buffers and styles.
+ */
+
+/** @defgroup internal_api Internal API Conversion Helpers
+ *  @brief Internal helpers for tessellation conversion, edge processing, and style mapping.
+ *  @{
+ */
+
+/**
+ * @brief Normal interpretation mode for triangle conversion.
+ */
 typedef enum {
     PRC_INTERNAL_MULTI_NORM = 0,
     PRC_INTERNAL_SINGLE_NORM_INITIAL,
@@ -39,7 +55,9 @@ typedef enum {
     PRC_INTERNAL_API_SET_SECOND_NORMAL_OF_EDGE
 } prc_internal_api_edge_normal_set_t;
 
-/* Edge list supporting stuctures */
+/**
+ * @brief One edge and up to two incident triangles during edge-list construction.
+ */
 typedef struct prc_internal_api_edge_s
 {
     uint32_t tri_one_full_indices[3];
@@ -54,6 +72,9 @@ typedef struct prc_internal_api_edge_s
     uint8_t split;
 } prc_internal_api_edge;
 
+/**
+ * @brief Dynamic list of internal edges used during smoothing/splitting.
+ */
 typedef struct prc_internal_api_edge_list_s
 {
     size_t num_edges;
@@ -128,21 +149,62 @@ typedef struct prc_internal_api_uncomm_tess_data_s
 
 } prc_internal_api_uncomm_tess_data;
 
-/* Initialize vertices for cases when we had to do a realloc */
+/**
+ * @brief Initialize newly-added vertices after a vertex buffer growth/reallocation.
+ *
+ * @param ctx Parser/context object.
+ * @param vertex_buffer Vertex buffer whose newly appended entries must be initialized.
+ */
 void prc_internal_api_initialize_vertex(prc_context *ctx,
     prc_api_tess_vertex_buffer *vertex_buffer);
 
+/**
+ * @brief Resolve style color values from a style index.
+ *
+ * @param ctx Parser/context object.
+ * @param global_data Global file data used for style lookup.
+ * @param style_index Unbiased style index.
+ * @param color_out Output RGBA (or RGB + implied alpha depending on caller usage).
+ * @return 0 on success, negative error code on failure.
+ */
 int prc_internal_api_get_color_from_style(prc_context *ctx,
     prc_file_struct_internal_global_data *global_data,
     int32_t style_index, float *color_out);
 
+/**
+ * @brief Build a 4x4 transform from a PRC location transform.
+ *
+ * @param ctx Parser/context object.
+ * @param location PRC transform source.
+ * @param transform Output transform matrix buffer.
+ * @param is_identity Output flag indicating whether the transform is identity.
+ * @return 0 on success, negative error code on failure.
+ */
 int prc_internal_api_set_transform(prc_context *ctx, const prc_misc_transformation *location,
     double *transform, uint8_t *is_identity);
 
+/**
+ * @brief Initialize a face output container to a safe default state.
+ *
+ * @param ctx Parser/context object.
+ * @param face_out Face container to initialize.
+ */
 void prc_api_initialize_face(prc_context *ctx, prc_api_face *face_out);
 
+/**
+ * @brief Initialize an API texture container to a safe default state.
+ *
+ * @param ctx Parser/context object.
+ * @param texture Texture container to initialize.
+ */
 void prc_api_initialize_texture(prc_context *ctx, prc_api_texture *texture);
 
+/**
+ * @brief Initialize an internal style structure to defaults.
+ *
+ * @param ctx Parser/context object.
+ * @param style Style structure to initialize.
+ */
 void prc_internal_api_initialize_style(prc_context *ctx, prc_internal_graph_style *style);
 
 int prc_internal_api_set_fans(prc_context *ctx, prc_tess_face face,
@@ -209,5 +271,7 @@ void prc_internal_api_set_vertex_texture_coords(prc_context *ctx, prc_api_vertex
 int prc_internal_get_surface_material(prc_context *ctx,
     prc_file_struct_internal_global_data *global_data, int32_t index,
     prc_api_material *material);
+
+/** @} */
 
 #endif

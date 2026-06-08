@@ -21,6 +21,16 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+/**
+ * @file prc_context.h
+ * @brief Context, allocation hooks, and internal error stack primitives.
+ */
+
+/** @defgroup context_api Context API
+ *  @brief Context lifecycle, allocation wrappers, and error reporting.
+ *  @{
+ */
+
 #ifndef PRC_DEBUG_MEMORY
 #define PRC_DEBUG_MEMORY 0
 #endif
@@ -33,7 +43,11 @@ typedef struct prc_context_s prc_context;
 typedef struct prc_exception prc_exception;
 typedef struct prc_nano_brep_compressed_data_s prc_nano_brep_compressed_data;
 
-/* Hooks and opaque pointer from caller */
+/**
+ * @brief Caller-provided allocation hooks and opaque user payload.
+ *
+ * If hooks are omitted, default allocator behavior is used.
+ */
 typedef struct
 {
     void *opaque;
@@ -42,6 +56,9 @@ typedef struct
     void (*free)(void *, void *);
 } prc_hooks;
 
+/**
+ * @brief One entry in the context error stack.
+ */
 struct prc_exception {
     char message[256];
     int code;
@@ -91,16 +108,88 @@ struct prc_context_s
  #endif
 };
 
+/**
+ * @brief Push a formatted error entry onto the context error stack.
+ *
+ * @param ctx Active context.
+ * @param code Error code.
+ * @param file Source file name.
+ * @param line Source line number.
+ * @param format printf-style format string.
+ * @param args Vararg list.
+ */
 void prc_vferror(prc_context *ctx, int code, const char *file, int line, const char *format, va_list args);
+
+/**
+ * @brief Push a formatted error entry onto the context error stack.
+ *
+ * @param ctx Active context.
+ * @param code Error code.
+ * @param file Source file name.
+ * @param line Source line number.
+ * @param format printf-style format string.
+ */
 void prc_ferror(prc_context *ctx, int code, const char *file, int line, const char *format, ...);
+
 #define prc_error(ctx, code, format, ...) prc_ferror((ctx), (code), __FILE__, __LINE__, "%s", (format))
 
+/**
+ * @brief Create a new low-level PRC context.
+ *
+ * @param hooks Optional caller-provided allocation hooks.
+ * @return New context on success, NULL on failure.
+ */
 prc_context* prc_new_context(const prc_hooks *hooks);
+
+/**
+ * @brief Release a low-level PRC context.
+ *
+ * @param ctx Context to release.
+ */
 void prc_release_context(prc_context *ctx);
+
+/**
+ * @brief Context-aware malloc wrapper.
+ *
+ * @param ctx Active context.
+ * @param size Number of bytes.
+ * @return Allocated block, or NULL on failure.
+ */
 void *prc_malloc(prc_context *ctx, size_t size);
+
+/**
+ * @brief Context-aware calloc wrapper.
+ *
+ * @param ctx Active context.
+ * @param count Element count.
+ * @param size Size per element.
+ * @return Allocated zeroed block, or NULL on failure.
+ */
 void *prc_calloc(prc_context *ctx, size_t count, size_t size);
+
+/**
+ * @brief Context-aware realloc wrapper.
+ *
+ * @param ctx Active context.
+ * @param p Existing allocation, or NULL.
+ * @param size New allocation size.
+ * @return Reallocated block, or NULL on failure.
+ */
 void *prc_realloc(prc_context *ctx, void *p, size_t size);
+
+/**
+ * @brief Context-aware free wrapper.
+ *
+ * @param ctx Active context.
+ * @param p Allocation to free.
+ */
 void prc_free(prc_context *ctx, void *p);
+
+/**
+ * @brief Print current context error stack.
+ *
+ * @param ctx Active context.
+ */
 void prc_print_error_stack(prc_context *ctx);
 
 #define PRC_ERROR_MEMORY -1
@@ -119,5 +208,7 @@ void prc_print_error_stack(prc_context *ctx);
 #define PRC_ERROR_PDF -14
 #define PRC_ERROR_PASSWORD -15
 #define PRC_API_ERROR -16
+
+/** @} */
 
 #endif
