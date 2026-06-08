@@ -12,3 +12,8 @@ vs2019/Release
 *.dll
 *.o
 *.bak
+
+# Generated Doxygen output
+docs/doxygen/html/
+docs/doxygen/xml-public/
+docs/doxygen/*.log

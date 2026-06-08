@@ -1,0 +1,32 @@
+name: doxygen-public
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  doxygen-public:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Doxygen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y doxygen
+
+      - name: Run strict public Doxygen check
+        run: doxygen Doxyfile.public
+
+      - name: Upload public warnings log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doxygen-public-warnings
+          path: docs/doxygen/warnings-public.log
+          if-no-files-found: ignore

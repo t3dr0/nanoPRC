@@ -83,3 +83,21 @@ If no matching tag is present, the fallback version is `v0.1.0`.
 
 - Checklist: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)
 - CI tag policy guard: [.github/workflows/tag-policy.yaml](.github/workflows/tag-policy.yaml)
+
+## Documentation
+
+Generate API documentation locally with Doxygen:
+
+```bash
+doxygen Doxyfile
+```
+
+This writes HTML output to `docs/doxygen/html`.
+
+For strict public API doc checks used in CI (parameter-doc focused):
+
+```bash
+doxygen Doxyfile.public
+```
+
+Warnings are written to `docs/doxygen/warnings-public.log` and fail the strict check when present.
