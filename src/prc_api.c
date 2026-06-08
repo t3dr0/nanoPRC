@@ -88,7 +88,7 @@ prc_api_release_context(prc_context *ctx)
             release_code = PRC_API_MEMORY_LEAK_DETECTED;
     }
 #endif
-    return release_code;
+     return release_code;
 }
 
 PRC_EXPORT prc_api_data
@@ -189,17 +189,25 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
 
     for (k = 0; k < num_line_tess; k++)
     {
-        if (line_tess[k].tess_vertices.vertices != NULL)
-            prc_free(ctx, line_tess[k].tess_vertices.vertices);
-        if (line_tess[k].reserved != NULL)
+        if (line_tess[k].tess_faces != NULL)
         {
-            prc_internal_api_wire *wire = line_tess[k].reserved;
-            for (j = 0; j < line_tess[k].num_line_primitives; j++)
+            for (j = 0; j < line_tess[k].num_faces; j++)
             {
-                if (wire[j].vertex_indices != NULL)
-                    prc_free(ctx, wire[j].vertex_indices);
+                if (line_tess[k].tess_faces[j].face_vertices.vertices != NULL)
+                    prc_free(ctx, line_tess[k].tess_faces[j].face_vertices.vertices);
+                prc_internal_api_wire *wire = line_tess[k].tess_faces[j].reserved;
+                if (wire != NULL)
+                {
+                    uint32_t num_graphic_primitives = line_tess[k].tess_faces[j].num_graphic_primitives;
+                    for (int i = 0; i < num_graphic_primitives; i++)
+                    {
+                        if (wire[i].vertex_indices != NULL)
+                            prc_free(ctx, wire[i].vertex_indices);
+                    }
+                    prc_free(ctx, wire);
+                }
             }
-            prc_free(ctx, wire);
+            //prc_free(ctx, line_tess[k].tess_faces);
         }
     }
 
@@ -3082,7 +3090,7 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
                         prc_tess_3d *tess3d = tess->tess_3d;
                         if (tess3d->number_of_wire_indices > 0)
                         {
-                            //(*num_line_tess)++;
+                            (*num_line_tess)++;
                         }
                     }
                     else if (tess_type == PRC_TYPE_TESS_3D_Compressed)
@@ -3297,7 +3305,7 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
             prc_tess_3d *tess_3d = tessellation->tess_3d;
             if (tess_3d->number_of_wire_indices > 0)
             {
-                *has_line = 0;
+                *has_line = 1;
             }
             break;
         case PRC_TYPE_TESS_3D_Compressed:
@@ -3469,6 +3477,10 @@ prc_api_skip_face(prc_context *ctx, const prc_api_tess *api_tess,
         return api_tess->tess_faces[face_index].disable_face;
     }
     if (api_tess->type == PRC_API_TESS_3D_Compressed)
+    {
+        return api_tess->tess_faces[0].disable_face;
+    }
+    if (api_tess->type == PRC_API_TESS_3D_Wire_Extra && face_index < api_tess->num_faces)
     {
         return api_tess->tess_faces[face_index].disable_face;
     }

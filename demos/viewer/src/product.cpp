@@ -434,8 +434,7 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
        we set the whole part (tessellation) to have a material. Probably OK but
        there could be a case where we have different faces with textures and
        materials and solid colors.  Fun! */
-    if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp ||
-        tess->type == PRC_API_TESS_3D_Wire_Extra)
+    if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp)
     {
         face_max = 1;
     }
@@ -490,8 +489,7 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
         /* The vertices could have material definitions assigned to them */
         verticesHaveMaterial = prc_api_vertices_have_material(ctx, tess, i);
 
-        if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp ||
-            tess->type == PRC_API_TESS_3D_Wire_Extra)
+        if (tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp)
         {
             num_graphic_primitives = tess->num_line_primitives;
             if (tess->type == PRC_API_TESS_MarkUp)

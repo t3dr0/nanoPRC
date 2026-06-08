@@ -670,6 +670,13 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
             exit(1);
         }
 
+        /* Tess line sits in parallel in terms of faces with tess */
+        if (has_line)
+        {
+            tess_line->num_faces = nFaces;
+            tess_line->tess_faces = new prc_api_face[nFaces];
+        }
+
         if (tess.type == PRC_API_TESS_UNKNOWN)
         {
             /* Who knows what this is all about. */
@@ -704,20 +711,25 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
         }
 
         /* This is a special case where we have wire data in the 3D tessellation
-           data, or we have added wire data in the compressed 3D tessellation */
+           data, or we have added wire data in the compressed 3D tessellation.
+           This gets put into a hidden object in the model tree */
         if (has_line)
         {
             /* We have a line tessellation to add for this model. Get the line
                tessellation data */
-            int code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree, k, tess_line);
-            line_tess_index++;
-            if (code < 0)
+            for (j = 0; j < tess.num_faces; j++)
             {
-                printf("Scene::load: prc_api_get_line_tessallation_vertices failed\n");
-                exit(1);
+                code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree,
+                                                    k, j, tess_line->tess_faces + j,
+                                                    tess_line);
+                if (code < 0)
+                {
+                    printf("Scene::load: prc_api_get_line_tessallation_vertices failed\n");
+                    exit(1);
+                }
             }
+            line_tess_index++;
         }
-
     }
 
     Vector4 min_bound;

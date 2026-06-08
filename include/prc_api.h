@@ -294,7 +294,7 @@ PRC_EXPORT uint32_t prc_api_model_item_number_of_markups(prc_context *ctx, prc_a
 PRC_EXPORT int prc_api_initialize_tessellation(prc_context* ctx, prc_api_data data_in, prc_api_product *model_tree, uint32_t tess_index, prc_api_tess *api_tess, prc_api_tess *api_tess_line, uint8_t *has_line);
 PRC_EXPORT int prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data, prc_api_product *modeltree, uint32_t *num_tess, uint32_t *num_line_tess);
 PRC_EXPORT uint32_t prc_api_get_number_faces(prc_context *ctx, prc_api_data data, uint32_t tess_index);
-PRC_EXPORT int prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data, prc_api_product *api_tree, uint32_t tess_index, prc_api_tess *tess_line);
+PRC_EXPORT int prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data, prc_api_product *api_tree, uint32_t tess_index, uint32_t face_index, prc_api_face *face_out, prc_api_tess *tess_line);
 PRC_EXPORT int prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in, prc_api_product *api_tree, uint32_t tess_index, uint32_t face_index, prc_api_face *face_out, prc_api_tess *api_tess);
 PRC_EXPORT int prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, uint32_t face_index, size_t graphics_primitive_index, prc_api_graphic_primitive *graphics_primitive);
 PRC_EXPORT size_t prc_api_get_num_graphics_primitives(prc_context *ctx, prc_api_data data, const prc_api_tess *tess);
