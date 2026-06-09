@@ -31,6 +31,8 @@ _add_windows_dll_search_paths()
 from ._core import (
     Context,
     Document,
+    ModelNode,
+    View,
     PRC_API_ERROR_MEMORY,
     PRC_API_ERROR_PARAMETER,
     PRC_API_ERROR_PARSER,
@@ -40,6 +42,8 @@ from ._core import (
 __all__ = [
     "Context",
     "Document",
+    "ModelNode",
+    "View",
     "PRC_API_ERROR_MEMORY",
     "PRC_API_ERROR_PARAMETER",
     "PRC_API_ERROR_PARSER",

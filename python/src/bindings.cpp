@@ -1,8 +1,13 @@
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 
 extern "C" {
 #include "prc_api.h"
@@ -11,6 +16,66 @@ extern "C" {
 namespace py = pybind11;
 
 namespace {
+
+static std::string safe_string(const char* cstr) {
+    return cstr ? std::string(cstr) : std::string();
+}
+
+static py::array make_float_array_from_vertex_field(
+    const prc_api_tess_vertex_buffer& buffer,
+    const float* field_ptr,
+    size_t component_count,
+    const py::object& owner)
+{
+    if (!buffer.vertices || buffer.num_vertices == 0) {
+        py::buffer_info info(
+            nullptr,
+            sizeof(float),
+            py::format_descriptor<float>::format(),
+            2,
+            {0, static_cast<py::ssize_t>(component_count)},
+            { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) }
+        );
+        return py::array(info, owner);
+    }
+
+    py::buffer_info info(
+        const_cast<float*>(field_ptr),
+        sizeof(float),
+        py::format_descriptor<float>::format(),
+        2,
+        { static_cast<py::ssize_t>(buffer.num_vertices), static_cast<py::ssize_t>(component_count) },
+        { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) }
+    );
+
+    return py::array(info, owner);
+}
+
+static py::array make_uint32_array(const uint32_t* data, size_t count, const py::object& owner)
+{
+    if (!data || count == 0) {
+        py::buffer_info info(
+            nullptr,
+            sizeof(uint32_t),
+            py::format_descriptor<uint32_t>::format(),
+            1,
+            {0},
+            { static_cast<py::ssize_t>(sizeof(uint32_t)) }
+        );
+        return py::array(info, owner);
+    }
+
+    py::buffer_info info(
+        const_cast<uint32_t*>(data),
+        sizeof(uint32_t),
+        py::format_descriptor<uint32_t>::format(),
+        1,
+        { static_cast<py::ssize_t>(count) },
+        { static_cast<py::ssize_t>(sizeof(uint32_t)) }
+    );
+
+    return py::array(info, owner);
+}
 
 class Context {
 public:
@@ -57,15 +122,100 @@ private:
     prc_context* ctx_;
 };
 
-class Document {
+class Document;
+
+class ModelNode {
+public:
+    ModelNode(std::shared_ptr<Document> owner, prc_api_product* node)
+        : owner_(std::move(owner)), node_(node) {
+        children_.reserve(node_->num_children);
+        for (size_t i = 0; i < node_->num_children; ++i) {
+            children_.push_back(std::make_shared<ModelNode>(owner_, &node_->children[i]));
+        }
+    }
+
+    std::string name() const {
+        return node_->name ? std::string(node_->name) : std::string();
+    }
+
+    bool is_model() const {
+        return node_->is_model != 0;
+    }
+
+    uint32_t node_type() const {
+        return static_cast<uint32_t>(node_->type);
+    }
+
+    uint32_t num_children() const {
+        return static_cast<uint32_t>(node_->num_children);
+    }
+
+    py::list children() const {
+        py::list result;
+        for (const auto& child : children_) {
+            result.append(child);
+        }
+        return result;
+    }
+
+    uint32_t num_markups() const {
+        return node_->num_markups;
+    }
+
+    bool has_part() const {
+        return node_->part != nullptr;
+    }
+
+    std::string repr() const {
+        return "ModelNode(name='" + name() + "', children=" + std::to_string(num_children()) + ")";
+    }
+
+private:
+    std::shared_ptr<Document> owner_;
+    prc_api_product* node_;
+    std::vector<std::shared_ptr<ModelNode>> children_;
+};
+
+class View {
+public:
+    View(std::string name, std::array<double, 16> matrix, double camera_z)
+        : name_(std::move(name)), matrix_(matrix), camera_z_(camera_z) {}
+
+    const std::string& name() const {
+        return name_;
+    }
+
+    const std::array<double, 16>& matrix() const {
+        return matrix_;
+    }
+
+    double camera_z() const {
+        return camera_z_;
+    }
+
+private:
+    std::string name_;
+    std::array<double, 16> matrix_;
+    double camera_z_;
+};
+
+class Document : public std::enable_shared_from_this<Document> {
 public:
     Document(std::shared_ptr<Context> owner, prc_api_data data)
         : owner_(std::move(owner)), data_(data) {}
 
     ~Document() {
         if (data_ && owner_ && owner_->raw()) {
-            prc_api_release_data(owner_->raw(), data_, nullptr, 0, nullptr, 0, nullptr);
+            prc_api_release_data(
+                owner_->raw(),
+                data_,
+                tessellations_.empty() ? nullptr : tessellations_.data(),
+                static_cast<uint32_t>(tessellations_.size()),
+                line_tessellations_.empty() ? nullptr : line_tessellations_.data(),
+                static_cast<uint32_t>(line_tessellations_.size()),
+                model_tree_);
             data_ = nullptr;
+            model_tree_ = nullptr;
         }
     }
 
@@ -73,32 +223,405 @@ public:
     Document& operator=(const Document&) = delete;
 
     Document(Document&& other) noexcept
-        : owner_(std::move(other.owner_)), data_(other.data_) {
+        : owner_(std::move(other.owner_)), data_(other.data_), model_tree_(other.model_tree_), num_parts_(other.num_parts_), num_products_(other.num_products_), num_markups_(other.num_markups_), tessellations_(std::move(other.tessellations_)), line_tessellations_(std::move(other.line_tessellations_)), tess_faces_storage_(std::move(other.tess_faces_storage_)), line_tess_faces_storage_(std::move(other.line_tess_faces_storage_)), line_tess_map_(std::move(other.line_tess_map_)), tessellation_initialized_(other.tessellation_initialized_), num_tessellations_(other.num_tessellations_), num_line_tessellations_(other.num_line_tessellations_) {
         other.data_ = nullptr;
+        other.model_tree_ = nullptr;
+        other.tessellation_initialized_ = false;
+        other.num_tessellations_ = 0;
+        other.num_line_tessellations_ = 0;
     }
 
     Document& operator=(Document&& other) noexcept {
         if (this != &other) {
             if (data_ && owner_ && owner_->raw()) {
-                prc_api_release_data(owner_->raw(), data_, nullptr, 0, nullptr, 0, nullptr);
+                prc_api_release_data(
+                    owner_->raw(),
+                    data_,
+                    tessellations_.empty() ? nullptr : tessellations_.data(),
+                    static_cast<uint32_t>(tessellations_.size()),
+                    line_tessellations_.empty() ? nullptr : line_tessellations_.data(),
+                    static_cast<uint32_t>(line_tessellations_.size()),
+                    model_tree_);
             }
             owner_ = std::move(other.owner_);
             data_ = other.data_;
+            model_tree_ = other.model_tree_;
+            num_parts_ = other.num_parts_;
+            num_products_ = other.num_products_;
+            num_markups_ = other.num_markups_;
+            tessellations_ = std::move(other.tessellations_);
+            line_tessellations_ = std::move(other.line_tessellations_);
+            tess_faces_storage_ = std::move(other.tess_faces_storage_);
+            line_tess_faces_storage_ = std::move(other.line_tess_faces_storage_);
+            line_tess_map_ = std::move(other.line_tess_map_);
+            tessellation_initialized_ = other.tessellation_initialized_;
+            num_tessellations_ = other.num_tessellations_;
+            num_line_tessellations_ = other.num_line_tessellations_;
             other.data_ = nullptr;
+            other.model_tree_ = nullptr;
+            other.tessellation_initialized_ = false;
+            other.num_tessellations_ = 0;
+            other.num_line_tessellations_ = 0;
         }
         return *this;
+    }
+
+    prc_context* raw() const {
+        return owner_->raw();
+    }
+
+    void print_error_stack() const {
+        owner_->print_error_stack();
     }
 
     bool is_open() const {
         return data_ != nullptr;
     }
 
+    uint32_t number_of_views() const {
+        return prc_api_get_number_of_view(owner_->raw(), data_);
+    }
+
+    View get_view(uint32_t view_index) const {
+        char* name = nullptr;
+        double* matrix = nullptr;
+        double camera_z = 0.0;
+        int result = prc_api_get_view(owner_->raw(), data_, view_index, &name, &matrix, &camera_z);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_get_view failed");
+        }
+
+        std::array<double, 16> matrix_array{};
+        if (matrix) {
+            std::copy_n(matrix, matrix_array.size(), matrix_array.begin());
+        }
+
+        return View(name ? std::string(name) : std::string(), matrix_array, camera_z);
+    }
+
+    py::tuple prepare_model_tree() {
+        uint32_t num_parts = 0;
+        uint32_t num_products = 0;
+        uint32_t num_markups = 0;
+        int result = prc_api_prep_model_tree(owner_->raw(), data_, &num_parts, &num_products, &num_markups);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_prep_model_tree failed");
+        }
+        num_parts_ = num_parts;
+        num_products_ = num_products;
+        num_markups_ = num_markups;
+        return py::make_tuple(num_parts, num_products, num_markups);
+    }
+
+    bool has_model_tree() const {
+        return model_tree_ != nullptr;
+    }
+
+    std::shared_ptr<ModelNode> create_model_tree() {
+        if (!model_tree_) {
+            if (num_parts_ == 0 && num_products_ == 0 && num_markups_ == 0) {
+                prepare_model_tree();
+            }
+
+            prc_api_product* root = nullptr;
+            int result = prc_api_create_model_tree(owner_->raw(), data_, &root, num_parts_, num_products_, num_markups_);
+            if (result != 0 || !root) {
+                throw std::runtime_error("prc_api_create_model_tree failed");
+            }
+            model_tree_ = root;
+        }
+        return std::make_shared<ModelNode>(shared_from_this(), model_tree_);
+    }
+
+    py::tuple tessellation_counts() {
+        if (!model_tree_) {
+            throw std::runtime_error("Model tree must be created before requesting tessellation counts");
+        }
+        initialize_tessellations();
+        return py::make_tuple(num_tessellations_, num_line_tessellations_);
+    }
+
+    uint32_t number_of_faces(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        return static_cast<uint32_t>(tess.num_faces);
+    }
+
+    uint32_t tessellation_vertex_count(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        return static_cast<uint32_t>(tess.tess_vertices.num_vertices);
+    }
+
+    py::array tessellation_vertex_positions(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        py::object owner = py::cast(shared_from_this());
+        return make_float_array_from_vertex_field(
+            tess.tess_vertices,
+            tess.tess_vertices.vertices ? tess.tess_vertices.vertices[0].position : nullptr,
+            3,
+            owner);
+    }
+
+    py::array tessellation_vertex_normals(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        py::object owner = py::cast(shared_from_this());
+        return make_float_array_from_vertex_field(
+            tess.tess_vertices,
+            tess.tess_vertices.vertices ? tess.tess_vertices.vertices[0].normal : nullptr,
+            3,
+            owner);
+    }
+
+    py::array tessellation_vertex_colors(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        py::object owner = py::cast(shared_from_this());
+        return make_float_array_from_vertex_field(
+            tess.tess_vertices,
+            tess.tess_vertices.vertices ? tess.tess_vertices.vertices[0].color : nullptr,
+            4,
+            owner);
+    }
+
+    py::array tessellation_vertex_uvs(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        py::object owner = py::cast(shared_from_this());
+        return make_float_array_from_vertex_field(
+            tess.tess_vertices,
+            tess.tess_vertices.vertices ? tess.tess_vertices.vertices[0].uv : nullptr,
+            2,
+            owner);
+    }
+
+    uint32_t face_vertex_count(uint32_t tess_index, uint32_t face_index) {
+        initialize_tessellations();
+        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
+        return static_cast<uint32_t>(face.face_vertices.num_vertices);
+    }
+
+    py::array face_vertex_positions(uint32_t tess_index, uint32_t face_index) {
+        initialize_tessellations();
+        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
+        py::object owner = py::cast(shared_from_this());
+        return make_float_array_from_vertex_field(
+            face.face_vertices,
+            face.face_vertices.vertices ? face.face_vertices.vertices[0].position : nullptr,
+            3,
+            owner);
+    }
+
+    py::list face_vertices(uint32_t tess_index, uint32_t face_index) {
+        py::array positions = face_vertex_positions(tess_index, face_index);
+        py::list result;
+        auto buf = positions.request();
+        const float* data = static_cast<const float*>(buf.ptr);
+        for (size_t i = 0; i < static_cast<size_t>(buf.shape[0]); ++i) {
+            result.append(py::make_tuple(
+                data[i * 3 + 0],
+                data[i * 3 + 1],
+                data[i * 3 + 2]
+            ));
+        }
+        return result;
+    }
+
+    py::dict face_material(uint32_t tess_index, uint32_t face_index) {
+        initialize_tessellations();
+        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
+        py::object owner = py::cast(shared_from_this());
+        py::dict material;
+        material["emissive"] = py::array(py::buffer_info(const_cast<float*>(face.material.emissive), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
+        material["diffuse"] = py::array(py::buffer_info(const_cast<float*>(face.material.diffuse), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
+        material["specular"] = py::array(py::buffer_info(const_cast<float*>(face.material.specular), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
+        material["ambient"] = py::array(py::buffer_info(const_cast<float*>(face.material.ambient), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
+        material["shininess"] = face.material.shininess;
+        material["emissive_alpha"] = face.material.emissive_alpha;
+        material["diffuse_alpha"] = face.material.diffuse_alpha;
+        material["specular_alpha"] = face.material.specular_alpha;
+        material["ambient_alpha"] = face.material.ambient_alpha;
+
+        py::dict result;
+        result["is_material"] = face.is_material != 0;
+        result["has_transparency"] = face.has_transparency != 0;
+        result["is_texture"] = face.is_texture != 0;
+        result["material"] = material;
+        return result;
+    }
+
+    size_t face_graphics_primitive_count(uint32_t tess_index, uint32_t face_index) {
+        initialize_tessellations();
+        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
+        return face.num_graphic_primitives;
+    }
+
+    py::dict get_graphics_primitive(uint32_t tess_index, uint32_t face_index, size_t primitive_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        prc_api_graphic_primitive primitive = {};
+        int result = prc_api_get_graphics_primitive(owner_->raw(), data_, &tess, face_index, primitive_index, &primitive);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_get_graphics_primitive failed");
+        }
+        return py::dict(
+            "type", static_cast<uint32_t>(primitive.type),
+            "indices", make_uint32_array(primitive.indices, primitive.num_indices, py::cast(shared_from_this()))
+        );
+    }
+
+    uint32_t number_of_text_primitives(uint32_t tess_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        return static_cast<uint32_t>(tess.num_text_primitives);
+    }
+
+    py::dict get_text_primitive(uint32_t tess_index, uint32_t text_index) {
+        initialize_tessellations();
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        prc_api_text_primitive primitive = {};
+        int result = prc_api_get_text_primitive(owner_->raw(), data_, &tess, text_index, &primitive);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_get_text_primitive failed");
+        }
+        py::dict result;
+        result["text"] = safe_string(primitive.text);
+        result["text_height"] = primitive.text_height;
+        result["text_width"] = primitive.text_width;
+        result["origin"] = py::make_tuple(primitive.origin[0], primitive.origin[1], primitive.origin[2]);
+        py::array_t<double> color(4);
+        auto color_buf = color.mutable_unchecked<1>();
+        for (size_t i = 0; i < 4; ++i) {
+            color_buf(i) = primitive.color[i];
+        }
+        result["color"] = std::move(color);
+        result["mode"] = static_cast<uint32_t>(primitive.mode);
+        return result;
+    }
+
+private:
+    void initialize_tessellations() {
+        if (tessellation_initialized_) {
+            return;
+        }
+
+        if (!model_tree_) {
+            create_model_tree();
+        }
+
+        uint32_t num_tess = 0;
+        uint32_t num_line_tess = 0;
+        int result = prc_api_get_number_tessellations(owner_->raw(), data_, model_tree_, &num_tess, &num_line_tess);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_get_number_tessellations failed");
+        }
+
+        num_tessellations_ = num_tess;
+        num_line_tessellations_ = num_line_tess;
+        tessellations_.assign(num_tessellations_, prc_api_tess{});
+        line_tessellations_.assign(num_line_tessellations_, prc_api_tess{});
+        tess_faces_storage_.clear();
+        tess_faces_storage_.reserve(num_tessellations_);
+        line_tess_faces_storage_.clear();
+        line_tess_faces_storage_.reserve(num_line_tessellations_);
+        line_tess_map_.assign(num_tessellations_, -1);
+
+        uint32_t line_tess_index = 0;
+        for (uint32_t tess_index = 0; tess_index < num_tessellations_; ++tess_index) {
+            uint32_t faces = prc_api_get_number_faces(owner_->raw(), data_, tess_index);
+            tessellations_[tess_index].num_faces = faces;
+            tess_faces_storage_.emplace_back(faces);
+            tessellations_[tess_index].tess_faces = faces ? tess_faces_storage_.back().data() : nullptr;
+
+            prc_api_tess temp_line_tess{};
+            std::vector<prc_api_face> temp_line_faces;
+            prc_api_tess* line_ptr = nullptr;
+            if (num_line_tessellations_ > 0) {
+                temp_line_tess.num_faces = faces;
+                temp_line_faces.resize(faces);
+                temp_line_tess.tess_faces = faces ? temp_line_faces.data() : nullptr;
+                line_ptr = &temp_line_tess;
+            }
+
+            uint8_t has_line = 0;
+            int code = prc_api_initialize_tessellation(owner_->raw(), data_, model_tree_, tess_index, &tessellations_[tess_index], line_ptr, &has_line);
+            if (code != 0) {
+                throw std::runtime_error("prc_api_initialize_tessellation failed");
+            }
+
+            if (has_line) {
+                if (line_tess_index >= num_line_tessellations_) {
+                    throw std::runtime_error("Unexpected line tessellation count mismatch");
+                }
+                line_tess_map_[tess_index] = static_cast<int32_t>(line_tess_index);
+                line_tessellations_[line_tess_index] = temp_line_tess;
+                line_tess_faces_storage_.push_back(std::move(temp_line_faces));
+                line_tessellations_[line_tess_index].tess_faces = line_tess_faces_storage_.back().data();
+
+                for (uint32_t face_index = 0; face_index < faces; ++face_index) {
+                    code = prc_api_get_line_tessellation_vertices(owner_->raw(), data_, model_tree_, tess_index, face_index,
+                        &line_tessellations_[line_tess_index].tess_faces[face_index], &line_tessellations_[line_tess_index]);
+                    if (code != 0) {
+                        throw std::runtime_error("prc_api_get_line_tessellation_vertices failed");
+                    }
+                }
+
+                ++line_tess_index;
+            }
+
+            if (tessellations_[tess_index].type == PRC_API_TESS_3D_Wire || tessellations_[tess_index].type == PRC_API_TESS_MarkUp) {
+                code = prc_api_get_tessellation_vertices(owner_->raw(), data_, model_tree_, tess_index, 0, nullptr, &tessellations_[tess_index]);
+                if (code != 0) {
+                    throw std::runtime_error("prc_api_get_tessellation_vertices failed");
+                }
+            } else {
+                for (uint32_t face_index = 0; face_index < faces; ++face_index) {
+                    code = prc_api_get_tessellation_vertices(owner_->raw(), data_, model_tree_, tess_index, face_index,
+                        &tessellations_[tess_index].tess_faces[face_index], &tessellations_[tess_index]);
+                    if (code != 0) {
+                        throw std::runtime_error("prc_api_get_tessellation_vertices failed");
+                    }
+                }
+            }
+        }
+
+        tessellation_initialized_ = true;
+    }
+
+    const prc_api_tess& get_tessellation(uint32_t tess_index) const {
+        if (tess_index >= num_tessellations_) {
+            throw std::out_of_range("Tessellation index out of range");
+        }
+        return tessellations_[tess_index];
+    }
+
+    const prc_api_face& get_face(const prc_api_tess& tess, uint32_t face_index) const {
+        if (face_index >= tess.num_faces) {
+            throw std::out_of_range("Face index out of range");
+        }
+        return tess.tess_faces[face_index];
+    }
+
 private:
     std::shared_ptr<Context> owner_;
     prc_api_data data_;
+    prc_api_product* model_tree_ = nullptr;
+    uint32_t num_parts_ = 0;
+    uint32_t num_products_ = 0;
+    uint32_t num_markups_ = 0;
+    std::vector<prc_api_tess> tessellations_;
+    std::vector<prc_api_tess> line_tessellations_;
+    std::vector<std::vector<prc_api_face>> tess_faces_storage_;
+    std::vector<std::vector<prc_api_face>> line_tess_faces_storage_;
+    std::vector<int32_t> line_tess_map_;
+    bool tessellation_initialized_ = false;
+    uint32_t num_tessellations_ = 0;
+    uint32_t num_line_tessellations_ = 0;
 };
 
-Document context_open(const std::shared_ptr<Context>& ctx, const std::string& infile) {
+std::shared_ptr<Document> context_open(const std::shared_ptr<Context>& ctx, const std::string& infile) {
     if (!ctx || !ctx->raw()) {
         throw std::runtime_error("Context is not initialized");
     }
@@ -108,7 +631,7 @@ Document context_open(const std::shared_ptr<Context>& ctx, const std::string& in
         throw std::runtime_error("prc_api_open_contents failed");
     }
 
-    return Document(ctx, data);
+    return std::make_shared<Document>(ctx, data);
 }
 
 } // namespace
@@ -127,7 +650,67 @@ PYBIND11_MODULE(_core, m) {
         .def("print_error_stack", &Context::print_error_stack,
              "Print current nanoPRC error stack to stdout");
 
-    py::class_<Document>(m, "Document")
-        .def_property_readonly("is_open", &Document::is_open,
-                               "Whether the underlying PRC data handle is valid");
+    py::class_<View>(m, "View")
+        .def_property_readonly("name", &View::name)
+        .def_property_readonly("matrix", &View::matrix)
+        .def_property_readonly("camera_z", &View::camera_z);
+
+    py::class_<ModelNode, std::shared_ptr<ModelNode>>(m, "ModelNode")
+        .def_property_readonly("name", &ModelNode::name)
+        .def_property_readonly("is_model", &ModelNode::is_model)
+        .def_property_readonly("node_type", &ModelNode::node_type)
+        .def_property_readonly("num_children", &ModelNode::num_children)
+        .def_property_readonly("num_markups", &ModelNode::num_markups)
+        .def_property_readonly("has_part", &ModelNode::has_part)
+        .def("children", &ModelNode::children)
+        .def("__repr__", &ModelNode::repr);
+
+    py::class_<Document, std::shared_ptr<Document>>(m, "Document")
+        .def_property_readonly("is_open", &Document::is_open)
+        .def_property_readonly("number_of_views", &Document::number_of_views)
+        .def("get_view", &Document::get_view, py::arg("view_index"), "Return metadata for a named view.")
+        .def("prepare_model_tree", &Document::prepare_model_tree,
+             "Compute model tree counts required before tree creation.")
+        .def("has_model_tree", &Document::has_model_tree,
+             "Return whether a model tree has already been created.")
+        .def("create_model_tree", &Document::create_model_tree,
+             "Create the model tree and return its root node.")
+        .def("tessellation_counts", &Document::tessellation_counts,
+             "Return a tuple (num_tess, num_line_tess) after the model tree exists.")
+        .def("number_of_faces", &Document::number_of_faces, py::arg("tess_index"),
+             "Return the number of faces in a tessellation.")
+        .def("tessellation_vertex_count", &Document::tessellation_vertex_count, py::arg("tess_index"),
+             "Return the number of vertices in the tessellation vertex buffer.")
+        .def("tessellation_vertex_positions", &Document::tessellation_vertex_positions, py::arg("tess_index"),
+             "Return a zero-copy (n,3) float array of tessellation vertex positions.")
+        .def("tessellation_vertex_normals", &Document::tessellation_vertex_normals, py::arg("tess_index"),
+             "Return a zero-copy (n,3) float array of tessellation vertex normals.")
+        .def("tessellation_vertex_colors", &Document::tessellation_vertex_colors, py::arg("tess_index"),
+             "Return a zero-copy (n,4) float array of tessellation vertex colors.")
+        .def("tessellation_vertex_uvs", &Document::tessellation_vertex_uvs, py::arg("tess_index"),
+             "Return a zero-copy (n,2) float array of tessellation vertex UV coordinates.")
+        .def("face_vertex_count", &Document::face_vertex_count,
+             py::arg("tess_index"), py::arg("face_index"),
+             "Return the number of vertices in a tessellation face.")
+        .def("face_vertex_positions", &Document::face_vertex_positions,
+             py::arg("tess_index"), py::arg("face_index"),
+             "Return a zero-copy (m,3) float array of face vertex positions.")
+        .def("face_vertices", &Document::face_vertices,
+             py::arg("tess_index"), py::arg("face_index"),
+             "Return a list of vertex positions for a tessellation face.")
+        .def("face_material", &Document::face_material,
+             py::arg("tess_index"), py::arg("face_index"),
+             "Return material and style metadata for a tessellation face.")
+        .def("face_graphics_primitive_count", &Document::face_graphics_primitive_count,
+             py::arg("tess_index"), py::arg("face_index"),
+             "Return the number of graphics primitives for a tessellation face.")
+        .def("get_graphics_primitive", &Document::get_graphics_primitive,
+             py::arg("tess_index"), py::arg("face_index"), py::arg("primitive_index"),
+             "Return a graphics primitive descriptor with index buffer.")
+        .def("number_of_text_primitives", &Document::number_of_text_primitives,
+             py::arg("tess_index"),
+             "Return the number of text primitives for a tessellation.")
+        .def("get_text_primitive", &Document::get_text_primitive,
+             py::arg("tess_index"), py::arg("text_index"),
+             "Return text primitive metadata for a tessellation.");
 }
