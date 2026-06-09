@@ -20,6 +20,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y doxygen
 
+      - name: Create Doxygen output folders
+        run: mkdir -p docs/doxygen
+
       - name: Run strict public Doxygen check
         run: doxygen Doxyfile.public
 

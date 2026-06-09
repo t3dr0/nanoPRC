@@ -13,6 +13,13 @@ vs2019/Release
 *.o
 *.bak
 
+# Python build artifacts
+python/build/
+python/.venv/
+__pycache__/
+*.py[cod]
+*.pyd
+
 # Generated Doxygen output
 docs/doxygen/html/
 docs/doxygen/xml-public/
