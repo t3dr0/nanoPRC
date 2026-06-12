@@ -28,24 +28,28 @@ static py::array make_float_array_from_vertex_field(
     const py::object& owner)
 {
     if (!buffer.vertices || buffer.num_vertices == 0) {
+        std::vector<py::ssize_t> shape = {0, static_cast<py::ssize_t>(component_count)};
+        std::vector<py::ssize_t> strides = { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) };
         py::buffer_info info(
             nullptr,
             sizeof(float),
             py::format_descriptor<float>::format(),
             2,
-            {0, static_cast<py::ssize_t>(component_count)},
-            { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) }
+            shape,
+            strides
         );
         return py::array(info, owner);
     }
 
+    std::vector<py::ssize_t> shape = { static_cast<py::ssize_t>(buffer.num_vertices), static_cast<py::ssize_t>(component_count) };
+    std::vector<py::ssize_t> strides = { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) };
     py::buffer_info info(
         const_cast<float*>(field_ptr),
         sizeof(float),
         py::format_descriptor<float>::format(),
         2,
-        { static_cast<py::ssize_t>(buffer.num_vertices), static_cast<py::ssize_t>(component_count) },
-        { static_cast<py::ssize_t>(sizeof(prc_api_vertex)), static_cast<py::ssize_t>(sizeof(float)) }
+        shape,
+        strides
     );
 
     return py::array(info, owner);
@@ -54,24 +58,28 @@ static py::array make_float_array_from_vertex_field(
 static py::array make_uint32_array(const uint32_t* data, size_t count, const py::object& owner)
 {
     if (!data || count == 0) {
+        std::vector<py::ssize_t> shape = {0};
+        std::vector<py::ssize_t> strides = { static_cast<py::ssize_t>(sizeof(uint32_t)) };
         py::buffer_info info(
             nullptr,
             sizeof(uint32_t),
             py::format_descriptor<uint32_t>::format(),
             1,
-            {0},
-            { static_cast<py::ssize_t>(sizeof(uint32_t)) }
+            shape,
+            strides
         );
         return py::array(info, owner);
     }
 
+    std::vector<py::ssize_t> shape = { static_cast<py::ssize_t>(count) };
+    std::vector<py::ssize_t> strides = { static_cast<py::ssize_t>(sizeof(uint32_t)) };
     py::buffer_info info(
         const_cast<uint32_t*>(data),
         sizeof(uint32_t),
         py::format_descriptor<uint32_t>::format(),
         1,
-        { static_cast<py::ssize_t>(count) },
-        { static_cast<py::ssize_t>(sizeof(uint32_t)) }
+        shape,
+        strides
     );
 
     return py::array(info, owner);
@@ -397,19 +405,34 @@ public:
             owner);
     }
 
-    uint32_t face_vertex_count(uint32_t tess_index, uint32_t face_index) {
+    prc_api_tess_vertex_buffer get_face_vertex_buffer(uint32_t tess_index, uint32_t face_index) {
         initialize_tessellations();
-        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
-        return static_cast<uint32_t>(face.face_vertices.num_vertices);
+        const prc_api_tess& tess = get_tessellation(tess_index);
+        prc_api_vertex* vertices = nullptr;
+        uint32_t num_vertices = 0;
+        int result = prc_api_get_face_vertices(owner_->raw(), &tess, face_index, &num_vertices, &vertices);
+        if (result != 0) {
+            throw std::runtime_error("prc_api_get_face_vertices failed");
+        }
+
+        prc_api_tess_vertex_buffer face_vertices;
+        face_vertices.num_vertices = num_vertices;
+        face_vertices.capacity = num_vertices;
+        face_vertices.vertices = vertices;
+        return face_vertices;
+    }
+
+    uint32_t face_vertex_count(uint32_t tess_index, uint32_t face_index) {
+        prc_api_tess_vertex_buffer face_vertices = get_face_vertex_buffer(tess_index, face_index);
+        return static_cast<uint32_t>(face_vertices.num_vertices);
     }
 
     py::array face_vertex_positions(uint32_t tess_index, uint32_t face_index) {
-        initialize_tessellations();
-        const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
+        prc_api_tess_vertex_buffer face_vertices = get_face_vertex_buffer(tess_index, face_index);
         py::object owner = py::cast(shared_from_this());
         return make_float_array_from_vertex_field(
-            face.face_vertices,
-            face.face_vertices.vertices ? face.face_vertices.vertices[0].position : nullptr,
+            face_vertices,
+            face_vertices.vertices ? face_vertices.vertices[0].position : nullptr,
             3,
             owner);
     }
@@ -434,10 +457,12 @@ public:
         const prc_api_face& face = get_face(get_tessellation(tess_index), face_index);
         py::object owner = py::cast(shared_from_this());
         py::dict material;
-        material["emissive"] = py::array(py::buffer_info(const_cast<float*>(face.material.emissive), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
-        material["diffuse"] = py::array(py::buffer_info(const_cast<float*>(face.material.diffuse), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
-        material["specular"] = py::array(py::buffer_info(const_cast<float*>(face.material.specular), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
-        material["ambient"] = py::array(py::buffer_info(const_cast<float*>(face.material.ambient), sizeof(float), py::format_descriptor<float>::format(), 1, {3}, {static_cast<py::ssize_t>(sizeof(float))}), owner);
+        std::vector<py::ssize_t> material_shape = {3};
+        std::vector<py::ssize_t> material_strides = { static_cast<py::ssize_t>(sizeof(float)) };
+        material["emissive"] = py::array(py::buffer_info(const_cast<float*>(face.material.emissive), sizeof(float), py::format_descriptor<float>::format(), 1, material_shape, material_strides), owner);
+        material["diffuse"] = py::array(py::buffer_info(const_cast<float*>(face.material.diffuse), sizeof(float), py::format_descriptor<float>::format(), 1, material_shape, material_strides), owner);
+        material["specular"] = py::array(py::buffer_info(const_cast<float*>(face.material.specular), sizeof(float), py::format_descriptor<float>::format(), 1, material_shape, material_strides), owner);
+        material["ambient"] = py::array(py::buffer_info(const_cast<float*>(face.material.ambient), sizeof(float), py::format_descriptor<float>::format(), 1, material_shape, material_strides), owner);
         material["shininess"] = face.material.shininess;
         material["emissive_alpha"] = face.material.emissive_alpha;
         material["diffuse_alpha"] = face.material.diffuse_alpha;
@@ -462,14 +487,14 @@ public:
         initialize_tessellations();
         const prc_api_tess& tess = get_tessellation(tess_index);
         prc_api_graphic_primitive primitive = {};
-        int result = prc_api_get_graphics_primitive(owner_->raw(), data_, &tess, face_index, primitive_index, &primitive);
-        if (result != 0) {
+        int rc = prc_api_get_graphics_primitive(owner_->raw(), data_, &tess, face_index, primitive_index, &primitive);
+        if (rc != 0) {
             throw std::runtime_error("prc_api_get_graphics_primitive failed");
         }
-        return py::dict(
-            "type", static_cast<uint32_t>(primitive.type),
-            "indices", make_uint32_array(primitive.indices, primitive.num_indices, py::cast(shared_from_this()))
-        );
+        py::dict result;
+        result["type"] = static_cast<uint32_t>(primitive.type);
+        result["indices"] = make_uint32_array(primitive.indices, primitive.num_indices, py::cast(shared_from_this()));
+        return result;
     }
 
     uint32_t number_of_text_primitives(uint32_t tess_index) {
@@ -482,8 +507,8 @@ public:
         initialize_tessellations();
         const prc_api_tess& tess = get_tessellation(tess_index);
         prc_api_text_primitive primitive = {};
-        int result = prc_api_get_text_primitive(owner_->raw(), data_, &tess, text_index, &primitive);
-        if (result != 0) {
+        int rc = prc_api_get_text_primitive(owner_->raw(), data_, &tess, text_index, &primitive);
+        if (rc != 0) {
             throw std::runtime_error("prc_api_get_text_primitive failed");
         }
         py::dict result;

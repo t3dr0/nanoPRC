@@ -16,6 +16,9 @@ find_library(NANOPRC_LIBRARY
         "${CMAKE_CURRENT_SOURCE_DIR}/../build/lib"
         "${CMAKE_CURRENT_SOURCE_DIR}/../build/bin"
         "${CMAKE_CURRENT_SOURCE_DIR}/../build/Release"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../build/Debug"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../build-debug/Debug"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../build-debug/bin/Debug"
     NO_DEFAULT_PATH
 )
 

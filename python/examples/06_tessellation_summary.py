@@ -45,7 +45,7 @@ def main() -> int:
         print(f"  First face vertex count: {vertex_count}")
         vertices = doc.face_vertices(tess_index, 0)
         print("  First face sample vertices:")
-        print(format_vertices(vertices, limit=5))
+        print(format_vertices(vertices, limit=100))
 
     return 0
 

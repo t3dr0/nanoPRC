@@ -1,7 +1,26 @@
 from pathlib import Path
 import os
+import sys
 
 _DLL_DIRECTORY_HANDLES = []
+
+
+def _prefer_local_debug_extension() -> None:
+    pkg_dir = Path(__file__).resolve().parent
+    repo_root = pkg_dir.parents[2]
+    candidates = [
+        repo_root / "python" / "build-debug" / "Debug",
+        repo_root / "python" / "build" / "Debug",
+        repo_root / "build-debug" / "Debug",
+        repo_root / "build" / "Debug",
+    ]
+
+    for path in candidates:
+        if path.is_dir() and any(path.glob("_core*.pyd")):
+            str_path = str(path)
+            if str_path not in __path__:
+                __path__.insert(0, str_path)
+            break
 
 
 def _add_windows_dll_search_paths() -> None:
@@ -25,6 +44,7 @@ def _add_windows_dll_search_paths() -> None:
                 _DLL_DIRECTORY_HANDLES.append(handle)
 
 
+_prefer_local_debug_extension()
 _add_windows_dll_search_paths()
 
 

@@ -38,6 +38,14 @@ python -m pip install --upgrade pip
 python -m pip install scikit-build-core pybind11
 ```
 
+If CMake cannot find `pybind11`, print its CMake package location and pass it explicitly:
+
+```bash
+python -c "import pybind11, os; print(os.path.join(os.path.dirname(pybind11.__file__), 'share', 'cmake', 'pybind11'))"
+```
+
+Then add `-Dpybind11_DIR=<that path>` to the CMake command.
+
 > Windows note: prefer `python -m pip ...` instead of `pip ...` to avoid PATH/script location warnings. If you want an isolated environment, create one with:
 >
 > ```powershell
@@ -74,10 +82,30 @@ cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-debug --config Debug
 ```
 
-If the Python build cannot find the debug `nano_prc` library, pass it explicitly:
+If CMake cannot find `pybind11`, add the package path from:
 
 ```powershell
-cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DNANOPRC_LIBRARY=..\build-debug\bin\Debug\nano_prc.dll
+python -c "import pybind11, os; print(os.path.join(os.path.dirname(pybind11.__file__), 'share', 'cmake', 'pybind11'))"
+```
+
+then run:
+
+```powershell
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -Dpybind11_DIR="<path>"
+cmake --build build-debug --config Debug
+```
+
+If the Python build cannot find the debug `nano_prc` library, pass the import library explicitly:
+
+```powershell
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -Dpybind11_DIR="<path>" -DNANOPRC_LIBRARY="../build-debug/Debug/nano_prc.lib"
+cmake --build build-debug --config Debug
+```
+
+If this still fails, clear the stale cached value first by deleting `python/build-debug/CMakeCache.txt` or rerunning CMake with `-U NANOPRC_LIBRARY`:
+
+```powershell
+cmake -S . -B build-debug -U NANOPRC_LIBRARY -DCMAKE_BUILD_TYPE=Debug -Dpybind11_DIR="<path>" -DNANOPRC_LIBRARY="../build-debug/Debug/nano_prc.lib"
 cmake --build build-debug --config Debug
 ```
 
@@ -86,6 +114,20 @@ cmake --build build-debug --config Debug
 On Windows, `python/src/__init__.py` already adds `build/Debug` and `build/bin/Debug` to the DLL search path, so placing the Debug DLL there is usually sufficient.
 
 4. Run Python with the same interpreter you used to build the extension.
+
+## Troubleshooting
+
+- If `pybind11` is not found, pass `-Dpybind11_DIR="<path>"` with the path printed by:
+
+  ```powershell
+  python -c "import pybind11, os; print(os.path.join(os.path.dirname(pybind11.__file__), 'share', 'cmake', 'pybind11'))"
+  ```
+
+- Always link against the import library `nano_prc.lib`, not the DLL.
+
+- If CMake still caches the old path, delete `python/build-debug/CMakeCache.txt` before reconfiguring.
+
+- Use the same `python` interpreter for both installing `pybind11` and building the extension.
 
 ```powershell
 python python/examples/06_tessellation_summary.py examples/cylinder.pdf
