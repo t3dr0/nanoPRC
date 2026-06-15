@@ -33,7 +33,8 @@ option(PRC_ENABLE_DEBUG_MEMORY "Enable PRC debug memory tracking" OFF)
 option(PRC_ENABLE_UNZIPPED_FUZZ "Enable deterministic fuzzing of unzipped PRC sections" OFF)
 
 add_subdirectory(thirdparty) # thirdparty libraries
-add_subdirectory(demos) # demos
+# demos are added after the library target so demo executables can link
+# against the `nano_prc` target defined below
 
 add_definitions(-DPRC_LITTLE_ENDIAN -DPRC_BUILD_SHARED)
 
@@ -89,5 +90,7 @@ target_include_directories(nano_prc PUBLIC "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(nano_prc PRIVATE PRC_VERSION_STRING="${PRC_VERSION_STRING}")
 target_compile_definitions(nano_prc PUBLIC PRC_DEBUG_MEMORY=$<BOOL:${PRC_ENABLE_DEBUG_MEMORY}>)
 target_compile_definitions(nano_prc PUBLIC PRC_ENABLE_UNZIPPED_FUZZ=$<BOOL:${PRC_ENABLE_UNZIPPED_FUZZ}>)
+add_subdirectory(demos)
+
 # Install what we built
 install(TARGETS nano_prc)

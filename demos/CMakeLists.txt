@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
-project(nano_prc_demos)
 
+# Do not call `project()` here to avoid creating a separate CMake project
+# for the demos. The top-level project will add this directory after the
+# `nano_prc` library target is defined so demo executables appear in the
+# root solution and can link to the `nano_prc` target.
 add_subdirectory(viewer)
+add_subdirectory(quick_start)

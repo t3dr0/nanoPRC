@@ -36,6 +36,9 @@ cmake -G "Visual Studio 16 2019" ..
 
 Executables are built to the `bin` directory and libraries to the `lib` directory from within the build directory.
 
+###  quick_start
+See demos/quick_start for an simple example on how to open, parse and make use of the PRC contents.
+
 ### Deterministic Unzipped-Section Fuzzing
 
 For robustness testing of parser error paths, you can fuzz only the unzipped PRC section buffers

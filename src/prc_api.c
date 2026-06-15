@@ -3367,7 +3367,7 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
         /* Associate this api_tess with the part now */
         reserve->parts[part_detail->part_reserve_index].tess = api_tess;
 
-        if (*has_line)
+        if (*has_line && api_tess_line != NULL)
         {
             api_tess_line->tess_vertices.num_vertices = 0;
             api_tess_line->tess_vertices.vertices = NULL;
