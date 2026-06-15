@@ -63,6 +63,12 @@ From repo root:
 python -m pip install -e python
 ```
 
+If you are already inside the `python` directory, install from the current folder instead:
+
+```bash
+python -m pip install -e .
+```
+
 ## Debug build
 
 To debug native issues, build both the main nanoPRC library and the Python extension in `Debug` mode.
@@ -149,6 +155,13 @@ print(doc.is_open)
 
 ## Examples
 
+The OpenGL viewer example requires `glfw` and `PyOpenGL`:
+This work is still under development
+
+```bash
+python -m pip install glfw PyOpenGL
+```
+
 From repo root, after `python -m pip install -e python`:
 
 ```bash
@@ -158,6 +171,7 @@ NANOPRC_SAMPLE=path/to/model.prc python python/examples/03_pytest_style_smoke.py
 python python/examples/04_list_views.py path/to/model.prc
 python python/examples/05_model_tree_summary.py path/to/model.prc
 python python/examples/06_tessellation_summary.py path/to/model.prc
+python python/examples/07_opengl_viewer.py path/to/model.prc
 ```
 
 PowerShell equivalent for the third example:

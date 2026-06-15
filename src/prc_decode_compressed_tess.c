@@ -3683,13 +3683,11 @@ int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *
     uint32_t num_edges_to_store;
     prc_compressed_tess_edge_list edge_list;
     uint8_t *edge_keep_flags = NULL;
-#if PRC_COMPRESSED_TESS_EDGE_DEBUG
     uint32_t debug_total_edges = 0;
     uint32_t debug_kept_edges = 0;
-    uint32_t debug_boundary_edges = 0;
     uint32_t debug_angle_edges = 0;
+    uint32_t debug_boundary_edges = 0;
     uint32_t debug_concave_edges = 0;
-#endif
 
     if (data == NULL || data->triangle_indices_prc_compressed_3d == NULL ||
         data->vertices_prc_compressed_3d == NULL || data->normals_prc_compressed_3d == NULL)
@@ -3734,13 +3732,9 @@ int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *
     {
         prc_compressed_tess_edge *edge = &edge_list.edge[k];
         uint8_t keep_edge;
-#if PRC_COMPRESSED_TESS_EDGE_DEBUG
         uint8_t reason;
         debug_total_edges++;
         code = prc_compressed_tess_edge_is_line(ctx, data, edge, &keep_edge, &reason);
-#else
-        code = prc_compressed_tess_edge_is_line(ctx, data, edge, &keep_edge, NULL);
-#endif
         if (code < 0)
         {
             prc_free(ctx, edge_list.edge);
@@ -3753,7 +3747,6 @@ int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *
         if (keep_edge)
         {
             edge_count++;
-#if PRC_COMPRESSED_TESS_EDGE_DEBUG
             debug_kept_edges++;
             if (reason == PRC_LINE_EDGE_REASON_BOUNDARY)
             {
@@ -3767,7 +3760,6 @@ int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *
             {
                 debug_concave_edges++;
             }
-#endif
         }
     }
 
@@ -3828,7 +3820,25 @@ int prc_compute_edges_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *
         }
     }
 
-    data->number_of_edges = num_edges_to_store;
+    if (debug_boundary_edges == edge_count)
+    {
+        /* All the triangles are disjoint. Don't draw any edges */
+        data->number_of_edges = 0;
+        if (data->edge_indices != NULL)
+        {
+            prc_free(ctx, data->edge_indices);
+            data->edge_indices = NULL;
+        }
+        if (data->edge_vertices != NULL)
+        {
+            prc_free(ctx, data->edge_vertices);
+            data->edge_vertices = NULL;
+        }
+    }
+    else
+    {
+        data->number_of_edges = num_edges_to_store;
+    }
 
 #if PRC_COMPRESSED_TESS_EDGE_DEBUG
     DEBUG_LOG("Compressed tess edges: total=%u kept=%u boundary=%u angle=%u concave=%u\n",
