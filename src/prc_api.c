@@ -3108,7 +3108,9 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
             {
                 /* We didn't find a part that references this tessellation.
                    However we could still have a markup that references
-                   this tessellation */
+                   this tessellation. In fact, there can be multiple references
+                   that use this same markup tessellation, so we need to go
+                   through all of the markups and not break after finding one. */
                 for (k = 0; k < num_markups; k++)
                 {
                     prc_api_markup *markup = &reserve->markups[k];
@@ -3122,7 +3124,6 @@ prc_api_get_number_tessellations(prc_context *ctx, prc_api_data data_in,
                         data->markup_details[markup_index].tessellation = NULL; /* This gets set later when we do the tessellations */
                         markup_index++;
                         num_markup_tessellations++;
-                        break;
                     }
                 }
             }

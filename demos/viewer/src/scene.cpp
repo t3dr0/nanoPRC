@@ -463,7 +463,7 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
         for (k = 0; k < num_markups; k++)
         {
             /* If it has both graphics and text primitives we will create a
-             * parent and then tw children, one for the graphics and one for 
+             * parent and then two children, one for the graphics and one for 
              * the text. If it has only graphics or only text, we will not create
              * the parent */
             tess = prc_api_get_markup_tessellation(ctx, api_product, k);
