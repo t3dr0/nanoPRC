@@ -6,6 +6,7 @@
 
 nanoPRC is licensed under the GNU Affero General Public License v3.0.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license summaries.
+See https://nanoprc.org for more details.
 
 ## Contributing
 
@@ -37,7 +38,7 @@ cmake -G "Visual Studio 16 2019" ..
 Executables are built to the `bin` directory and libraries to the `lib` directory from within the build directory.
 
 ###  quick_start
-See demos/quick_start for an simple example on how to open, parse and make use of the PRC contents.
+See demos/quick_start for a simple example on how to open, parse, and make use of the PRC contents.
 
 ### Deterministic Unzipped-Section Fuzzing
 

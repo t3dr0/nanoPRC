@@ -32,6 +32,10 @@ int main(int argc, char *argv[])
     uint32_t i, j;
     uint32_t totalTesselations, totalLineTesselations, k;
     uint8_t has_lines = 0;
+    uint8_t vertics_printed = 0;
+    uint32_t num_graphic_primitives;
+    prc_api_face *face = NULL;
+    uint8_t face_index = 0;
 
     if (argc != 2)
     {
@@ -50,7 +54,7 @@ int main(int argc, char *argv[])
     prc_context *ctx = prc_api_new_context(NULL);
     if (ctx == NULL)
     {
-        printf("Scene::load: prc_api_new_context failed\n");
+        printf("prc_api_new_context failed\n");
         exit(1);
     }
 
@@ -62,7 +66,7 @@ int main(int argc, char *argv[])
            occur due to a parsing error. Those should have been handled
            but this will provide a report if PRC_DEBUG_MEMORY is defined. */
         code = prc_api_release_context(ctx);
-        printf("Scene::load: prc_api_open_contents failed\n");
+        printf("prc_api_open_contents failed\n");
         exit(1);
     }
     prc_api_print_error_stack(ctx);
@@ -71,14 +75,14 @@ int main(int argc, char *argv[])
     code = prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups);
     if (code < 0)
     {
-        printf("Scene::load: prc_api_prep_model_tree failed\n");
+        printf("prc_api_prep_model_tree failed\n");
         exit(1);
     }
     code = prc_api_create_model_tree(ctx, data, &model_tree, num_parts,
                                      num_products, num_markups);
     if (code < 0)
     {
-        printf("Scene::load: prc_api_create_model_tree failed\n");
+        printf("prc_api_create_model_tree failed\n");
         exit(1);
     }
 
@@ -95,7 +99,7 @@ int main(int argc, char *argv[])
                                             &totalLineTesselations);
     if (code < 0)
     {
-        printf("Scene::load: prc_api_get_number_tessellations failed\n");
+        printf("prc_api_get_number_tessellations failed\n");
         exit(1);
     }
     prc_api_tess *tesses = calloc(totalTesselations, sizeof(prc_api_tess));
@@ -103,7 +107,7 @@ int main(int argc, char *argv[])
     uint32_t line_tess_index = 0;
     if (tesses == NULL)
     {
-        printf("Scene::load: failed to allocate tessellation array\n");
+        printf("failed to allocate tessellation array\n");
         exit(1);
     }
 
@@ -120,7 +124,7 @@ int main(int argc, char *argv[])
         tess->tess_faces = calloc(nFaces, sizeof(prc_api_face));
         if (tess->tess_faces == NULL)
         {
-            printf("Scene::load: failed to allocate tessellation faces array\n");
+            printf("failed to allocate tessellation faces array\n");
             exit(1);
         }
 
@@ -128,7 +132,7 @@ int main(int argc, char *argv[])
                                                    NULL, &has_lines);
         if (code < 0)
         {
-            printf("Scene::load: prc_api_initialize_tessellation failed\n");
+            printf("prc_api_initialize_tessellation failed\n");
             exit(1);
         }
 
@@ -145,7 +149,7 @@ int main(int argc, char *argv[])
                 k, 0, NULL, tess);
             if (code < 0)
             {
-                printf("Scene::load: prc_api_get_tessallation_vertices failed\n");
+                printf("prc_api_get_tessallation_vertices failed\n");
                 exit(1);
             }
         }
@@ -157,7 +161,7 @@ int main(int argc, char *argv[])
                     k, j, tess->tess_faces + j, tess);
                 if (code < 0)
                 {
-                    printf("Scene::load: prc_api_get_tessallation_vertices failed\n");
+                    printf("prc_api_get_tessallation_vertices failed\n");
                     exit(1);
                 }
             }
@@ -179,14 +183,22 @@ int main(int argc, char *argv[])
             uint8_t printed_vertices = 0;
             prc_api_tess *tess = &tesses[i];
 
+            if (printed_vertices)
+            {
+                /* Only print vertices for one tessellation to reduce the output noise */
+                break;
+            }
+
             if (tess->type == PRC_API_TESS_3D)
             {
-                /* In this structure we have different faces */
-                prc_api_face *face = &tess->tess_faces[0];
+                /* In this structure we have different faces.  Here we just will
+                   do face 0 */
+                face = &tess->tess_faces[face_index];
                 prc_api_tess_vertex_buffer *tess_vertices = &face->face_vertices;
                 num_vertices_print = tess_vertices->num_vertices < MAX_VERTICES_PRINT ?
                                      tess_vertices->num_vertices : MAX_VERTICES_PRINT;
 
+                printed_vertices = 1;
                 printf("First %u vertices of first face of tessellation %d:\n", num_vertices_print, i);
                 for (j = 0; j < num_vertices_print; j++)
                 {
@@ -196,6 +208,7 @@ int main(int argc, char *argv[])
                     printf("    Color: R=%f, G=%f, B=%f\n", v.color[0], v.color[1], v.color[2]);
                     printf("    Diffuse Color: R=%f, G=%f, B=%f\n", v.diffuse[0], v.diffuse[1], v.diffuse[2]);
                 }
+                printf("...\n");
             }
             else if (tess->type == PRC_API_TESS_3D_Compressed)
             {
@@ -204,9 +217,13 @@ int main(int argc, char *argv[])
                    as one face */
                 prc_api_tess_vertex_buffer *tess_vertices = &tess->tess_vertices;
 
+                /* Graphic primitives and indices are stored here though */
+                face = &tess->tess_faces[face_index]; 
+
                 num_vertices_print = tess_vertices->num_vertices < MAX_VERTICES_PRINT ?
                                      tess_vertices->num_vertices : MAX_VERTICES_PRINT;
                 printf("First %u vertices compressed tessellation %d:\n", num_vertices_print, i);
+                printed_vertices = 1;
                 for (j = 0; j < num_vertices_print; j++)
                 {
                     prc_api_vertex v = tess_vertices->vertices[j];
@@ -215,10 +232,61 @@ int main(int argc, char *argv[])
                     printf("    Color: R=%f, G=%f, B=%f\n", v.color[0], v.color[1], v.color[2]);
                     printf("    Diffuse Color: R=%f, G=%f, B=%f\n", v.diffuse[0], v.diffuse[1], v.diffuse[2]);
                 }
+                printf("...\n");
             }
             else
             {
                 printf("Tessellation %d is not a 3D type. Skipping vertex printout.\n", i);
+            }
+
+            /* Lets print out some indices and graphic primitives that index
+               into the vertices */
+            if (face != NULL)
+            {
+                num_graphic_primitives = face->num_graphic_primitives;
+                for (j = 0; j < num_graphic_primitives; j++)
+                {
+                    /* Get primitive from PRC data */
+                    prc_api_graphic_primitive primitive;
+                    code = prc_api_get_graphics_primitive(ctx, data,
+                        (prc_api_tess *)tess, face_index, j, &primitive);
+                    if (code < 0)
+                    {
+                        printf("prc_api_get_graphics_primitive failed\n");
+                        exit(1);
+                    }
+
+                    printf("\n");
+                    switch (primitive.type)
+                    {
+                    default:
+                        printf("unknown primitive type\n");
+                        exit(1);
+                    case PRC_API_TRIANGLES:
+                        printf("GL_TRIANGLES primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    case PRC_API_FAN:
+                        printf("GL_TRIANGLE_FAN primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    case PRC_API_STRIP:
+                        printf("GL_TRIANGLE_STRIP primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    case PRC_API_LINE:
+                        printf("GL_LINES primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    case PRC_API_LINE_STRIP:
+                        printf("GL_LINE_STRIP primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    case PRC_API_LINE_LOOP:
+                        printf("GL_LINE_LOOP primitive with %zu indices\n", primitive.num_indices);
+                        break;
+                    }
+                    for (k = 0; k < primitive.num_indices && k < MAX_VERTICES_PRINT; k++)
+                    {
+                        printf("    Index %u: %u\n", k, primitive.indices[k]);
+                    }
+                }
+                printf("...\n");
             }
         }
     }
@@ -226,5 +294,6 @@ int main(int argc, char *argv[])
     /* Clean up */
     prc_api_release_data(ctx, data, tesses, totalTesselations, NULL, 0, model_tree);
     code = prc_api_release_context(ctx);
+
     return 0;
 }
