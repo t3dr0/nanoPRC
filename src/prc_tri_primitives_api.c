@@ -2750,6 +2750,8 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     prc_internal_graph_style graph_style;
     uint8_t has_more_than_one_ref_style = false;
     uint8_t has_ref_style_defined = false;
+    uint8_t external_style_defined = true;
+    uint8_t is_uncompressed_with_no_texture_entities = false;
 
     api_tess->has_transparency = 0;
 
@@ -2780,7 +2782,6 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         prc_api_initialize_texture(ctx, &face_out->texture);
 
         alpha = 1.0;
-        uint8_t is_uncompressed_with_no_texture_entities = false;
 
         face_out->reserved = (void *)prc_calloc(ctx, 1, sizeof(prc_internal_api_face));
         if (face_out->reserved == NULL)
@@ -2830,6 +2831,15 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             {
                 prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
                 return code;
+            }
+
+            if (leaf_style_unbiased_index == -1 && !has_ref_style_defined)
+            {
+                /* In this case there was no style information externally
+                   defined. We currently are set to use default settings. If
+                   the face has some line styles or vertex colors then we will
+                   use that. */
+                external_style_defined = false;
             }
         }
         else
@@ -2976,6 +2986,25 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             return PRC_API_ERROR_PARAMETER;
 
         prc_tess_face face = tess3d->face_tessellation_data[face_index];
+
+        if (!external_style_defined && face.size_of_line_attributes != 0)
+        {
+            /* line_attributes is biased */
+            face_out_reserved->style->face_style_index = face.line_attributes[0] - 1;
+        
+            /* Use the tessellation file index */
+            code = prc_api_helper_get_face_style(ctx, data_in, file_index,
+                face_out_reserved->style->face_style_index, 1.0,
+                is_uncompressed_with_no_texture_entities,
+                &api_tess->is_material, &has_texture, &api_tess->tess_material,
+                face_out_reserved->style, face_color, api_tess, face_out, face_index,
+                tess_index_in, &has_ref_style_defined);
+            if (code < 0)
+            {
+                prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
+                return code;
+            }
+        }
 
         /* Get the index into the array of vertex indices for this face */
         uint32_t *src_index_data = &tess3d->triangulated_index_array[tess3d->face_tessellation_data[face_index].start_triangulated];
