@@ -792,6 +792,7 @@ typedef struct prc_topo_shell_s prc_topo_shell;
 typedef struct prc_faces_in_shell_s prc_faces_in_shell;
 typedef struct prc_topo_connex_s prc_topo_connex;
 typedef struct prc_ptr_curve_s prc_ptr_curve;
+typedef struct prc_type_surf_s prc_type_surf;
 typedef struct prc_ptr_surface_s prc_ptr_surface;
 typedef struct prc_topo_s prc_topo;
 typedef struct prc_hcg_iso_plane_s prc_hcg_iso_plane;
@@ -2391,11 +2392,9 @@ struct prc_ptr_curve_s
     prc_unsigned_int curve_identifier;
 };
 
-/* Table 243 — PtrSurface */
-/* All the surfaces */
-struct prc_ptr_surface_s
+/* Just the surface which is needed for AnaGenericFace */
+struct prc_type_surf_s
 {
-    uint8_t is_referenced;
     uint32_t surface_type;
     union
     {
@@ -2417,6 +2416,14 @@ struct prc_ptr_surface_s
         prc_surf_torus *surf_torus;
         prc_surf_transform *surf_transform;
     };
+};
+
+/* Table 243 — PtrSurface */
+/* All the surfaces */
+struct prc_ptr_surface_s
+{
+    uint8_t is_referenced;
+    prc_type_surf surface;
     prc_unsigned_int surface_identifier;
 };
 
@@ -2914,7 +2921,7 @@ struct prc_crv_polyline_s
     prc_unsigned_int tag;
     prc_content_curve curve_data;
     uint8_t has_transform;
-    prc_cart_transformation transform;
+    prc_trans_3d transform;
     prc_parameterization parameterization;
     uint32_t number_of_points;
     prc_polyline_point *points;
@@ -3481,7 +3488,7 @@ struct prc_hcg_ana_generic_face_s
 {
     prc_unsigned_int tag;
     prc_content_compressed_face face;
-    uint32_t surface_definition;
+    prc_type_surf surface;
 };
 
 struct prc_hcg_ana_nurbs_s
@@ -3595,18 +3602,20 @@ struct prc_compressed_shell_s
     uint8_t *is_iso_face;
 };
 
-/* Table 200 CompressedConnex */
+/* Table 201 CompressedConnex */
 struct prc_compressed_connex_s
 {
     prc_unsigned_int number_of_shells;
     prc_compressed_shell *shells;
 };
 
-/* Table 199 MultipleCompressedConnex */
+/* Table 200 MultipleCompressedConnex */
 struct prc_multi_compressed_connex_s
 {
     prc_unsigned_int number_of_connex;
-
+    prc_compressed_connex *connex;
+    uint32_t number_of_faces;
+    /* This is not in the spec, but it is needed to know how many faces are stored across the connexes. */
 };
 
 /* Section 8.9.21.9 */

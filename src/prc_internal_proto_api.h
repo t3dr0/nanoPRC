@@ -172,6 +172,19 @@ int prc_internal_api_get_color_from_style(prc_context *ctx,
     int32_t style_index, float *color_out);
 
 /**
+ * @brief Get color from global data.
+ *
+ * @param ctx Parser/context object.
+ * @param global_data Global file data used for style lookup.
+ * @param color_index Unbiased color index.
+ * @param color_out Output RGB (or RGB + implied alpha depending on caller usage).
+ * @return 0 on success, negative error code on failure.
+ */
+int
+prc_internal_api_get_color(prc_context *ctx, prc_file_struct_internal_global_data *global_data,
+    int32_t color_index, float *color_out);
+
+/**
  * @brief Build a 4x4 transform from a PRC location transform.
  *
  * @param ctx Parser/context object.

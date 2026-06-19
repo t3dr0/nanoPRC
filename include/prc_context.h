@@ -87,6 +87,8 @@ typedef struct
     size_t index;
     void *data;
     uint8_t is_free;
+    void *alloc_callsite;
+    void *free_callsite;
 } prc_debug_memory;
 #endif
 

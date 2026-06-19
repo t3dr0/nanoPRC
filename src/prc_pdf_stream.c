@@ -27,11 +27,27 @@ static void
 pdf_stream_release_uncompressed_list(prc_context *ctx,
     prc_pdf_uncompressed_object_stream_list *list)
 {
+    uint32_t i;
+
     if (list->ustream != NULL)
     {
+        for (i = 0; i < list->number_streams; i++)
+        {
+            if (list->ustream[i].object_offsets != NULL)
+            {
+                prc_free(ctx, list->ustream[i].object_offsets);
+                list->ustream[i].object_offsets = NULL;
+            }
+            if (list->ustream[i].stream != NULL)
+            {
+                prc_free(ctx, list->ustream[i].stream);
+                list->ustream[i].stream = NULL;
+            }
+        }
         prc_free(ctx, list->ustream);
         list->ustream = NULL;
     }
+    list->number_streams = 0;
 }
 
 static void
@@ -48,6 +64,39 @@ pdf_stream_release_object_stream(prc_context *ctx,
         prc_free(ctx, ustream->stream);
         ustream->stream = NULL;
     }
+}
+
+static int
+pdf_stream_parse_u32_bounded(uint8_t **ptr, uint8_t *end, uint32_t *value)
+{
+    uint32_t v = 0;
+    uint8_t has_digit = 0;
+
+    while (*ptr < end && (**ptr == ' ' || **ptr == '\n' || **ptr == '\r' || **ptr == '\t'))
+    {
+        (*ptr)++;
+    }
+
+    while (*ptr < end && **ptr >= '0' && **ptr <= '9')
+    {
+        uint32_t digit = (uint32_t)(**ptr - '0');
+        has_digit = 1;
+
+        if (v > (UINT32_MAX - digit) / 10u)
+        {
+            return PRC_ERROR_PARSE;
+        }
+        v = v * 10u + digit;
+        (*ptr)++;
+    }
+
+    if (!has_digit)
+    {
+        return PRC_ERROR_PARSE;
+    }
+
+    *value = v;
+    return 0;
 }
 
 /* Below is adapated from pdfium C++ code which has a BSD license */
@@ -346,6 +395,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
     uint32_t stream_obj_num;
     uint32_t stream_gen_num;
     uint32_t prev_stream_index = 0;
+    uint8_t *stream_end;
 
     if (num_content_streams == 0)
     {
@@ -398,7 +448,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
         {
             /* Check if we already have this one first */
             found = 0;
-            for (j = prev_stream_index; j < num_found; j++)
+            for (j = 0; j < num_found; j++)
             {
                 if (uncompressed_list->ustream[j].stream_object_number == 
                                                     xref_object->byte_offset)
@@ -587,12 +637,28 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             }
 
             ptr = ustream->stream;
+            stream_end = ustream->stream + ustream->stream_length;
             for (j = 0; j < ustream->n; j++)
             {
-                code = sscanf((const char *)ptr, "%u %u",
-                    &ustream->object_offsets[j].object_number,
+                if (ptr >= stream_end)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Object stream index table exceeds decoded stream bounds\n");
+                    pdf_stream_release_object_stream(ctx, ustream);
+                    return PRC_ERROR_PARSE;
+                }
+
+                code = pdf_stream_parse_u32_bounded(&ptr, stream_end,
+                    &ustream->object_offsets[j].object_number);
+                if (code < 0)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse object offsets in PDF object stream\n");
+                    pdf_stream_release_object_stream(ctx, ustream);
+                    return PRC_ERROR_PARSE;
+                }
+
+                code = pdf_stream_parse_u32_bounded(&ptr, stream_end,
                     &ustream->object_offsets[j].offset);
-                if (code != 2)
+                if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to parse object offsets in PDF object stream\n");
                     pdf_stream_release_object_stream(ctx, ustream);
@@ -601,44 +667,17 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
 
                 /* This skips us over the pairs of indices */
                 ustream->object_offsets[j].offset += ustream->first;
-
-                /* First eat white space */
-                code = pdf_eat_white_space(ctx, &ptr, file_end);
-                if (code < 0)
+                if (ustream->object_offsets[j].offset >= ustream->stream_length)
                 {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
+                    prc_error(ctx, PRC_ERROR_PARSE, "Parsed object offset exceeds decoded stream size\n");
                     pdf_stream_release_object_stream(ctx, ustream);
-                    return code;
+                    return PRC_ERROR_PARSE;
                 }
 
-                /* Now eat numerical values */
-                while (*ptr >= '0' && *ptr <= '9')
+                while (ptr < stream_end && (*ptr == ' ' || *ptr == '\n' ||
+                    *ptr == '\r' || *ptr == '\t'))
                 {
                     ptr++;
-                }
-
-                /* Now eat white space */
-                code = pdf_eat_white_space(ctx, &ptr, file_end);
-                if (code < 0)
-                {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
-                    pdf_stream_release_object_stream(ctx, ustream);
-                    return code;
-                }
-
-                /* Now eat numerical values */
-                while (*ptr >= '0' && *ptr <= '9')
-                {
-                    ptr++;
-                }
-
-                /* Now eat white space */
-                code = pdf_eat_white_space(ctx, &ptr, file_end);
-                if (code < 0)
-                {
-                    prc_error(ctx, PRC_ERROR_PARSE, "Failed to eat white space in PDF file\n");
-                    pdf_stream_release_object_stream(ctx, ustream);
-                    return code;
                 }
             }
             num_found++;

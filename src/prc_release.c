@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include "prc_schema.h"
 
+static void prc_release_prc_type_surface(prc_context *ctx, prc_type_surf *data);
+
 void
 prc_release_string(prc_context *ctx, prc_string *data)
 {
@@ -1464,6 +1466,7 @@ prc_release_compressed_face(prc_context *ctx, prc_compressed_face *data)
         break;
     case PRC_HCG_AnaGenericFace:
         prc_release_content_compressed_ana_face(ctx, &data->hcg_ana_generic_face.face.ana_face);
+        prc_release_prc_type_surface(ctx, &data->hcg_ana_generic_face.surface);
         break;
     case PRC_HCG_IsoNURBS:
         prc_release_compressed_nurbs(ctx, &data->hcg_iso_nurbs.surface);
@@ -1487,6 +1490,38 @@ prc_release_compressed_shell(prc_context *ctx, prc_compressed_shell *data)
 }
 
 static void
+prc_release_compressed_connex(prc_context *ctx, prc_compressed_connex *data)
+{
+    uint32_t k;
+    uint32_t num_shells = data->number_of_shells;
+
+    for (k = 0; k < num_shells; k++)
+    {
+        prc_release_compressed_shell(ctx, &data->shells[k]);
+    }
+    if (data->shells != NULL)
+    {
+        prc_free(ctx, data->shells);
+    }
+}
+
+static void
+prc_release_multiple_connex(prc_context *ctx, prc_multi_compressed_connex *data)
+{
+    uint32_t num_connex = data->number_of_connex;
+    uint32_t k;
+
+    for (k = 0; k < num_connex; k++)
+    {
+        prc_release_compressed_connex(ctx, &data->connex[k]);
+    }
+    if (data->connex != NULL)
+    {
+        prc_free(ctx, data->connex);
+    }
+}
+
+static void
 prc_release_brep_data_compress(prc_context *ctx, prc_topo_brep_data_compress *data)
 {
     uint32_t k;
@@ -1496,6 +1531,10 @@ prc_release_brep_data_compress(prc_context *ctx, prc_topo_brep_data_compress *da
     if (data->single_connex_test)
     {
         prc_release_compressed_shell(ctx, &data->single_connex);
+    }
+    else
+    {
+        prc_release_multiple_connex(ctx, &data->multi_connex);
     }
 
     if (data->base_topology != NULL)
@@ -1724,9 +1763,9 @@ prc_release_surf_transform(prc_context *ctx, prc_surf_transform *data)
 }
 
 static void
-prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data)
+prc_release_prc_type_surface(prc_context *ctx, prc_type_surf *data)
 {
-    if (data == NULL || data->is_referenced)
+    if (data == NULL)
         return;
 
     switch (data->surface_type)
@@ -1821,6 +1860,15 @@ prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data)
     default:
         break;
     }
+}
+
+static void
+prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data)
+{
+    if (data == NULL || data->is_referenced)
+        return;
+
+    prc_release_prc_type_surface(ctx, &data->surface);
 }
 
 static void

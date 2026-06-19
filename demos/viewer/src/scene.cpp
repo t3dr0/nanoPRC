@@ -716,10 +716,11 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
         if (has_line)
         {
             /* We have a line tessellation to add for this model. Get the line
-               tessellation data */
+               tessellation data. Note if it is a 3D tessellation some faces may
+               have lines and some may not. */
             for (j = 0; j < tess.num_faces; j++)
             {
-                code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree,
+                 code = prc_api_get_line_tessellation_vertices(ctx, data, model_tree,
                                                     k, j, tess_line->tess_faces + j,
                                                     tess_line);
                 if (code < 0)

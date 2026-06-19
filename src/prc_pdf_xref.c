@@ -409,7 +409,7 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
     uint32_t content_stream_obj[PRC_PDF_MAX_NUM_CONTENT_STREAMS];
     uint8_t already_added = 0;
     uint32_t xref_num_objects = 0;
-    uint32_t first_entry_subsection = entry_subsections[0];
+    uint32_t first_entry_subsection;
     uint32_t xref_object_index;
     uint32_t prev_num_xref_objects = xref->num_objects;
 
@@ -421,11 +421,34 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
         return PRC_ERROR_PDF;
     }
 
-    /* Lets add up the number of objects in this xref. We may already have
-       objects from a previous xref */
+    if ((number_subsections * 2u) > 256u)
+    {
+        return PRC_ERROR_PDF;
+    }
+
+    /* Validate subsection metadata and add up number of objects safely.
+       The /Index array is signed in our parser; reject negative or overflowing values. */
     for (k = 0; k < number_subsections; k++)
     {
-        xref_num_objects += entry_subsections[2 * k + 1];
+        int32_t subsection_start = entry_subsections[2 * k];
+        int32_t subsection_count = entry_subsections[2 * k + 1];
+
+        if (subsection_start < 0 || subsection_count < 0)
+        {
+            return PRC_ERROR_PDF;
+        }
+
+        if ((uint32_t)subsection_count > (UINT32_MAX - xref_num_objects))
+        {
+            return PRC_ERROR_PDF;
+        }
+
+        xref_num_objects += (uint32_t)subsection_count;
+    }
+
+    if (xref_num_objects > (UINT32_MAX - xref->num_objects))
+    {
+        return PRC_ERROR_PDF;
     }
 
     xref->num_objects += xref_num_objects;
@@ -454,11 +477,29 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
     *xref_head_offset = xref_object_index;  /* Used later for knowing where to start when we deal with the streams */
     for (m = 0; m < number_subsections; m++)
     {
-        first_entry_subsection = entry_subsections[2 * m];
-        xref_num_objects = entry_subsections[2 * m + 1];
+        int32_t subsection_start = entry_subsections[2 * m];
+        int32_t subsection_count = entry_subsections[2 * m + 1];
+
+        if (subsection_start < 0 || subsection_count < 0)
+        {
+            return PRC_ERROR_PDF;
+        }
+
+        first_entry_subsection = (uint32_t)subsection_start;
+        xref_num_objects = (uint32_t)subsection_count;
+
+        if (first_entry_subsection > (UINT32_MAX - xref_num_objects))
+        {
+            return PRC_ERROR_PDF;
+        }
 
         for (k = 0; k < xref_num_objects; k++)
         {
+            if (xref_object_index >= xref->num_objects)
+            {
+                return PRC_ERROR_PDF;
+            }
+
             prc_pdf_xref *xref_object = &xref->xref_objects[xref_object_index];
             xref_object_index++;
             type = 0;

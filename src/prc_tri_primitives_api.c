@@ -2399,6 +2399,10 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     face_out->disable_face = 0;
     face_out->texture.data = NULL;
 
+    vertex_out->num_vertices = 0;
+    vertex_out->capacity = 0;
+    vertex_out->vertices = NULL;
+
     code = prc_api_helper_get_tess_and_file_index2(ctx, data_in, tess_index_in,
         &file_index, &tess_index);
     if (code < 0)
@@ -2426,10 +2430,6 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         uint32_t num_of_edges = tess3d_compressed->number_of_edges;
         uint32_t num_vertices = (uint32_t)tess3d_compressed->num_vertices_prc_compressed_3d;
         prc_internal_api_wire *wire = NULL;
-
-        vertex_out->num_vertices = 0;
-        vertex_out->capacity = 0;
-        vertex_out->vertices = NULL;
 
         if (num_of_edges == 0)
         {
@@ -2567,6 +2567,15 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         prc_face = &tess3d->face_tessellation_data[face_index];
         start_of_wire_data = prc_face->start_of_wire_data;
         size_of_sizes_wire = prc_face->size_of_sizes_wire;
+
+        if (size_of_sizes_wire == 0)
+        {
+            /* No wire data for this face. Just return. */
+            face_out->num_graphic_primitives = 0;
+            face_out->disable_face = 1;
+            return 0;
+        }
+
         sizes_wire = prc_face->sizes_wire;
 
         if (size_of_sizes_wire > 0 && sizes_wire == NULL)
@@ -4528,6 +4537,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         prc_internal_api_wire *wire = NULL;
         uint32_t line_prim_count = 0;
         uint32_t text_prim_count = 0;
+        float markup_color[4] = { 0.0, 0.0, 0.0, 1.0 };
 
         if (num_vertices == 0)
         {
@@ -4541,20 +4551,6 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         vertex_out->num_vertices = num_vertices;
         vertex_out->capacity = num_vertices;
-
-        /* Lets set the vertex locations. */
-        for (k = 0; k < num_vertices; k++)
-        {
-            vertex_out->vertices[k].position[0] = tess->decode_vertices[k].x;
-            vertex_out->vertices[k].position[1] = tess->decode_vertices[k].y;
-            vertex_out->vertices[k].position[2] = tess->decode_vertices[k].z;
-
-            /* Default is white... */
-            vertex_out->vertices[k].color[0] = 1.0;
-            vertex_out->vertices[k].color[1] = 1.0;
-            vertex_out->vertices[k].color[2] = 1.0;
-            vertex_out->vertices[k].color[3] = 1.0;
-        }
 
         api_tess->num_line_primitives = 0;
          /* We can have line primitives or a text */
@@ -4583,6 +4579,42 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                  sizeof(prc_internal_api_wire));
              if (wire == NULL)
                  return PRC_API_ERROR_MEMORY;
+        }
+
+        /* At this point, we are going to assume that all these primitives have
+           the same color. That may not be true, and we will need to do
+           some vertex splitting if that ends up being an issue. For now, lets
+           go through the line primitives and get the color and see if there
+           are multiple ones. I suspect that is very rare. Generally a markup
+           will just be a single solid color */
+        for (k = 0; k < tess->decode_number_primitives; k++)
+        {
+            if (tess->decode_primitives[k].primitive_type != MARKUP_TEXT)
+            {
+                uint8_t found_color = 0;
+
+                code = prc_internal_api_get_color(ctx, global_data,
+                    ((int32_t)tess->decode_primitives[k].biased_color_index) - 1,
+                    markup_color);
+                if (code < 0)
+                {
+                    prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
+                    return code;
+                }
+            }
+        }
+
+        /* Lets set the vertex locations and color */
+        for (k = 0; k < num_vertices; k++)
+        {
+            vertex_out->vertices[k].position[0] = tess->decode_vertices[k].x;
+            vertex_out->vertices[k].position[1] = tess->decode_vertices[k].y;
+            vertex_out->vertices[k].position[2] = tess->decode_vertices[k].z;
+
+            vertex_out->vertices[k].color[0] = markup_color[0];
+            vertex_out->vertices[k].color[1] = markup_color[1];
+            vertex_out->vertices[k].color[2] = markup_color[2];
+            vertex_out->vertices[k].color[3] = 1.0;
         }
 
         for (k = 0; k < tess->decode_number_primitives; k++)

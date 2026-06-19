@@ -631,8 +631,8 @@ prc_data*
 prc_open_contents(prc_context *ctx, const char* infile)
 {
     FILE* fid;
-    uint8_t* buff;
-    uint8_t *buff2;
+    uint8_t *buff = NULL;
+    uint8_t *buff2 = NULL;
     size_t size;
     size_t size_read;
     prc_header* header;
@@ -677,6 +677,7 @@ prc_open_contents(prc_context *ctx, const char* infile)
     buff = prc_malloc(ctx, size);
     if (buff == NULL)
     {
+        prc_free(ctx, output);
         prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate main buffer\n");
         return NULL;
     }
@@ -691,6 +692,7 @@ prc_open_contents(prc_context *ctx, const char* infile)
         if (buff[0] != 0x25 && buff[1] != 0x50 && buff[2] != 0x44 && buff[3] != 0x46)
         {
             prc_free(ctx, buff);
+            prc_free(ctx, output);
             prc_error(ctx, PRC_ERROR_PARSE, "Not a PRC or PDF file\n");
             return NULL;
         }
@@ -701,6 +703,7 @@ prc_open_contents(prc_context *ctx, const char* infile)
         if (code < 0)
         {
             prc_free(ctx, buff);
+            prc_free(ctx, output);
             prc_error(ctx, code, "Failed in prc_extract_prc\n");
             return NULL;
         }

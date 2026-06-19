@@ -38,7 +38,8 @@ static int prc_parse_content_body(prc_context *ctx, prc_bit_state *bit_state,
     prc_content_body *data);
 static int prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state,
     prc_topo *data);
-
+static int prc_parse_surf(prc_context *ctx, prc_bit_state *bit_state,
+    prc_type_surf *data);
 void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
 
 /* Table 24 � UVParameterization */
@@ -1786,7 +1787,12 @@ prc_parse_hcg_ana_generic_face(prc_context *ctx, prc_bit_state *bit_state,
         return code;
     }
 
-    /* TODO surface_definition */
+    code = prc_parse_surf(ctx, bit_state, &data->surface);
+    if (code < 0)
+    {
+        prc_error(ctx, code, "Parsing error in prc_parse_surf for surface\n");
+        return code;
+    }
     return 0;
 }
 
@@ -2767,12 +2773,7 @@ prc_parse_crv_polyline(prc_context *ctx, prc_bit_state *bit_state,
     data->has_transform = prc_bitread_bit(ctx, bit_state);
     if (data->has_transform)
     {
-        code = prc_parse_cart_trans(ctx, bit_state, &data->transform);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Parsing error in prc_parse_matrix3d\n");
-            return code;
-        }
+        prc_parse_3d_transform(ctx, bit_state, &data->transform);
     }
 
     data->parameterization = prc_parse_parameterization(ctx, bit_state);
@@ -3420,6 +3421,71 @@ prc_parse_base_topology(prc_context *ctx, prc_bit_state *bit_state, prc_base_top
     return 0;
 }
 
+/* Table 201 CompressedConnex */
+static int
+prc_parse_compressed_connex(prc_context *ctx, prc_bit_state *bit_state,
+    prc_nano_brep_compressed_data *compressed_data, uint32_t *num_faces,
+    prc_compressed_connex *data)
+{
+    int code;
+    uint32_t k;
+
+    data->number_of_shells = prc_bitread_number_of_bits_then_unsigned_int(ctx, bit_state);
+    if (data->number_of_shells > 0)
+    {
+        data->shells = (prc_compressed_shell*) prc_calloc(ctx, data->number_of_shells, sizeof(prc_compressed_shell));
+        if (data->shells == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_compressed_connex\n");
+            return PRC_ERROR_MEMORY;
+        }
+        for (k = 0; k < data->number_of_shells; k++)
+        {
+            code = prc_parse_compressed_shell(ctx, bit_state, compressed_data,
+                                              &data->shells[k]);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_parse_compressed_shell\n");
+                return code;
+            }
+            *num_faces += data->shells[k].number_of_faces;
+        }
+    }
+    return 0;
+}
+
+/* Table 200 MultipleCompressedConnex */
+static int
+prc_parse_multiple_compressed_connex(prc_context *ctx, prc_bit_state *bit_state,
+    prc_nano_brep_compressed_data *compressed_data, prc_multi_compressed_connex *data)
+{
+    int code;
+    uint32_t k;
+
+    data->number_of_faces = 0;
+    data->number_of_connex = prc_bitread_number_of_bits_then_unsigned_int(ctx, bit_state);
+    if (data->number_of_connex > 0)
+    {
+        data->connex = (prc_compressed_connex *)prc_calloc(ctx, data->number_of_connex, sizeof(prc_compressed_connex));
+        if (data->connex == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_multiple_compressed_connex\n");
+            return PRC_ERROR_MEMORY;
+        }
+        for (k = 0; k < data->number_of_connex; k++)
+        {
+            code = prc_parse_compressed_connex(ctx, bit_state, compressed_data,
+                                               &data->number_of_faces, &data->connex[k]);
+            if (code < 0)
+            {
+                prc_error(ctx, code, "Failed in prc_parse_compressed_connex\n");
+                return code;
+            }
+        }
+    }
+    return 0;
+}
+
 /* Table 198 PRC_TYPE_TOPO_BrepDataCompress */
 static int
 prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
@@ -3522,8 +3588,15 @@ prc_parse_brep_data_compress(prc_context *ctx, prc_bit_state *bit_state,
     else
     {
         /* Multiple compressed connex stored in file*/
-        prc_error(ctx, PRC_ERROR_PARSE, "ToDo implement\n");
-        return PRC_ERROR_PARSE;
+        code = prc_parse_multiple_compressed_connex(ctx, bit_state, compressed_data,
+            &data->multi_connex);
+        number_of_faces = data->multi_connex.number_of_faces;
+
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Failed in prc_parse_multiple_compressed_connex\n");
+            return code;
+        }
     }
 
     /* Get the base topology data. Order of these corresponds
@@ -4734,6 +4807,281 @@ prc_parse_surf_transform(prc_context *ctx, prc_bit_state *bit_state,
     return 0;
 }
 
+static int
+prc_parse_surf(prc_context *ctx, prc_bit_state *bit_state, prc_type_surf *data)
+{
+    int code = 0;
+
+    /* First get the surface type */
+    data->surface_type = prc_bitread_uint32(ctx, bit_state);
+
+    switch (data->surface_type)
+    {
+    case PRC_TYPE_ROOT:
+        /* Null case */
+        break;
+    case PRC_TYPE_SURF_Blend01:
+        data->surf_blend01 = (prc_surf_blend01 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend01));
+        if (data->surf_blend01 == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_blend01(ctx, bit_state, data->surf_blend01, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_blend01\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Blend02:
+        data->surf_blend02 = (prc_surf_blend02 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend02));
+        if (data->surf_blend02 == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_blend02(ctx, bit_state, data->surf_blend02, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_blend02\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Blend03:
+        data->surf_blend03 = (prc_surf_blend03 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend03));
+        if (data->surf_blend03 == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_blend03(ctx, bit_state, data->surf_blend03, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_blend03\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_NURBS:
+        data->surf_nurbs = (prc_surf_nurbs *)prc_calloc(ctx, 1, sizeof(prc_surf_nurbs));
+        if (data->surf_nurbs == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_nurbs(ctx, bit_state, data->surf_nurbs, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_nurbs\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Cone:
+        data->surf_cone = (prc_surf_cone *)prc_calloc(ctx, 1, sizeof(prc_surf_cone));
+        if (data->surf_cone == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_cone(ctx, bit_state, data->surf_cone, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_cone\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Cylinder:
+        data->surf_cylinder = (prc_surf_cylinder *)prc_calloc(ctx, 1, sizeof(prc_surf_cylinder));
+        if (data->surf_cylinder == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_cylinder(ctx, bit_state, data->surf_cylinder, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_cylinder\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Cylindrical:
+        data->surf_cylindrical = (prc_surf_cylindrical *)prc_calloc(ctx, 1, sizeof(prc_surf_cylindrical));
+        if (data->surf_cylindrical == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_cylindrical(ctx, bit_state, data->surf_cylindrical, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_cyldrical\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Offset:
+        data->surf_offset = (prc_surf_offset *)prc_calloc(ctx, 1, sizeof(prc_surf_offset));
+        if (data->surf_offset == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_offset(ctx, bit_state, data->surf_offset, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_offset\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Pipe:
+        data->surf_pipe = (prc_surf_pipe *)prc_calloc(ctx, 1, sizeof(prc_surf_pipe));
+        if (data->surf_pipe == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_pipe(ctx, bit_state, data->surf_pipe, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_pipe\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Plane:
+        data->surf_plane = (prc_surf_plane *)prc_calloc(ctx, 1, sizeof(prc_surf_plane));
+        if (data->surf_plane == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_plane(ctx, bit_state, data->surf_plane, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_plane\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Ruled:
+        data->surf_ruled = (prc_surf_ruled *)prc_calloc(ctx, 1, sizeof(prc_surf_ruled));
+        if (data->surf_ruled == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_ruled(ctx, bit_state, data->surf_ruled, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_ruled\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Sphere:
+        data->surf_sphere = (prc_surf_sphere *)prc_calloc(ctx, 1, sizeof(prc_surf_sphere));
+        if (data->surf_sphere == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_sphere(ctx, bit_state, data->surf_sphere, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_sphere\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Revolution:
+        data->surf_revolution = (prc_surf_revolution *)prc_calloc(ctx, 1, sizeof(prc_surf_revolution));
+        if (data->surf_revolution == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_revolution(ctx, bit_state, data->surf_revolution, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_revolution\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Extrusion:
+        data->surf_extrusion = (prc_surf_extrusion *)prc_calloc(ctx, 1, sizeof(prc_surf_extrusion));
+        if (data->surf_extrusion == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_extrusion(ctx, bit_state, data->surf_extrusion, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_extrusion\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_FromCurves:
+        data->surf_fromcurves = (prc_surf_fromcurves *)prc_calloc(ctx, 1, sizeof(prc_surf_fromcurves));
+        if (data->surf_fromcurves == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_from_curves(ctx, bit_state, data->surf_fromcurves, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_from_curves\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Torus:
+        data->surf_torus = (prc_surf_torus *)prc_calloc(ctx, 1, sizeof(prc_surf_torus));
+        if (data->surf_torus == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_torus(ctx, bit_state, data->surf_torus, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_torus\n");
+            return code;
+        }
+        break;
+
+    case PRC_TYPE_SURF_Transform:
+        data->surf_transform = (prc_surf_transform *)prc_calloc(ctx, 1, sizeof(prc_surf_transform));
+        if (data->surf_transform == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
+            return PRC_ERROR_MEMORY;
+        }
+        code = prc_parse_surf_transform(ctx, bit_state, data->surf_transform, DONT_READ_TAG);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Parsing error in prc_parse_surf_transform\n");
+            return code;
+        }
+        break;
+
+    default:
+        prc_error(ctx, PRC_ERROR_PARSE, "Unknown surface type in prc_parse_ptr_surface\n");
+        return PRC_ERROR_PARSE;
+    }
+    return 0;
+}
+
 /* Table 243 � PtrSurface */
 static int
 prc_parse_ptr_surface(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_surface *data)
@@ -4748,273 +5096,11 @@ prc_parse_ptr_surface(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_surfac
     }
     else
     {
-        /* First get the surface type */
-        data->surface_type = prc_bitread_uint32(ctx, bit_state);
-
-        switch (data->surface_type)
+        code = prc_parse_surf(ctx, bit_state, &data->surface);
+        if (code < 0)
         {
-        case PRC_TYPE_ROOT:
-            /* Null case */
-            break;
-        case PRC_TYPE_SURF_Blend01:
-            data->surf_blend01 = (prc_surf_blend01 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend01));
-            if (data->surf_blend01 == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_blend01(ctx, bit_state, data->surf_blend01, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_blend01\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Blend02:
-            data->surf_blend02 = (prc_surf_blend02 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend02));
-            if (data->surf_blend02 == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_blend02(ctx, bit_state, data->surf_blend02, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_blend02\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Blend03:
-            data->surf_blend03 = (prc_surf_blend03 *)prc_calloc(ctx, 1, sizeof(prc_surf_blend03));
-            if (data->surf_blend03 == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_blend03(ctx, bit_state, data->surf_blend03, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_blend03\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_NURBS:
-            data->surf_nurbs = (prc_surf_nurbs *)prc_calloc(ctx, 1, sizeof(prc_surf_nurbs));
-            if (data->surf_nurbs == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_nurbs(ctx, bit_state, data->surf_nurbs, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_nurbs\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Cone:
-            data->surf_cone = (prc_surf_cone *)prc_calloc(ctx, 1, sizeof(prc_surf_cone));
-            if (data->surf_cone == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_cone(ctx, bit_state, data->surf_cone, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_cone\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Cylinder:
-            data->surf_cylinder = (prc_surf_cylinder *)prc_calloc(ctx, 1, sizeof(prc_surf_cylinder));
-            if (data->surf_cylinder == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_cylinder(ctx, bit_state, data->surf_cylinder, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_cylinder\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Cylindrical:
-            data->surf_cylindrical = (prc_surf_cylindrical *)prc_calloc(ctx, 1, sizeof(prc_surf_cylindrical));
-            if (data->surf_cylindrical == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_cylindrical(ctx, bit_state, data->surf_cylindrical, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_cyldrical\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Offset:
-            data->surf_offset = (prc_surf_offset *)prc_calloc(ctx, 1, sizeof(prc_surf_offset));
-            if (data->surf_offset == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_offset(ctx, bit_state, data->surf_offset, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_offset\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Pipe:
-            data->surf_pipe = (prc_surf_pipe *)prc_calloc(ctx, 1, sizeof(prc_surf_pipe));
-            if (data->surf_pipe == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_pipe(ctx, bit_state, data->surf_pipe, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_pipe\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Plane:
-            data->surf_plane = (prc_surf_plane *)prc_calloc(ctx, 1, sizeof(prc_surf_plane));
-            if (data->surf_plane == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_plane(ctx, bit_state, data->surf_plane, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_plane\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Ruled:
-            data->surf_ruled = (prc_surf_ruled *)prc_calloc(ctx, 1, sizeof(prc_surf_ruled));
-            if (data->surf_ruled == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_ruled(ctx, bit_state, data->surf_ruled, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_ruled\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Sphere:
-            data->surf_sphere = (prc_surf_sphere *)prc_calloc(ctx, 1, sizeof(prc_surf_sphere));
-            if (data->surf_sphere == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_sphere(ctx, bit_state, data->surf_sphere, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_sphere\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Revolution:
-            data->surf_revolution = (prc_surf_revolution *)prc_calloc(ctx, 1, sizeof(prc_surf_revolution));
-            if (data->surf_revolution == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_revolution(ctx, bit_state, data->surf_revolution, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_revolution\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Extrusion:
-            data->surf_extrusion = (prc_surf_extrusion *)prc_calloc(ctx, 1, sizeof(prc_surf_extrusion));
-            if (data->surf_extrusion == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_extrusion(ctx, bit_state, data->surf_extrusion, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_extrusion\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_FromCurves:
-            data->surf_fromcurves = (prc_surf_fromcurves *)prc_calloc(ctx, 1, sizeof(prc_surf_fromcurves));
-            if (data->surf_fromcurves == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_from_curves(ctx, bit_state, data->surf_fromcurves, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_from_curves\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Torus:
-            data->surf_torus = (prc_surf_torus *)prc_calloc(ctx, 1, sizeof(prc_surf_torus));
-            if (data->surf_torus == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_torus(ctx, bit_state, data->surf_torus, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_torus\n");
-                return code;
-            }
-            break;
-
-        case PRC_TYPE_SURF_Transform:
-            data->surf_transform = (prc_surf_transform *)prc_calloc(ctx, 1, sizeof(prc_surf_transform));
-            if (data->surf_transform == NULL)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_surface\n");
-                return PRC_ERROR_MEMORY;
-            }
-            code = prc_parse_surf_transform(ctx, bit_state, data->surf_transform, DONT_READ_TAG);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Parsing error in prc_parse_surf_transform\n");
-                return code;
-            }
-            break;
-
-        default:
-            prc_error(ctx, PRC_ERROR_PARSE, "Unknown surface type in prc_parse_ptr_surface\n");
-            return PRC_ERROR_PARSE;
-
+            prc_error(ctx, code, "Parsing error in prc_parse_surf for surface\n");
+            return code;
         }
     }
     return code;

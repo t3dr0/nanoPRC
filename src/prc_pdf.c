@@ -30,6 +30,119 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     uint8_t **buff_out, uint32_t *size_out, prc_pdf_view_array **views,
     uint32_t *number_views, uint32_t recursive_depth);
 
+static int
+pdf_cleanup_seen_ptr(void **seen, uint32_t seen_count, void *p)
+{
+    uint32_t i;
+    for (i = 0; i < seen_count; i++)
+    {
+        if (seen[i] == p)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void
+pdf_cleanup_free_once(prc_context *ctx, void *p, const char *label,
+    void **seen, uint32_t *seen_count, uint32_t seen_capacity)
+{
+#if PRC_DEBUG_MEMORY
+    char msg[192];
+#endif
+
+    if (p == NULL)
+    {
+        return;
+    }
+
+    if (pdf_cleanup_seen_ptr(seen, *seen_count, p))
+    {
+#if PRC_DEBUG_MEMORY
+        snprintf(msg, sizeof(msg),
+            "Cleanup duplicate pointer skipped %s (%p)\n", label, p);
+        prc_error(ctx, PRC_ERROR_PARSE, msg);
+#endif
+        return;
+    }
+
+    if (*seen_count < seen_capacity)
+    {
+        seen[*seen_count] = p;
+        (*seen_count)++;
+    }
+
+#if PRC_DEBUG_MEMORY
+    snprintf(msg, sizeof(msg), "Cleanup free %s (%p)\n", label, p);
+    prc_error(ctx, PRC_ERROR_PARSE, msg);
+#endif
+    prc_free(ctx, p);
+}
+
+static void
+pdf_cleanup_extract_state(prc_context *ctx, prc_pdf_head_xref *head_xref,
+    prc_pdf_uncompressed_object_stream_list *stream_list, uint32_t **xref_offsets)
+{
+    uint32_t k;
+    uint32_t seen_capacity = 8;
+    uint32_t seen_count = 0;
+    void **seen_ptrs = NULL;
+
+    if (stream_list != NULL && stream_list->number_streams > 0)
+    {
+        seen_capacity = stream_list->number_streams * 2 + 8;
+    }
+
+    seen_ptrs = (void **)malloc(sizeof(void *) * seen_capacity);
+    if (seen_ptrs == NULL)
+    {
+        seen_capacity = 0;
+    }
+
+    if (stream_list != NULL && stream_list->number_streams > 0 && stream_list->ustream != NULL)
+    {
+        for (k = 0; k < stream_list->number_streams; k++)
+        {
+            char label[80];
+            snprintf(label, sizeof(label), "stream_list->ustream[%u].stream", k);
+            pdf_cleanup_free_once(ctx, stream_list->ustream[k].stream, label,
+                seen_ptrs, &seen_count, seen_capacity);
+            stream_list->ustream[k].stream = NULL;
+
+            snprintf(label, sizeof(label), "stream_list->ustream[%u].object_offsets", k);
+            pdf_cleanup_free_once(ctx, stream_list->ustream[k].object_offsets, label,
+                seen_ptrs, &seen_count, seen_capacity);
+            stream_list->ustream[k].object_offsets = NULL;
+        }
+
+        pdf_cleanup_free_once(ctx, stream_list->ustream, "stream_list->ustream",
+            seen_ptrs, &seen_count, seen_capacity);
+        stream_list->ustream = NULL;
+        stream_list->number_streams = 0;
+    }
+
+    if (xref_offsets != NULL && *xref_offsets != NULL)
+    {
+        pdf_cleanup_free_once(ctx, *xref_offsets, "xref_offsets",
+            seen_ptrs, &seen_count, seen_capacity);
+        *xref_offsets = NULL;
+    }
+
+    if (head_xref != NULL && head_xref->xref_objects != NULL)
+    {
+        pdf_cleanup_free_once(ctx, head_xref->xref_objects, "head_xref->xref_objects",
+            seen_ptrs, &seen_count, seen_capacity);
+        head_xref->xref_objects = NULL;
+        head_xref->num_objects = 0;
+    }
+
+    if (seen_ptrs != NULL)
+    {
+        free(seen_ptrs);
+    }
+}
+
 int
 pdf_eat_white_space(prc_context *ctx, uint8_t **ptr, uint8_t *boundary)
 {
@@ -127,7 +240,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
         /* If we run into endobj that is an error */
         if (strncmp((char *)ptr, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
         {
-            prc_error(ctx, PRC_ERROR_PARSE, "Did not find stream in PDF object\n");
+            //prc_error(ctx, PRC_ERROR_PARSE, "Did not find stream in PDF object\n");
             return PRC_ERROR_PARSE;
         }
         ptr++;
@@ -135,7 +248,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
 
     if (ptr_stream == NULL)
     {
-        prc_error(ctx, PRC_ERROR_PARSE, "Did not find stream in PDF object\n");
+        //prc_error(ctx, PRC_ERROR_PARSE, "Did not find stream in PDF object\n");
         return PRC_ERROR_PARSE;
     }
     *ptr_stream_start = ptr_stream;
@@ -287,6 +400,11 @@ pdf_get_stream_data(prc_context *ctx, uint8_t *ptr_in_obj, uint8_t *boundary,
         {
             prc_error(ctx, code, "Failed in prc_uncompress\n");
             prc_free(ctx, buff_deflated);
+            if (*buff_out != NULL)
+            {
+                prc_free(ctx, *buff_out);
+                *buff_out = NULL;
+            }
             return code;
         }
         prc_free(ctx, buff_deflated);
@@ -732,7 +850,7 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 /* Parse the values %d %d R that are contained with the brackets [ to  ]
    When we call this we should already be sitting on a [ as the next character */
 static int
-pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
+pdf_parse_array_prc(prc_context *ctx, uint8_t *boundary,
                     uint8_t *ptr_in, uint32_t *num_entries, uint32_t **list_obj,
                     uint32_t **list_gen)
 {
@@ -752,18 +870,18 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
 
     /* First find out how many R values there are before we hit ] */
     *num_entries = 0;
-    while (*ptr != ']')
+    while (ptr < boundary && *ptr != ']')
     {
-        if (ptr >= pdf_buff_in + size_in)
-        {
-            prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
-            return PRC_ERROR_PARSE;
-        }
         if (strncmp((char *)ptr, "R", 1) == 0)
         {
             (*num_entries)++;
         }
         ptr++;
+    }
+    if (ptr >= boundary || *ptr != ']')
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
+        return PRC_ERROR_PARSE;
     }
     if (*num_entries == 0)
     {
@@ -787,13 +905,8 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
 
     /* Now we have to read the entries */
     ptr = ptr_in + 1;
-    while (*ptr != ']')
+    while (ptr < boundary && *ptr != ']')
     {
-        if (ptr >= pdf_buff_in + size_in)
-        {
-            prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
-            goto fail;
-        }
         code = sscanf((char *)ptr, "%d %d", &val1, &val2);
         if (code != 2)
         {
@@ -801,7 +914,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
             goto fail;
         }
         /* Eat white space and the R character */
-        code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
+        code = pdf_eat_white_space(ctx, &ptr, boundary);
         if (code < 0)
         {
             goto fail;
@@ -814,7 +927,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         while (*ptr != 'R')
         {
             ptr++;
-            if (ptr >= pdf_buff_in + size_in)
+            if (ptr >= boundary)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read R in PDF file\n");
                 goto fail;
@@ -822,13 +935,13 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         }
         ptr++;
         /* Eat any white space */
-        code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
+        code = pdf_eat_white_space(ctx, &ptr, boundary);
         if (code < 0)
         {
             goto fail;
         }
     }
-    if (*ptr != ']')
+    if (ptr >= boundary || *ptr != ']')
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not read ] in PDF file\n");
         goto fail;
@@ -867,6 +980,7 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     uint32_t size_out;
     uint32_t offset;
     uint8_t is_object_stream_item = 0;
+    uint8_t *array_boundary = pdf_buff_in + size_in;
 
     *num_views = 0;
 
@@ -977,12 +1091,20 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         {
             found_array = 1;
             ptr = ptr_temp;
+            if (is_object_stream_item)
+            {
+                array_boundary = ptr_temp + size_out;
+            }
+            else
+            {
+                array_boundary = pdf_buff_in + size_in;
+            }
         }
     }
 
     if (found_array)
     {
-        code = pdf_parse_array_prc(ctx, pdf_buff_in, size_in,
+        code = pdf_parse_array_prc(ctx, array_boundary,
             ptr, num_views, &dict_obj_num, &dict_gen_num);
         if (code < 0)
         {
@@ -2884,32 +3006,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     }
 
 success:
-    /* Release the xref data and any streams */
-    if (stream_list.number_streams > 0)
-    {
-        for (k = 0; k < stream_list.number_streams; k++)
-        {
-            if (stream_list.ustream[k].stream != NULL)
-            {
-                prc_free(ctx, stream_list.ustream[k].stream);
-            }
-            if (stream_list.ustream[k].object_offsets != NULL)
-            {
-                prc_free(ctx, stream_list.ustream[k].object_offsets);
-            }
-        }
-        prc_free(ctx, stream_list.ustream);
-    }
-
-    if (xref_offsets != NULL)
-    {
-        prc_free(ctx, xref_offsets);
-    }
-
-    if (head_xref.xref_objects != NULL)
-    {
-        prc_free(ctx, head_xref.xref_objects);
-    }
+    pdf_cleanup_extract_state(ctx, &head_xref, &stream_list, &xref_offsets);
 
     return 0;
 
@@ -2930,31 +3027,12 @@ fail:
         }
     }
 
-    if (stream_list.number_streams > 0 && stream_list.ustream != NULL)
+    if (*buff_out != NULL)
     {
-        for (k = 0; k < stream_list.number_streams; k++)
-        {
-            if (stream_list.ustream[k].stream != NULL)
-            {
-                prc_free(ctx, stream_list.ustream[k].stream);
-            }
-            if (stream_list.ustream[k].object_offsets != NULL)
-            {
-                prc_free(ctx, stream_list.ustream[k].object_offsets);
-            }
-        }
-        prc_free(ctx, stream_list.ustream);
+        prc_free(ctx, *buff_out);
+        *buff_out = NULL;
     }
-
-    if (xref_offsets != NULL)
-    {
-        prc_free(ctx, xref_offsets);
-    }
-
-    if (head_xref.xref_objects != NULL)
-    {
-        prc_free(ctx, head_xref.xref_objects);
-    }
+    pdf_cleanup_extract_state(ctx, &head_xref, &stream_list, &xref_offsets);
 
     return code;
 }

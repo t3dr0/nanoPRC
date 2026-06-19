@@ -204,6 +204,25 @@ prc_internal_api_set_transform(prc_context *ctx, const prc_misc_transformation *
     return 0;
 }
 
+int
+prc_internal_api_get_color(prc_context *ctx, prc_file_struct_internal_global_data *global_data,
+    int32_t color_index, float *color_out)
+{
+    prc_rgb_color rgb_color;
+
+    if (global_data->colors != NULL)
+    {
+        if (color_index < global_data->color_count && color_index > -1)
+        {
+            rgb_color = global_data->colors[color_index];
+            color_out[0] = rgb_color.red;
+            color_out[1] = rgb_color.green;
+            color_out[2] = rgb_color.blue;
+        }
+    }
+    return 0;
+}
+
 /* Note style index is the unbiased index here */
 int
 prc_internal_api_get_color_from_style(prc_context *ctx, prc_file_struct_internal_global_data *global_data,

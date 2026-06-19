@@ -277,7 +277,8 @@ void main()
         else
         {
             // LINE RENDERING: Plain color (no texture)
-            FragColor = vec4(Color * uMaterial.tint, uMaterial.alpha);
+            //FragColor = vec4(Color * uMaterial.tint, uMaterial.alpha);
+            FragColor = vec4(Color, 1.0);
         }
 		return;
 	}

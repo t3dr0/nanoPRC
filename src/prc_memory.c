@@ -19,12 +19,104 @@
 #include "../include/prc_context.h"
 #include <stdio.h>
 
+#if PRC_DEBUG_MEMORY
+#if defined(_MSC_VER)
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
+static void *
+prc_debug_current_callsite(void)
+{
+    return _ReturnAddress();
+}
+#elif defined(__GNUC__) || defined(__clang__)
+static void *
+prc_debug_current_callsite(void)
+{
+    return __builtin_return_address(0);
+}
+#else
+static void *
+prc_debug_current_callsite(void)
+{
+    return NULL;
+}
+#endif
+#endif
+
 /* Enable this define to turn on memory guard debugging (detect buffer overruns) */
 #define PRC_MEMORY_GUARDS 1
 
 /* Track a specific pointer to detect when it gets corrupted */
 static void *g_tracked_pointer = NULL;
 static size_t g_tracked_size = 0;
+
+#if PRC_DEBUG_MEMORY
+typedef enum prc_debug_pointer_state_e {
+    PRC_DEBUG_PTR_NOT_FOUND = 0,
+    PRC_DEBUG_PTR_LIVE = 1,
+    PRC_DEBUG_PTR_FREED = 2
+} prc_debug_pointer_state;
+
+static prc_debug_pointer_state
+prc_debug_get_latest_pointer_state(prc_context *ctx, void *p, size_t *latest_index)
+{
+    size_t i;
+
+    if (latest_index != NULL)
+    {
+        *latest_index = 0;
+    }
+
+    for (i = ctx->current_memory_index; i > 0; i--)
+    {
+        size_t idx = i - 1;
+        if (ctx->debug_memory[idx].data != p)
+        {
+            continue;
+        }
+
+        if (latest_index != NULL)
+        {
+            *latest_index = idx;
+        }
+        return (ctx->debug_memory[idx].is_free == 0) ? PRC_DEBUG_PTR_LIVE : PRC_DEBUG_PTR_FREED;
+    }
+
+    return PRC_DEBUG_PTR_NOT_FOUND;
+}
+
+static void
+prc_debug_dump_pointer_history(prc_context *ctx, void *p, size_t max_matches)
+{
+    size_t i;
+    size_t printed = 0;
+
+    printf("    Pointer history for %p (newest first):\n", p);
+    for (i = ctx->current_memory_index; i > 0; i--)
+    {
+        size_t idx = i - 1;
+        if (ctx->debug_memory[idx].data != p)
+        {
+            continue;
+        }
+
+        printf("      idx=%zu alloc_index=%zu is_free=%u\n",
+            idx,
+            ctx->debug_memory[idx].index,
+            (unsigned int)ctx->debug_memory[idx].is_free);
+        printed++;
+        if (printed >= max_matches)
+        {
+            break;
+        }
+    }
+
+    if (printed == 0)
+    {
+        printf("      <no matching entries>\n");
+    }
+}
+#endif
 
 #ifdef PRC_MEMORY_GUARDS
 
@@ -187,6 +279,8 @@ prc_malloc(prc_context *ctx, size_t size)
         ctx->debug_memory[ctx->current_memory_index].data = p;
         ctx->debug_memory[ctx->current_memory_index].index = ctx->current_memory_index;
         ctx->debug_memory[ctx->current_memory_index].is_free = 0;
+        ctx->debug_memory[ctx->current_memory_index].alloc_callsite = prc_debug_current_callsite();
+        ctx->debug_memory[ctx->current_memory_index].free_callsite = NULL;
         ctx->current_memory_index++;
     }
 #endif
@@ -245,6 +339,8 @@ prc_calloc(prc_context *ctx, size_t count, size_t size)
     ctx->debug_memory[ctx->current_memory_index].data = p;
     ctx->debug_memory[ctx->current_memory_index].index = ctx->current_memory_index;
     ctx->debug_memory[ctx->current_memory_index].is_free = 0;
+    ctx->debug_memory[ctx->current_memory_index].alloc_callsite = prc_debug_current_callsite();
+    ctx->debug_memory[ctx->current_memory_index].free_callsite = NULL;
     ctx->current_memory_index++;
 #endif
     return p;
@@ -291,38 +387,31 @@ prc_free(prc_context *ctx, void *p)
 
 #if PRC_DEBUG_MEMORY
         {
-            size_t i;
-            int found = 0;
+            size_t latest_index = 0;
+            prc_debug_pointer_state state = prc_debug_get_latest_pointer_state(ctx, p, &latest_index);
 
-            /* Search newest-to-oldest so pointer reuse by the allocator does
-               not match an older freed record before the current live one. */
-            for (i = ctx->current_memory_index; i > 0; i--)
+            if (state == PRC_DEBUG_PTR_LIVE)
             {
-                size_t idx = i - 1;
-                if (ctx->debug_memory[idx].data != p)
-                    continue;
-
-                found = 1;
-                if (ctx->debug_memory[idx].is_free == 0)
-                {
-                    ctx->debug_memory[idx].is_free = 1;
-                }
-                else
-                {
-                    printf("*** DOUBLE-FREE DETECTED (PRC_DEBUG_MEMORY) ***\n");
-                    printf("    Pointer %p at debug index %zu already freed!\n", p, idx);
-#ifdef _WIN32
-                    __debugbreak();
-#else
-                    __builtin_trap();
-#endif
-                    return;
-                }
-
-                break;
+                ctx->debug_memory[latest_index].is_free = 1;
+                ctx->debug_memory[latest_index].free_callsite = prc_debug_current_callsite();
             }
-
-            if (!found)
+            else if (state == PRC_DEBUG_PTR_FREED)
+            {
+                printf("*** DOUBLE-FREE DETECTED (PRC_DEBUG_MEMORY) ***\n");
+                printf("    Pointer %p at latest debug index %zu already freed!\n", p, latest_index);
+                printf("    Latest entry alloc_callsite=%p free_callsite=%p this_free_callsite=%p\n",
+                    ctx->debug_memory[latest_index].alloc_callsite,
+                    ctx->debug_memory[latest_index].free_callsite,
+                    prc_debug_current_callsite());
+                prc_debug_dump_pointer_history(ctx, p, 12);
+#ifdef _WIN32
+                __debugbreak();
+#else
+                __builtin_trap();
+#endif
+                return;
+            }
+            else
             {
                 printf("*** FREE OF UNTRACKED POINTER (PRC_DEBUG_MEMORY) ***\n");
                 printf("    Pointer %p was not found in debug allocation table.\n", p);
@@ -422,16 +511,64 @@ prc_realloc(prc_context *ctx, void *p, size_t size)
 #endif
 
 #if PRC_DEBUG_MEMORY
-    if (q != NULL)
     {
-        size_t i;
-        for (i = 0; i < ctx->current_memory_index; i++)
+        size_t latest_index = 0;
+        prc_debug_pointer_state state = prc_debug_get_latest_pointer_state(ctx, p, &latest_index);
+        void *realloc_callsite = prc_debug_current_callsite();
+
+        if (state == PRC_DEBUG_PTR_FREED)
         {
-            if (ctx->debug_memory[i].data == p && ctx->debug_memory[i].is_free == 0)
+            printf("*** REALLOC OF FREED POINTER DETECTED (PRC_DEBUG_MEMORY) ***\n");
+            printf("    Pointer %p at latest debug index %zu is already freed.\n", p, latest_index);
+            printf("    Latest entry alloc_callsite=%p free_callsite=%p this_realloc_callsite=%p\n",
+                ctx->debug_memory[latest_index].alloc_callsite,
+                ctx->debug_memory[latest_index].free_callsite,
+                realloc_callsite);
+            prc_debug_dump_pointer_history(ctx, p, 12);
+#ifdef _WIN32
+            __debugbreak();
+#else
+            __builtin_trap();
+#endif
+            return NULL;
+        }
+
+        /* Treat realloc as: free old allocation event + new allocation event.
+           This preserves ordering semantics when allocator reuses old addresses. */
+        if (state == PRC_DEBUG_PTR_LIVE)
+        {
+            ctx->debug_memory[latest_index].is_free = 1;
+            ctx->debug_memory[latest_index].free_callsite = realloc_callsite;
+        }
+
+        if (ctx->current_memory_index >= ctx->debug_memory_size)
+        {
+            if (ctx->debug_memory_table_full_warned == 0)
             {
-                ctx->debug_memory[i].data = q;
-                break;
+                printf("*** PRC_DEBUG_MEMORY TABLE FULL ***\n");
+                printf("    Capacity reached: %zu entries\n", ctx->debug_memory_size);
+                printf("    Further allocations will continue UNTRACKED.\n");
+                ctx->debug_memory_table_full_warned = 1;
             }
+            ctx->debug_memory_untracked_alloc_count++;
+
+            /* Best-effort fallback when table is full: reuse old slot if available. */
+            if (state == PRC_DEBUG_PTR_LIVE)
+            {
+                ctx->debug_memory[latest_index].data = q;
+                ctx->debug_memory[latest_index].is_free = 0;
+                ctx->debug_memory[latest_index].alloc_callsite = realloc_callsite;
+                ctx->debug_memory[latest_index].free_callsite = NULL;
+            }
+        }
+        else
+        {
+            ctx->debug_memory[ctx->current_memory_index].data = q;
+            ctx->debug_memory[ctx->current_memory_index].index = ctx->current_memory_index;
+            ctx->debug_memory[ctx->current_memory_index].is_free = 0;
+            ctx->debug_memory[ctx->current_memory_index].alloc_callsite = realloc_callsite;
+            ctx->debug_memory[ctx->current_memory_index].free_callsite = NULL;
+            ctx->current_memory_index++;
         }
     }
 #endif
