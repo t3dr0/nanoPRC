@@ -422,7 +422,10 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
             /* Oddly there are files out that have polylines with no points */
             if (num_doubles > 0)
             {
-                /* We need to review this test as there appears to be a mixup of enumerated types */
+                /* Triangles we fill, polylines we do not. If we have three points for a polygon,
+                   then we treat this as a triangle that we fill.  If we have more than three points
+                   for a polygon, then we treat this as a line loop that we do not fill --
+                   we need to fix this and do a tessellation of that polygon. */
                 if (extra_data_type == PRC_POLYLINE_ENTITY ||
                     extra_data_type == PRC_POLYGON_ENTITY ||
                     extra_data_type == PRC_TRIANGLES_ENTITY)
@@ -454,15 +457,27 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
                     }
 
                     if (extra_data_type == PRC_POLYLINE_ENTITY)
+                        /* No filling */
                         data->decode_primitives[num_primitives].primitive_type = MARKUP_LINE_STRIP;
+                    else if (extra_data_type == PRC_TRIANGLES_ENTITY)
+                    {
+                        data->decode_primitives[num_primitives].primitive_type = MARKUP_TRIANGLE;
+                    }
                     else
                     {
-                        /* If we have three points for PRC_POLYGON_ENTITY, then treat this as a triangle that we fill.
-                           Also should be in this path for PRC_TRIANGLES_ENTITY */
+                        /* If we have three points for PRC_POLYGON_ENTITY,
+                           then treat this as a triangle that we fill. */
                         if (data->decode_primitives[num_primitives].number_indices == 3)
+                        {
                             data->decode_primitives[num_primitives].primitive_type = MARKUP_TRIANGLE;
+                        }
                         else
+                        {
+                            /* If we have more than three points for PRC_POLYGON_ENTITY,
+                               then treat this as a line loop that we do not fill --
+                               we need to fix this and do a tessellation of that polygon. */
                             data->decode_primitives[num_primitives].primitive_type = MARKUP_LINE_LOOP;
+                        }
                     }
 
                     data->decode_primitives[num_primitives].block_mode = mode_stack->mode;
