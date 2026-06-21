@@ -21,6 +21,52 @@
 
 static std::unordered_map<unsigned char *, Texture *> textureMap;
 
+/* Transform debug toggles for Product::update()
+   Set NANOPRC_DEBUG_UPDATE_TRANSFORM to 1 to enable logging.
+   Set NANOPRC_DEBUG_UPDATE_TRANSFORM_NAME to a substring filter (or "" for all). */
+#ifndef NANOPRC_DEBUG_UPDATE_TRANSFORM
+#define NANOPRC_DEBUG_UPDATE_TRANSFORM 0
+#endif
+
+#ifndef NANOPRC_DEBUG_UPDATE_TRANSFORM_NAME
+#define NANOPRC_DEBUG_UPDATE_TRANSFORM_NAME ""
+#endif
+
+static bool product_debug_transform_enabled()
+{
+    return NANOPRC_DEBUG_UPDATE_TRANSFORM != 0;
+}
+
+static bool product_debug_transform_matches_name(const char *name)
+{
+    const char *filter = NANOPRC_DEBUG_UPDATE_TRANSFORM_NAME;
+    if (filter == nullptr || filter[0] == '\0')
+    {
+        return true;
+    }
+    if (name == nullptr)
+    {
+        return false;
+    }
+
+    /* Substring match keeps filtering flexible for long hierarchical names. */
+    return strstr(name, filter) != nullptr;
+}
+
+static void product_debug_print_local_to_world(const char *name, const Matrix4 &mat)
+{
+    float m[16] = { 0.0f };
+    size_t copy_size = sizeof(m) < sizeof(Matrix4) ? sizeof(m) : sizeof(Matrix4);
+    memcpy(m, &mat, copy_size);
+
+    printf("[Product::update] name=%s local_to_world=",
+        name != nullptr ? name : "(null)");
+    printf("  [(%.2f %.2f %.2f %.2f)", m[0], m[1], m[2], m[3]);
+    printf("(%.2f %.2f %.2f %.2f)", m[4], m[5], m[6], m[7]);
+    printf("(%.2f %.2f %.2f %.2f)", m[8], m[9], m[10], m[11]);
+    printf("(%.2f %.2f %.2f %.2f)\n", m[12], m[13], m[14], m[15]);
+}
+
 static Texture *loadTexture(prc_api_texture *texture)
 {
     auto it = textureMap.find(texture->data);
@@ -163,6 +209,15 @@ void Product::update()
         if (_parent->_dirty)
             _parent->update();
         _local_to_world = _parent->_local_to_world * _model;
+
+#if NANOPRC_DEBUG_UPDATE_TRANSFORM
+        if (product_debug_transform_enabled() &&
+            product_debug_transform_matches_name(_name))
+        {
+            product_debug_print_local_to_world(_name, _local_to_world);
+        }
+#endif
+
     }
     else
         _local_to_world = _model;

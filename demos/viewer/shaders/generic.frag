@@ -361,6 +361,8 @@ void main()
 
         FragColor = vec4(clamp(color, 0.0, 1.0),
             clamp(VAlpha * uMaterial.alpha, 0.0, 1.0));
+
+                 
         return;
     }
 
@@ -388,7 +390,8 @@ void main()
         specularContrib, uMaterial.shininess);
 
     /* Final color.  Tint is ambient */
-    vec3 color = 0.1 * uMaterial.tint + ambientTerm + diffuseTerm * Color + specularTerm;
+    //vec3 color = 0.1 * uMaterial.tint + ambientTerm + diffuseTerm * Color + specularTerm;
+    vec3 color = ambientTerm + diffuseTerm * Color + specularTerm;
 
 	// TEMPORARY DEBUG - replace with this line:
    // color = gl_FrontFacing ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);

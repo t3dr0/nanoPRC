@@ -2580,7 +2580,8 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
         prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_add_style_data\n");
         return PRC_ERROR_MEMORY;
     }
-
+    /* Useful debug */
+#if 0
     if (product->base.base.name.name.string != NULL)
     {
         if (strncmp((const char *)product->base.base.name.name.string, "FDA-58600.iam", 13) == 0)
@@ -2588,7 +2589,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
             int debug = 1;
         }
     }
-
+#endif 
     /* There is a prototypes to this product. Continue to drill but concatenate
        any transform as we go. */
     if (product->has_transform)
@@ -2602,10 +2603,12 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
         prc_api_update_transform(ctx, &incoming_transform, &new_transform);
     }
 
-    if (product_refs->biased_index_prototype != 0)
+    if (product_refs->biased_index_prototype != 0 &&
+        product_refs->number_of_child_product_occurrences == 0)
     {
         /* IMPORTANT: pass product_style as the parent for the prototype recursion so
            prototype chain builds as a single-child lineage under this node. */
+
         prototype_product =
             &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
         prc_api_helper_update_parent_style(ctx, prototype_product, file_index,

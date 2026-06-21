@@ -56,7 +56,7 @@ prc_internal_api_calculate_normals_triangles(prc_context *ctx, uint32_t num_tria
     if (code < 0)
         return code;
 
-#if 1
+#if 0
     /* DEBUG. Print out all the vertex positions, normals and diffuse color */
     for (k = 0; k < uncompressed_data->vertex_out->num_vertices; k++)
     {
@@ -359,6 +359,24 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
                     &uncompressed_data->decoded_colors[decode_color_offset],
                     4 * sizeof(float));
                 position_normal_pair->prc_vertex_color_index = face_vertex_color_indices[indice_count];
+
+                /* To get pure color with how I currently have the generic.frag
+                   set up do the following */
+                vertex_out->vertices[new_api_idx].diffuse[0] = 1.0;
+                vertex_out->vertices[new_api_idx].diffuse[1] = 1.0;
+                vertex_out->vertices[new_api_idx].diffuse[2] = 1.0;
+
+                vertex_out->vertices[new_api_idx].emissive[0] = 0.0;
+                vertex_out->vertices[new_api_idx].emissive[1] = 0.0;
+                vertex_out->vertices[new_api_idx].emissive[2] = 0.0;
+
+                vertex_out->vertices[new_api_idx].tint[0] = 0.0;
+                vertex_out->vertices[new_api_idx].tint[1] = 0.0;
+                vertex_out->vertices[new_api_idx].tint[2] = 0.0;
+
+                vertex_out->vertices[new_api_idx].specular[0] = 0.0;
+                vertex_out->vertices[new_api_idx].specular[1] = 0.0;
+                vertex_out->vertices[new_api_idx].specular[2] = 0.0;
             }
             else
             {
