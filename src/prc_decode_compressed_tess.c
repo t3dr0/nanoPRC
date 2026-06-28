@@ -1022,7 +1022,7 @@ prc_compute_triangle_basis(prc_context *ctx, const prc_vec3 *vertices_out,
 static int
 prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     prc_vec3 *point_array_scaled, prc_vec3 *vertices_out,
-    treated_triangle *treated_tri, int *point_array_count, int *reference_array_count,
+    treated_triangle *treated_tri, uint32_t *point_array_count, int *reference_array_count,
     int *vertex_treatment_count, int *points_is_reference_index)
 {
     int code;
@@ -1927,7 +1927,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
     uint32_t *triangle_indices;
     int num_points = data->point_array_size / 3;
     prc_vec3 *normals_vertex;
-    int point_array_count = 0;
+    uint32_t point_array_count = 0;
     int reference_array_count = 0;
     treated_triangle treated_tri;
     int points_is_reference_index = 3;

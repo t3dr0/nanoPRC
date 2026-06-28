@@ -2308,7 +2308,7 @@ pdf_parse_decryption(prc_context *ctx, prc_pdf_head_xref *head_xref,
     }
 
     code = prc_pdf_dict_get_integer(ctx, encrypt_ptr, pdf_buff_end, "/P",
-        &decrypt_params->permissions, -1);
+        (int32_t*) &decrypt_params->permissions, -1);
     if (code < 0)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Failed to read permissions in PDF encryption dictionary\n");

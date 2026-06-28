@@ -370,7 +370,7 @@ prc_release_prc_pattern(prc_context *ctx, prc_graph_fill_pattern *data)
         }
         break;
 
-    case PRC_TYPE_GRAPH_FillPattern:
+    default:
         /* No additional data to free */
         break;
     }
@@ -1290,6 +1290,9 @@ prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data)
             }
             prc_free(ctx, data->hcg_composite_curve.curves);
         }
+        break;
+
+    default:
         break;
     }
 }

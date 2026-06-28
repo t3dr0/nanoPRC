@@ -722,8 +722,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         ptr = pdf_buff_in + xref_offset;
         num_in_array = 3;
         code = pdf_get_integer_array_prc(ctx, ptr, file_end, (uint8_t *)PDF_W_NAME,
-            PDF_W_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, byte_widths,
-            &num_in_array, 3);
+            PDF_W_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+            (int32_t*) byte_widths, &num_in_array, 3);
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to read byte widths in PDF file\n");
@@ -744,8 +744,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         ptr = pdf_buff_in + xref_offset;
         num_in_array = 0;
         code = pdf_get_integer_array_prc(ctx, ptr, file_end, (uint8_t *)PDF_INDEX_NAME,
-            PDF_INDEX_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, index,
-            &num_in_array, 256);
+            PDF_INDEX_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+            (int32_t *) index, &num_in_array, 256);
         if (code < 0)
         {
             /* This is an optional element. Set it based upon the PDF_SIZE_NAME */
@@ -793,8 +793,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         }
 
         /* Now we deal with the decoding of the cross-reference stream */
-        code = prc_pdf_xref_stream_parse(ctx, xref_head, index,
-            num_in_array / 2, byte_widths, buff_out_xref_decode, size_out_xref_decode,
+        code = prc_pdf_xref_stream_parse(ctx, xref_head, (int32_t*) index,
+            num_in_array / 2, (int32_t *)byte_widths, buff_out_xref_decode, size_out_xref_decode,
             &num_object_streams, &xref_head_offset);
         if (code < 0)
         {

@@ -38,7 +38,7 @@ prc_pdf_dict_get_start(prc_context *ctx, uint8_t *input_buffer,
             *dict_start = ptr + 2;
             return 0;
         }
-        if (strncmp(ptr, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
+        if (strncmp((const char*) ptr, (const char *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
         {
             return PRC_ERROR_PARSE;
         }
