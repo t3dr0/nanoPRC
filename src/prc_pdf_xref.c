@@ -107,7 +107,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
     ptr_start = ptr;
     while (ptr < xref_end)
     {
-        code = sscanf(ptr, "%d %d", &first_entry_subsection, &xref_num_objects);
+        code = sscanf((const char*) ptr, "%u %u", &first_entry_subsection, &xref_num_objects);
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to find number of objects in PDF file\n");
@@ -152,7 +152,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
     ptr = ptr_start;
     while (ptr < xref_end)
     {
-        code = sscanf(ptr, "%d %d", &first_entry_subsection, &xref_num_objects);
+        code = sscanf((const char*) ptr, "%u %u", &first_entry_subsection, &xref_num_objects);
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to find number of objects in PDF file\n");
@@ -181,7 +181,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
             {
                 break;
             }
-            code = sscanf(ptr, "%d %d", &object_byte_offset, &object_generation_num);
+            code = sscanf((const char*) ptr, "%u %u", &object_byte_offset, &object_generation_num);
             if (code != 2)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to read object byte offset in PDF file\n");
@@ -216,7 +216,7 @@ pdf_parse_xref_non_compressed(prc_context *ctx, uint8_t *pdf_buff_in,
             if (!xref_objects[k].is_free)
             {
                 temp_ptr = pdf_buff_in + object_byte_offset;
-                code = sscanf(temp_ptr, "%d %d", &ref_num, &gen_num);
+                code = sscanf((const char*) temp_ptr, "%u %u", &ref_num, &gen_num);
                 if (code != 2)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to read ref num gen num in PDF file\n");
@@ -622,8 +622,8 @@ pdf_count_xref_sections(prc_context *ctx, uint8_t *pdf_buff_in,
     uint8_t *ptr = pdf_buff_in + xref_offset;
     uint32_t current_num_xrefs = *num_xrefs;
 
-    code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_PREV_NAME,
-        PDF_PREV_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &prev_offset);
+    code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_PREV_NAME,
+        PDF_PREV_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &prev_offset);
     if (code < 0)
     {
         *xref_offsets = (uint32_t *)prc_calloc(ctx, current_num_xrefs, sizeof(uint32_t));
@@ -721,8 +721,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         /* Look for /W */
         ptr = pdf_buff_in + xref_offset;
         num_in_array = 3;
-        code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_W_NAME,
-            PDF_W_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, byte_widths,
+        code = pdf_get_integer_array_prc(ctx, ptr, file_end, (uint8_t *)PDF_W_NAME,
+            PDF_W_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, byte_widths,
             &num_in_array, 3);
         if (code < 0)
         {
@@ -732,8 +732,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
 
         /* Look for /Size */
         ptr = pdf_buff_in + xref_offset;
-        code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_SIZE_NAME,
-            PDF_SIZE_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &size);
+        code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_SIZE_NAME,
+            PDF_SIZE_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &size);
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Failed to read size in PDF file\n");
@@ -743,8 +743,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         /* Look for /Index */
         ptr = pdf_buff_in + xref_offset;
         num_in_array = 0;
-        code = pdf_get_integer_array_prc(ctx, ptr, file_end, PDF_INDEX_NAME,
-            PDF_INDEX_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, index,
+        code = pdf_get_integer_array_prc(ctx, ptr, file_end, (uint8_t *)PDF_INDEX_NAME,
+            PDF_INDEX_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, index,
             &num_in_array, 256);
         if (code < 0)
         {
@@ -815,8 +815,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         if (*streams_are_encrypted == 0)
         {
             ptr = pdf_buff_in + xref_offset;
-            code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
-                PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+            code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_ENCRYPT_NAME,
+                PDF_ENCRYPT_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
                 &encryption_obj_num);
             if (code >= 0)
             {
@@ -882,8 +882,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         if (*streams_are_encrypted == 0)
         {
             ptr = pdf_buff_in + xref_offset;
-            code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_ENCRYPT_NAME,
-                PDF_ENCRYPT_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+            code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_ENCRYPT_NAME,
+                PDF_ENCRYPT_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
                 &encryption_obj_num);
             if (code >= 0)
             {

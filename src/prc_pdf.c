@@ -2162,7 +2162,7 @@ pdf_check_for_dict_int_entry(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundar
     int code;
     int ret_count;
 
-    if (strncmp((const char *)ptr, tag_name, tag_name_len) == 0)
+    if (strncmp((const char *)ptr, (const char *)tag_name, tag_name_len) == 0)
     {
         ptr += tag_name_len;
         code = pdf_eat_white_space(ctx, &ptr, boundary);
@@ -2691,8 +2691,8 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         /* Hybrid-reference PDFs can store supplemental xref info in /XRefStm.
            Parse that stream too when present and not already in our xref list. */
         ptr = pdf_buff_in + xref_offsets[k];
-        code = pdf_get_integer_prc(ctx, ptr, file_end, PDF_XREFSTM_NAME,
-            PDF_XREFSTM_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
+        code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t*)PDF_XREFSTM_NAME,
+            PDF_XREFSTM_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN,
             &xref_stm_offset);
         if (code >= 0 && xref_stm_offset > 0 && xref_stm_offset < size_in)
         {

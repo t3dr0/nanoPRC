@@ -1968,7 +1968,7 @@ pdf_revision6_hash(prc_context *ctx, CRYPT_sha2_context *sha, uint8_t *pkey,
 
     /* Revision 6 hash of the key */
     CRYPT_SHA256Start(ctx, sha);
-    code = CRYPT_SHA256Update(ctx, sha, decrypt_params->password, decrypt_params->password_length);
+    code = CRYPT_SHA256Update(ctx, sha, (uint8_t*)decrypt_params->password, decrypt_params->password_length);
     if (code < 0)
     {
         prc_error(ctx, PRC_ERROR_PDF, "Failed to hash password\n");
@@ -2555,7 +2555,8 @@ pdf_parse_decryption(prc_context *ctx, prc_pdf_head_xref *head_xref,
         else
         {
             CRYPT_SHA256Start(ctx, &sha);
-            code = CRYPT_SHA256Update(ctx, &sha, decrypt_params->password, decrypt_params->password_length);
+            code = CRYPT_SHA256Update(ctx, &sha, (uint8_t*)decrypt_params->password,
+                                      decrypt_params->password_length);
             if (code < 0)
             {
                 prc_error(ctx, PRC_ERROR_PDF, "Failed to hash password\n");
@@ -2746,7 +2747,8 @@ pdf_parse_decryption(prc_context *ctx, prc_pdf_head_xref *head_xref,
     else
     {
         CRYPT_SHA256Start(ctx, &sha);
-        code = CRYPT_SHA256Update(ctx, &sha, decrypt_params->password, decrypt_params->password_length);
+        code = CRYPT_SHA256Update(ctx, &sha, (uint8_t*)decrypt_params->password,
+                                  decrypt_params->password_length);
         if (code < 0)
         {
             prc_error(ctx, PRC_ERROR_PDF, "Failed to hash password\n");

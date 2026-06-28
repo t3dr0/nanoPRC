@@ -39,6 +39,8 @@ prc_internal_api_face_has_vertex_colors(prc_context *ctx,
     /* Check if the face has vertex colors */
     if (uncompressed_data->tess->tess_3d->face_tessellation_data[face_number].has_vertex_colors)
         return true;
+
+    return false;
 }
 
 /* After we have extracted the vertices from the uncompressed encoding list, we can

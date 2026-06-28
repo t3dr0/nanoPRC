@@ -1367,7 +1367,9 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
             {
                 prc_api_markup *markup = &pmi_3d_node->markup[k];
 
-                markup->name = (char *)prc_calloc(ctx, strlen(prc_product_parent->markups.markups[k].base.base.name.name.string) + 1, sizeof(char));
+                markup->name = (char *)prc_calloc(ctx,
+                    strlen((const char*) prc_product_parent->markups.markups[k].base.base.name.name.string) + 1,
+                    sizeof(char));
                 if (markup->name == NULL)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");

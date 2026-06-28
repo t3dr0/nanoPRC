@@ -235,13 +235,13 @@ prc_parse_model_file(prc_context *ctx, prc_filestructure *file_struct,
     if (data->base.name.name.null_flag == 1)
     {
         data->base.name.name.null_flag = 0;
-        data->base.name.name.string = (char *)prc_malloc(ctx, 6);
+        data->base.name.name.string = (unsigned char *)prc_malloc(ctx, 6);
         if (data->base.name.name.string == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_model_file\n");
             return PRC_ERROR_MEMORY;
         }
-        strcpy(data->base.name.name.string, "model");
+        strcpy((char*) data->base.name.name.string, "model");
         data->base.name.same = 0;
         data->base.name.name.size = 6;
     }

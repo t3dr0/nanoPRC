@@ -729,7 +729,7 @@ pdf_get_decode_params(prc_context *ctx, uint8_t *pdf_buff_in, uint8_t *file_end,
     while (ptr < file_end && strncmp((char *)ptr, ">>", 2) != 0)
     {
         code = pdf_check_for_dict_int_entry(ctx, ptr, file_end,
-            PDF_PREDICTOR_NAME, PDF_PREDICTOR_NAME_LEN, &decode_params->predictor);
+            (uint8_t*)PDF_PREDICTOR_NAME, PDF_PREDICTOR_NAME_LEN, &decode_params->predictor);
         if (code > 0)
         {
             ptr += code;
@@ -740,7 +740,7 @@ pdf_get_decode_params(prc_context *ctx, uint8_t *pdf_buff_in, uint8_t *file_end,
         }
 
         code = pdf_check_for_dict_int_entry(ctx, ptr, file_end,
-            PDF_COLORS_NAME, PDF_COLORS_NAME_LEN, &decode_params->colors);
+            (uint8_t *)PDF_COLORS_NAME, PDF_COLORS_NAME_LEN, &decode_params->colors);
         if (code > 0)
         {
             ptr += code;
@@ -751,7 +751,7 @@ pdf_get_decode_params(prc_context *ctx, uint8_t *pdf_buff_in, uint8_t *file_end,
         }
 
         code = pdf_check_for_dict_int_entry(ctx, ptr, file_end,
-            PDF_BITS_PER_COMPONENT_NAME, PDF_BITS_PER_COMPONENT_NAME_LEN,
+            (uint8_t *)PDF_BITS_PER_COMPONENT_NAME, PDF_BITS_PER_COMPONENT_NAME_LEN,
             &decode_params->bits_per_component);
         if (code > 0)
         {
@@ -763,7 +763,7 @@ pdf_get_decode_params(prc_context *ctx, uint8_t *pdf_buff_in, uint8_t *file_end,
         }
 
         code = pdf_check_for_dict_int_entry(ctx, ptr, file_end,
-            PDF_COLUMNS_NAME, PDF_COLUMNS_NAME_LEN, &decode_params->columns);
+            (uint8_t *)PDF_COLUMNS_NAME, PDF_COLUMNS_NAME_LEN, &decode_params->columns);
         if (code > 0)
         {
             ptr += code;
@@ -774,7 +774,7 @@ pdf_get_decode_params(prc_context *ctx, uint8_t *pdf_buff_in, uint8_t *file_end,
         }
 
         code = pdf_check_for_dict_int_entry(ctx, ptr, file_end,
-            PDF_EARLY_CHANGE_NAME, PDF_EARLY_CHANGE_NAME_LEN,
+            (uint8_t *)PDF_EARLY_CHANGE_NAME, PDF_EARLY_CHANGE_NAME_LEN,
             &decode_params->early_change);
         if (code > 0)
         {
