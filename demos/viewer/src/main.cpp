@@ -51,6 +51,8 @@ static constexpr float kShiftMultiplier = 300.0f;
 static constexpr float kTurnSpeed = 90.0f;
 static constexpr float kMouseSensitivity = 15.0f;
 
+static GLuint g_default_vao = 0;
+
 static const DirLight kDirLight = {
     Vector3(-0.174078, -0.69311, 0.696311), // direction
     colorRGB(255, 255, 224),                // color
@@ -143,6 +145,9 @@ static void initSDL()
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#ifdef __APPLE__
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+#endif
 }
 
 static SDL_Window *createWindow(Config &config)
@@ -194,6 +199,10 @@ static SDL_GLContext createGLContext(Config &config, SDL_Window *window)
         printf("gladLoadGLLoader failed\n");
         exit(1);
     }
+
+    /* macOS core profile requires a non-zero VAO bound before draw calls. */
+    glGenVertexArrays(1, &g_default_vao);
+    glBindVertexArray(g_default_vao);
 
     return gl;
 }
@@ -272,6 +281,12 @@ int main(int argc, char *argv[])
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+
+    if (g_default_vao)
+    {
+        glDeleteVertexArrays(1, &g_default_vao);
+        g_default_vao = 0;
+    }
 
     SDL_GL_DestroyContext(gl);
     SDL_DestroyWindow(window);
@@ -453,6 +468,9 @@ compute_rotation2(float x1, float y1, float z1, float x2, float y2, float z2)
 
 static void run(Config &config, SDL_Window *window, const char *file, bool headless, const char *outputFile, bool memoryLeakCheck)
 {
+    if (g_default_vao != 0)
+        glBindVertexArray(g_default_vao);
+
     _camera.setPosition(Vector3(24, 8, -1));
     _camera.setPitch(0);
     _camera.setYaw(90);
@@ -626,6 +644,9 @@ static void run(Config &config, SDL_Window *window, const char *file, bool headl
 
     for (;;)
     {
+        if (g_default_vao != 0)
+            glBindVertexArray(g_default_vao);
+
         /* Make a translation matrix to and from the product Center point. This
            is defined by the current camera to world matrix and the Z distance
            defined in the PDF file. The arcball will rotate around this */

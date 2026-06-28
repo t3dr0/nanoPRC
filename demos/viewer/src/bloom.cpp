@@ -95,6 +95,12 @@ void Bloom::resize(int width, int height)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        if (glGetError() != GL_NO_ERROR)
+        {
+            /* Fallback for stricter drivers (notably some macOS stacks). */
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, size.x, size.y, 0, GL_RGBA, GL_FLOAT, NULL);
+        }
     }
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _stages[0].texture, 0);
@@ -127,10 +133,10 @@ Bloom::~Bloom()
 {
     unload();
 
-    if (!_upsampleShader)
+    if (_upsampleShader)
         delete _upsampleShader;
 
-    if (!_downsampleShader)
+    if (_downsampleShader)
         delete _downsampleShader;
 }
 

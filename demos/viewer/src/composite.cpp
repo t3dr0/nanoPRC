@@ -96,6 +96,11 @@ void Compositor::resize(int width, int height)
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _texture, 0);
 
+    {
+        const GLenum attachments[1] = {GL_COLOR_ATTACHMENT0};
+        glDrawBuffers(1, attachments);
+    }
+
     glGenRenderbuffers(1, &_rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, _rbo);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
@@ -103,8 +108,16 @@ void Compositor::resize(int width, int height)
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     {
-        printf("Compositor::resize: Framebuffer is not complete\n");
-        exit(1);
+        /* Fallback for stricter drivers (notably some macOS stacks). */
+        glBindTexture(GL_TEXTURE_2D, _texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, _texture, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+            printf("Compositor::resize: Framebuffer is not complete\n");
+            exit(1);
+        }
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

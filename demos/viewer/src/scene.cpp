@@ -228,6 +228,37 @@ void Scene::render(Camera *camera)
     glDepthFunc(GL_LESS);
     glDisable(GL_CULL_FACE);
 
+#ifdef __APPLE__
+    /* Fallback path for stricter macOS drivers: render directly to default FBO. */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, _width, _height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+
+    if (_wireframe)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    else
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    if (_backfaceCull)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+
+    renderModels(camera);
+
+    glDisable(GL_CULL_FACE);
+
+    if (!_wireframe)
+    {
+        glDepthFunc(GL_LEQUAL);
+        renderSkybox(camera);
+    }
+
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    return;
+#endif
+
     /* Shadow mapping */
     if (!_wireframe && _shadowMap)
     {
@@ -958,6 +989,7 @@ void Scene::resize(int width, int height, float renderScale, int shadowResolutio
 Scene::Scene() : _products(nullptr), _nproducts(0),
                  _meshShader(nullptr),
                  _skybox(nullptr), _skyboxShader(nullptr),
+                 _wireframe(false),
                  _groundPlane(nullptr),
                  _groundHeight(-10.0f), _groundSize(Vector2(100.0f, 100.0f)), _enableGround(false),
                  _shadowShader(nullptr), _shadowMap(nullptr),
