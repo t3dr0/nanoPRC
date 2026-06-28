@@ -700,8 +700,8 @@ pdf_parse_xref(prc_context *ctx, uint8_t *pdf_buff_in,uint32_t size_in,
         /* Check if there are DecodeParams */
         ptr = pdf_buff_in + xref_offset;
         xref_predictor_offset = pdf_search_for_tag(ctx, ptr, file_end,
-            PDF_DECODE_PARMS_NAME, PDF_DECODE_PARMS_NAME_LEN, PDF_STREAM_NAME,
-            PDF_STREAM_NAME_LEN, &xref_predictor_present);
+            (uint8_t *) PDF_DECODE_PARMS_NAME, PDF_DECODE_PARMS_NAME_LEN,
+            (uint8_t *) PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &xref_predictor_present);
 
         if (xref_predictor_present)
         {

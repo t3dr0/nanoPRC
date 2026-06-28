@@ -18,12 +18,8 @@
 #define PRC_API_INTERNAL_H
 
 #include <stdint.h>
+#include "prc_fwd.h"
 #include "prc_api.h"
-
-/* Forward declarations to break circular include with prc_data.h.
-   prc_internal_api only needs pointers to these types here. */
-typedef struct prc_base_with_graphics_s prc_base_with_graphics;
-typedef struct prc_misc_entity_reference_s prc_misc_entity_reference;
 
 typedef struct prc_internal_api_vertex_s
 {
@@ -228,8 +224,6 @@ typedef enum {
     PRC_INTERNAL_API_MULTINORM_TEXTURE,
     PRC_INTERNAL_API_MAX
 } prc_internal_api_entity_t;
-
-typedef struct prc_api_object_style_s prc_api_object_style;
 
 typedef struct prc_api_child_reserve_s
 {

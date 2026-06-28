@@ -3626,8 +3626,8 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         uint32_t num_triangles = tess->triangle_face_array_size;
         prc_internal_api_color_state_t initial_color_state;
         prc_internal_api_style_state_t initial_style_state;
-        int *prc_vertex_indices = tess->triangle_indices_prc_compressed_3d;
-        int *prc_normal_indices = tess->normal_indices_prc_compressed_3d;
+        uint32_t *prc_vertex_indices = tess->triangle_indices_prc_compressed_3d;
+        uint32_t *prc_normal_indices = tess->normal_indices_prc_compressed_3d;
         int num_prc_vertices = tess->num_vertices_prc_compressed_3d;
         int num_prc_normals = tess->num_normals_prc_compressed_3d;
         prc_internal_api_position_normal_pair *position_normal_pair, *current;
@@ -3639,8 +3639,8 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         uint32_t vertex_index;
         uint32_t triangle_count = 0;
         uint32_t face_ref_index;
-        int prc_position_index;
-        int prc_normal_index;
+        uint32_t prc_position_index;
+        uint32_t prc_normal_index;
         uint8_t all_tess_has_single_style = false;
         int32_t face_style_file_index;
 
@@ -4232,10 +4232,10 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         for (k = 0; k < num_prc_indices; k++)
         {
             /* Get the position index in the PRC data */
-            int prc_position_index = prc_vertex_indices[k];
+            uint32_t prc_position_index = prc_vertex_indices[k];
 
             /* Get the normal index in the PRC data */
-            int prc_normal_index = prc_normal_indices[k];
+            uint32_t prc_normal_index = prc_normal_indices[k];
 
             /* Find the position in the position_normal_pair list */
             current = &position_normal_pair[prc_position_index];
@@ -4439,7 +4439,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 prc_tess_3d_wire_element *wire_elements = &tess->wire_elements[k];
                 uint32_t num_indices = wire_elements->number_of_wire_indexes;
 
-                if (wire_elements->is_connected == PRC_3DWIRETESSDATA_IsClosing)
+                if (wire_elements->is_connected & PRC_3DWIRETESSDATA_IsClosing)
                 {
                     wire[wire_count].num_indices = num_indices;
                     wire[wire_count].vertex_indices = (uint32_t *)prc_calloc(ctx,
@@ -4456,7 +4456,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                     /* Set the type */
                     wire[wire_count].type = PRC_API_LINE_LOOP;
                 }
-                else if (wire_elements->is_connected == PRC_3DWIRETESSDATA_IsContinuous)
+                else if (wire_elements->is_connected & PRC_3DWIRETESSDATA_IsContinuous)
                 {
                     /* In addition to the current line, we need to add an additional
                        one to connect the to the previous line */

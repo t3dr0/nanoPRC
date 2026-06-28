@@ -8,6 +8,9 @@ nanoPRC is licensed under the GNU Affero General Public License v3.0.
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and license summaries.
 See https://nanoprc.org for more details.
 
+## Commercial Licensing
+For commercial integrations, closed-source desktop software, or embedded enterprise platform applications where AGPLv3 compliance is not viable, a proprietary B2B OEM Commercial License program is available. Please contact sales@cascadiavoxel.com for custom licensing terms and architecture verification bundles.
+
 ## Contributing
 
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)

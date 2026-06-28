@@ -184,7 +184,7 @@ pdf_search_for_tag(prc_context *ctx, uint8_t *ptr, uint8_t *boundary,
     {
         /* The immediate character after the string we are searching for can not be
            another letter character */
-        if (strncmp((char *)ptr, (char *)tag_name, tag_name_len) == 0 &&
+        if (strncmp((const char *)ptr, (const char *)tag_name, tag_name_len) == 0 &&
             !((ptr + tag_name_len < boundary) &&
             (((* (ptr + tag_name_len) >= 'a') && (* (ptr + tag_name_len) <= 'z')) ||
              ((* (ptr + tag_name_len) >= 'A') && (* (ptr + tag_name_len) <= 'Z')))))
@@ -194,7 +194,7 @@ pdf_search_for_tag(prc_context *ctx, uint8_t *ptr, uint8_t *boundary,
         }
         if (bound_tag_name_len != 0)
         {
-            if (strncmp((char *)ptr, (char *)bound_tag_name, bound_tag_name_len) == 0)
+            if (strncmp((const char *)ptr, (const char *)bound_tag_name, bound_tag_name_len) == 0)
             {
                 return 0;
             }
@@ -215,7 +215,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
     int code;
 
     /* Read the obj_num and gen_num */
-    code = sscanf((const char *)ptr, "%d %d obj", obj_num, gen_num);
+    code = sscanf((const char *)ptr, "%u %u obj", obj_num, gen_num);
     if (code != 2)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not read object number and generation number in PDF object\n");
@@ -224,7 +224,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
 
     while (ptr < boundary)
     {
-        if (strncmp((char *)ptr, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN) == 0)
         {
             /* Get to the next line */
             ptr += PDF_STREAM_NAME_LEN;
@@ -238,7 +238,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
         }
 
         /* If we run into endobj that is an error */
-        if (strncmp((char *)ptr, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
         {
             //prc_error(ctx, PRC_ERROR_PARSE, "Did not find stream in PDF object\n");
             return PRC_ERROR_PARSE;
@@ -257,7 +257,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
     ptr = ptr_in;
     while (ptr < boundary)
     {
-        if (strncmp((char *)ptr, PDF_LENGTH_NAME, PDF_LENGTH_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_LENGTH_NAME, PDF_LENGTH_NAME_LEN) == 0)
         {
             ptr += PDF_LENGTH_NAME_LEN;
             code = pdf_eat_white_space(ctx, &ptr, boundary);
@@ -266,7 +266,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
                 return code;
             }
             /* Read the stream length */
-            code = sscanf(ptr, "%d", stream_length);
+            code = sscanf((const char*) ptr, "%u", stream_length);
             if (code != 1)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read stream length in PDF object\n");
@@ -276,7 +276,7 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
         }
 
         /* If we hit stream then that is an error */
-        if (strncmp((char *)ptr, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN) == 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not find Length in PDF object\n");
             return PRC_ERROR_PARSE;
@@ -298,10 +298,10 @@ pdf_get_ptr_to_obj(prc_context *ctx, uint32_t object_num_in, uint8_t *ptr_in,
 
     while (ptr < boundary)
     {
-        if (strncmp((char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
         {
             /* Make sure we are not at an endobj */
-            if (strncmp((char *)(ptr - 3), PDF_ENDOBJ_NAME,
+            if (strncmp((const char *)(ptr - 3), PDF_ENDOBJ_NAME,
                 PDF_ENDOBJ_NAME_LEN) == 0)
             {
                 ptr += 3;
@@ -319,7 +319,7 @@ pdf_get_ptr_to_obj(prc_context *ctx, uint32_t object_num_in, uint8_t *ptr_in,
                 return code;
             }
             /* Read the object number */
-            code = sscanf(ptr, "%d", &object_num);
+            code = sscanf((const char*) ptr, "%u", &object_num);
             if (code != 1)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read object number in PDF file\n");
@@ -365,7 +365,7 @@ pdf_get_stream_data(prc_context *ctx, uint8_t *ptr_in_obj, uint8_t *boundary,
     /* See if we need to deflate */
     code = prc_pdf_dict_get_type(ctx, ptr, boundary,
         PDF_FILTER_NAME, keyout, PDF_FLATEDECODE_NAME_LEN, &actual_keyout_len);
-    if (code > 0 && strncmp(keyout, PDF_FLATEDECODE_NAME, actual_keyout_len) == 0)
+    if (code > 0 && strncmp((const char*) keyout, PDF_FLATEDECODE_NAME, actual_keyout_len) == 0)
     {
         must_deflate = 1;
     }
@@ -627,7 +627,7 @@ prc_pdf_get_hexstring(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     /* Now we may need to decrypt this */
     if (is_encrypted)
     {
-        code = pdf_decrypt_string(ctx, name, num_to_allocate, decrypt_params,
+        code = pdf_decrypt_string(ctx, (uint8_t*) name, num_to_allocate, decrypt_params,
             obj_num, gen_num, &name_decrypted, &decypted_size);
         if (code < 0)
         {
@@ -681,8 +681,8 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     uint8_t *str_start;
     uint8_t found;
 
-    code = pdf_search_for_tag(ctx, ptr_temp, boundary, PDF_C2W_NAME, PDF_C2W_NAME_LEN,
-                              PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
+    code = pdf_search_for_tag(ctx, ptr_temp, boundary, (uint8_t*) PDF_C2W_NAME, PDF_C2W_NAME_LEN,
+                             (uint8_t *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
     if (found)
     {
         ptr_temp += code;
@@ -693,14 +693,14 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         {
             return code;
         }
-        if (strncmp((char *)ptr_temp, "[", 1) != 0)
+        if (strncmp((const char *)ptr_temp, "[", 1) != 0)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read [ in PDF file\n");
             return PRC_ERROR_PARSE;
         }
         ptr_temp++;
         /* Now read the 12 matrix entries */
-        code = sscanf((char *)ptr_temp, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
+        code = sscanf((const char *)ptr_temp, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
             &view->matrix[0], &view->matrix[1], &view->matrix[2], &view->matrix[3],
             &view->matrix[4], &view->matrix[5], &view->matrix[6], &view->matrix[7],
             &view->matrix[8], &view->matrix[9], &view->matrix[10], &view->matrix[11]);
@@ -716,8 +716,8 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         return code;
     }
     ptr_temp = ptr_in;
-    code = pdf_search_for_tag(ctx, ptr_temp, boundary, PDF_CO_NAME, PDF_CO_NAME_LEN,
-                              PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
+    code = pdf_search_for_tag(ctx, ptr_temp, boundary, (uint8_t *) PDF_CO_NAME, PDF_CO_NAME_LEN,
+                              (uint8_t *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
     if (found)
     {
         /* Read in a single double value */
@@ -728,7 +728,7 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         {
             return code;
         }
-        code = sscanf((char *)ptr_temp, "%lf", &view->center_orbit_z);
+        code = sscanf((const char *)ptr_temp, "%lf", &view->center_orbit_z);
         if (code != 1)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read center orbit in PDF file\n");
@@ -743,8 +743,8 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
 
 #if 0
     ptr_temp = ptr_in;
-    code = pdf_search_for_tag(ctx, ptr_temp, boundary, PDF_IN_NAME, PDF_IN_NAME_LEN,
-                              PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
+    code = pdf_search_for_tag(ctx, ptr_temp, boundary, (uint8_t *) PDF_IN_NAME, PDF_IN_NAME_LEN,
+                              (uint8_t *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
     if (found)
     {
         /* Read in a string that is bracketed by parenthesis ( ) or < > */
@@ -757,13 +757,13 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         }
 
         /* We can have a literal string or a hexadecimal encoded string */
-        if (!(strncmp((char *)ptr_temp, "(", 1) == 0 || strncmp((char *)ptr_temp, "<", 1) == 0))
+        if (!(strncmp((const char *)ptr_temp, "(", 1) == 0 || strncmp((const char *)ptr_temp, "<", 1) == 0))
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read ( or < in PDF file\n");
             return PRC_ERROR_PARSE;
         }
 
-        if (strncmp((char *)ptr_temp, "(", 1) == 0)
+        if (strncmp((const char *)ptr_temp, "(", 1) == 0)
         {
             ptr_temp++;
             str_start = ptr_temp;
@@ -792,8 +792,8 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     } /* That was optional content. No need to throw an error if it was not found */
 #endif
     ptr_temp = ptr_in;
-    code = pdf_search_for_tag(ctx, ptr_temp, boundary, PDF_XN_NAME, PDF_XN_NAME_LEN,
-        PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
+    code = pdf_search_for_tag(ctx, ptr_temp, boundary, (uint8_t *) PDF_XN_NAME, PDF_XN_NAME_LEN,
+                              (uint8_t *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found);
     if (found)
     {
         ptr_temp += code;
@@ -806,13 +806,14 @@ pdf_parse_view_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
         }
 
         /* We can have a literal string or a hexadecimal encoded string */
-        if (!(strncmp((char *)ptr_temp, "(", 1) == 0 || strncmp((char *)ptr_temp, "<", 1) == 0))
+        if (!(strncmp((const char *)ptr_temp, "(", 1) == 0 ||
+              strncmp((const char *)ptr_temp, "<", 1) == 0))
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read ( or < in PDF file\n");
             return PRC_ERROR_PARSE;
         }
 
-        if (strncmp((char *)ptr_temp, "(", 1) == 0)
+        if (strncmp((const char *)ptr_temp, "(", 1) == 0)
         {
             ptr_temp++;
             str_start = ptr_temp;
@@ -872,7 +873,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *boundary,
     *num_entries = 0;
     while (ptr < boundary && *ptr != ']')
     {
-        if (strncmp((char *)ptr, "R", 1) == 0)
+        if (strncmp((const char *)ptr, "R", 1) == 0)
         {
             (*num_entries)++;
         }
@@ -907,7 +908,7 @@ pdf_parse_array_prc(prc_context *ctx, uint8_t *boundary,
     ptr = ptr_in + 1;
     while (ptr < boundary && *ptr != ']')
     {
-        code = sscanf((char *)ptr, "%d %d", &val1, &val2);
+        code = sscanf((const char *)ptr, "%u %u", &val1, &val2);
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read entry in PDF file\n");
@@ -987,7 +988,7 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
     /* Read until we get /VA */
     while (ptr < pdf_buff_in + size_in)
     {
-        if (strncmp((char *)ptr, PDF_VA_NAME, PDF_VA_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_VA_NAME, PDF_VA_NAME_LEN) == 0)
         {
             ptr += PDF_VA_NAME_LEN;
             code = pdf_eat_white_space(ctx, &ptr, pdf_buff_in + size_in);
@@ -1005,7 +1006,7 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
             else
             {
                 /* We have an object reference */
-                code = sscanf((char *)ptr, "%d %d", &object_ref_num, &object_generation_num);
+                code = sscanf((const char *)ptr, "%u %u", &object_ref_num, &object_generation_num);
                 if (code != 2)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Did not read object in PDF file\n");
@@ -1070,8 +1071,8 @@ pdf_get_view_array_prc(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
             /* Get past PDF_OBJECT_NAME */
 
             offset = pdf_search_for_tag(ctx, ptr_temp, ptr_temp + size_out,
-                PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN, PDF_ENDOBJ_NAME,
-                PDF_ENDOBJ_NAME_LEN, &found_object);
+                (uint8_t *) PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN,
+                (uint8_t *) PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN, &found_object);
             if (!found_object)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not find object in PDF file\n");
@@ -1290,7 +1291,7 @@ pdf_try_extract_from_embedded_pdfs(prc_context *ctx, uint8_t *pdf_buff_in,
 
         code = prc_pdf_dict_get_type(ctx, filespec_ptr, file_end,
             PDF_TYPE_NAME, keyout, PDF_MAX_DICT_VALUE, &actual_keyout_len);
-        if (code <= 0 || strncmp((char *)keyout, "/Filespec", actual_keyout_len) != 0)
+        if (code <= 0 || strncmp((const char *)keyout, "/Filespec", actual_keyout_len) != 0)
         {
             continue;
         }
@@ -1628,7 +1629,7 @@ prc_pdf_name_tree_find_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *ptr_end,
             has_prc_extension = pdf_name_has_prc_extension(str_start, str_end);
 
             ptr_in = str_end + 1;
-            code = sscanf((char *)ptr_in, "%u %u R", &filespec_obj_num, &filespec_gen_num);
+            code = sscanf((const char *)ptr_in, "%u %u R", &filespec_obj_num, &filespec_gen_num);
             if (code == 2 && filespec_obj_num != 0)
             {
                 if (first_obj_num == 0)
@@ -1726,7 +1727,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     while (ptr < pdf_buff_in + size_in)
     {
         /* Read until we get past obj */
-        if (strncmp((char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
         {
             found_obj = 1;
             break;
@@ -1761,7 +1762,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
             return code;
         }
         /* Is it a dictionary */
-        if (strncmp((char *)ptr, "<<", 2) != 0)
+        if (strncmp((const char *)ptr, "<<", 2) != 0)
         {
             return 0;
         }
@@ -1774,7 +1775,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     {
         return code;
     }
-    if (strncmp((char *)keyout, PDF_TYPE_ANNOT, actual_keyout_len) != 0)
+    if (strncmp((const char *)keyout, PDF_TYPE_ANNOT, actual_keyout_len) != 0)
     {
         return 0;
     }
@@ -1786,7 +1787,7 @@ pdf_object_is_rich_media(prc_context *ctx, prc_pdf_decrypt_params *decrypt_param
     {
         return code;
     }
-    if (strncmp((char *)keyout, PDF_RICHMEDIA_NAME, actual_keyout_len) != 0)
+    if (strncmp((const char *)keyout, PDF_RICHMEDIA_NAME, actual_keyout_len) != 0)
     {
         return 0;
     }
@@ -1923,7 +1924,7 @@ pdf_object_is_prc(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     code = prc_pdf_dict_get_type(ctx, ptr, pdf_buff_in + size_in,
         PDF_SUBTYPE_NAME, keyout, PDF_PRC_NAME_LEN, &actual_keyout_len);
 
-    if (code > 0 && strncmp(keyout, PDF_PRC_NAME, actual_keyout_len) == 0)
+    if (code > 0 && strncmp((const char*) keyout, PDF_PRC_NAME, actual_keyout_len) == 0)
     {
         return 1;
     }
@@ -1973,7 +1974,7 @@ pdf_find_prc_stream_by_used_stream_scan(prc_context *ctx, uint8_t *pdf_buff_in,
         }
 
         if (stream_length >= PDF_PRC_STREAM_HEADER_LEN &&
-            strncmp((char *)ptr_stream, PDF_PRC_STREAM_HEADER,
+            strncmp((const char *)ptr_stream, PDF_PRC_STREAM_HEADER,
                 PDF_PRC_STREAM_HEADER_LEN) == 0)
         {
             *prc_offset = head_xref->xref_objects[j].byte_offset;
@@ -2027,7 +2028,7 @@ pdf_find_prc_stream_by_used_stream_scan(prc_context *ctx, uint8_t *pdf_buff_in,
         if (decoded_stream != NULL)
         {
             if (decoded_size >= PDF_PRC_STREAM_HEADER_LEN &&
-                strncmp((char *)decoded_stream, PDF_PRC_STREAM_HEADER,
+                strncmp((const char *)decoded_stream, PDF_PRC_STREAM_HEADER,
                     PDF_PRC_STREAM_HEADER_LEN) == 0)
             {
                 prc_free(ctx, decoded_stream);
@@ -2053,11 +2054,11 @@ pdf_search_xref_subsection(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size
     /* Now we have to step through the objects in the xref table */
     for (k = 0; k < num_objects; k++)
     {
-        if (strncmp((char *)ptr, PDF_TRAILER_NAME, PDF_TRAILER_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr, PDF_TRAILER_NAME, PDF_TRAILER_NAME_LEN) == 0)
         {
             break;
         }
-        code = sscanf(*ptr, "%d %d", &object_byte_offset, &object_generation_num);
+        code = sscanf((const char*) *ptr, "%u %u", &object_byte_offset, &object_generation_num);
         if (code != 2)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read object byte offset in PDF file\n");
@@ -2084,11 +2085,11 @@ pdf_get_tag_value_int(prc_context *ctx, uint8_t *ptr, uint8_t *boundary,
 
     while (ptr < boundary)
     {
-        if (strncmp((char *)ptr, (char *)tag_name, tag_name_len) == 0)
+        if (strncmp((const char *)ptr, (const char *)tag_name, tag_name_len) == 0)
         {
             ptr += tag_name_len;
             pdf_eat_white_space(ctx, &ptr, boundary);
-            code = sscanf(ptr, "%d", tag_value);
+            code = sscanf((const char*) ptr, "%u", tag_value);
             if (code != 1)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read tag value in PDF file\n");
@@ -2138,7 +2139,7 @@ pdf_get_view(prc_context *ctx, prc_pdf_3dview *view, uint32_t view_ref_num,
 
         /* Make sure the Type is a 3DView */
         code = pdf_search_for_tag(ctx, pdf_buff_in + byte_offset, boundary,
-            PDF_3DVIEW_NAME, PDF_3DVIEW_NAME_LEN, PDF_ENDOBJ_NAME,
+            (uint8_t *) PDF_3DVIEW_NAME, PDF_3DVIEW_NAME_LEN, (uint8_t *) PDF_ENDOBJ_NAME,
             PDF_ENDOBJ_NAME_LEN, &found);
         if (!found)
         {
@@ -2161,7 +2162,7 @@ pdf_check_for_dict_int_entry(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundar
     int code;
     int ret_count;
 
-    if (strncmp((char *)ptr, tag_name, tag_name_len) == 0)
+    if (strncmp((const char *)ptr, tag_name, tag_name_len) == 0)
     {
         ptr += tag_name_len;
         code = pdf_eat_white_space(ctx, &ptr, boundary);
@@ -2169,7 +2170,7 @@ pdf_check_for_dict_int_entry(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundar
         {
             return code;
         }
-        ret_count = sscanf((char *)ptr, "%d", value_out);
+        ret_count = sscanf((const char *)ptr, "%d", value_out);
         if (ret_count != 1)
         {
             prc_error(ctx, PRC_ERROR_PARSE, "Did not read dict entry in PDF file\n");
@@ -2212,7 +2213,7 @@ pdf_get_integer_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end,
     ptr += count + tag_length;
 
     /* Read the integer */
-    code = sscanf((char *)ptr, "%d", value);
+    code = sscanf((const char *)ptr, "%u", value);
     if (code != 1)
     {
         //prc_error(ctx, PRC_ERROR_PARSE, "Did not read integer in PDF file\n");
@@ -2268,7 +2269,7 @@ pdf_get_integer_array_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end,
                 prc_error(ctx, PRC_ERROR_PARSE, "Too many elements in PDF array\n");
                 return PRC_ERROR_PARSE;
             }
-            code = sscanf((char *)ptr, "%d", &elements[num_elements]);
+            code = sscanf((const char *)ptr, "%d", &elements[num_elements]);
             if (code != 1)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read integer in PDF file\n");
@@ -2299,7 +2300,7 @@ pdf_get_integer_array_prc(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end,
         /* Read num_elements into elements */
         for (k = 0; k < num_elements; k++)
         {
-            code = sscanf((char *)ptr, "%d", &elements[k]);
+            code = sscanf((const char *)ptr, "%d", &elements[k]);
             if (code != 1)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read integer in PDF file\n");
@@ -2342,7 +2343,7 @@ pdf_is_encrypted(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     while (ptr > (pdf_buff_in + PDF_TRAILER_NAME_LEN - 1))
     {
         /* Look for startxref */
-        if (strncmp((char *)(ptr - PDF_TRAILER_NAME_LEN + 1), PDF_TRAILER_NAME,
+        if (strncmp((const char *)(ptr - PDF_TRAILER_NAME_LEN + 1), PDF_TRAILER_NAME,
             PDF_TRAILER_NAME_LEN) == 0)
         {
             ptr++;
@@ -2357,15 +2358,15 @@ pdf_is_encrypted(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     }
 
     /* Look for /Encrypt before we hit startxref */
-    count = pdf_search_for_tag(ctx, ptr, file_end, PDF_ENCRYPT_NAME, PDF_ENCRYPT_NAME_LEN,
-        PDF_STARTXREF_NAME, PDF_STARTXREF_NAME_LEN, &found);
+    count = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_ENCRYPT_NAME, PDF_ENCRYPT_NAME_LEN,
+                               (uint8_t *) PDF_STARTXREF_NAME, PDF_STARTXREF_NAME_LEN, &found);
     if (!found)
     {
         return 0; /* Not encrypted */
     }
     ptr += count + PDF_ENCRYPT_NAME_LEN;
 
-    code = sscanf(ptr, "%d", encrypted_object_num);
+    code = sscanf((const char*) ptr, "%u", encrypted_object_num);
     if (code != 1)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not read encrypted object number in PDF file\n");
@@ -2443,14 +2444,14 @@ pdf_get_file_id_from_object(prc_context *ctx, uint8_t *ptr_in, uint8_t *file_end
 
     while (ptr_in < file_end)
     {
-        if (strncmp((char *)ptr_in, PDF_ID_NAME, PDF_ID_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr_in, PDF_ID_NAME, PDF_ID_NAME_LEN) == 0)
         {
             ptr_in += PDF_ID_NAME_LEN;
             break;
         }
 
         /* If we see an endobj before we see the ID then there is no ID */
-        if (strncmp((char *)ptr_in, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
+        if (strncmp((const char *)ptr_in, PDF_ENDOBJ_NAME, PDF_ENDOBJ_NAME_LEN) == 0)
                 {
                     return 0; /* No ID found */
         }
@@ -2512,7 +2513,7 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     while (ptr > (pdf_buff_in + PDF_TRAILER_NAME_LEN - 1))
     {
         /* Look for trailer */
-        if (strncmp((char *)(ptr - PDF_TRAILER_NAME_LEN + 1), PDF_TRAILER_NAME,
+        if (strncmp((const char *)(ptr - PDF_TRAILER_NAME_LEN + 1), PDF_TRAILER_NAME,
             PDF_TRAILER_NAME_LEN) == 0)
         {
             ptr++;
@@ -2521,7 +2522,7 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
         ptr--;
 
         /* If we see an endobj before the trailer then there is no trailer */
-        if (strncmp((char *)(ptr - PDF_ENDOBJ_NAME_LEN + 1), PDF_ENDOBJ_NAME,
+        if (strncmp((const char *)(ptr - PDF_ENDOBJ_NAME_LEN + 1), PDF_ENDOBJ_NAME,
             PDF_ENDOBJ_NAME_LEN) == 0)
         {
             return 0; /* No ID found */
@@ -2535,8 +2536,8 @@ pdf_get_file_id(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_in,
     }
 
     /* Look for /ID before we hit startxref */
-    count = pdf_search_for_tag(ctx, ptr, file_end, PDF_ID_NAME, PDF_ID_NAME_LEN,
-        PDF_STARTXREF_NAME, PDF_STARTXREF_NAME_LEN, &found);
+    count = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_ID_NAME, PDF_ID_NAME_LEN,
+                               (uint8_t *) PDF_STARTXREF_NAME, PDF_STARTXREF_NAME_LEN, &found);
     if (!found)
     {
         return 0; /* No ID found */
@@ -2626,7 +2627,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     while (ptr > (pdf_buff_in + PDF_STARTXREF_NAME_LEN - 1))
     {
         /* Look for startxref */
-        if (strncmp((char *)(ptr - PDF_STARTXREF_NAME_LEN + 1), PDF_STARTXREF_NAME,
+        if (strncmp((const char *)(ptr - PDF_STARTXREF_NAME_LEN + 1), PDF_STARTXREF_NAME,
                              PDF_STARTXREF_NAME_LEN) == 0)
         {
             ptr++;
@@ -2646,7 +2647,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         return code;
     }
 
-    code = sscanf(ptr, "%d", &xref_offset);
+    code = sscanf((const char*) ptr, "%u", &xref_offset);
     if (code != 1)
     {
         prc_error(ctx, PRC_ERROR_PARSE, "Did not find xref offset in PDF file\n");
@@ -2901,7 +2902,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
        stream code. If present, assume it is not encrypted even if the 
        streams are supposedly encrypted. */
     if (stream_length > PDF_PRC_STREAM_HEADER_LEN &&
-        strncmp((char *)ptr_stream, PDF_PRC_STREAM_HEADER, PDF_PRC_STREAM_HEADER_LEN) == 0)
+        strncmp((const char *)ptr_stream, PDF_PRC_STREAM_HEADER, PDF_PRC_STREAM_HEADER_LEN) == 0)
     {
         streams_encrypted = 0;
     }

@@ -14,7 +14,6 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "../include/prc_api.h"
 #include "prc_internal_api.h"
 #include "prc_data.h"
 #include <stdio.h>
@@ -475,7 +474,7 @@ prc_api_print_tree_ri_api(prc_context *ctx, prc_api_part *part, int level)
         if (part->rep_items[k].num_rep_items > 0)
         {
             prc_api_print_dots(ctx, level);
-            printf("RI item %ud has %z RI items\n", k, part->rep_items[k].num_rep_items);
+            printf("RI item %u has %zu RI items\n", k, part->rep_items[k].num_rep_items);
             prc_api_print_tree_ri_api(ctx, part->rep_items + k, level + 1);
         }
     }
@@ -897,18 +896,18 @@ prc_api_set_rep_item_name(prc_context *ctx, prc_api_part *rep_item,
 
     if (rep_item_name != NULL)
     {
-        rep_item->name = (unsigned char *)prc_calloc(ctx,
-            strlen(rep_item_name) + 1, sizeof(unsigned char));
+        rep_item->name = (char*)prc_calloc(ctx,
+            strlen((const char*) rep_item_name) + 1, sizeof(unsigned char));
         if (rep_item->name == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_rep_item_name\n");
             return PRC_ERROR_MEMORY;
         }
-        memcpy(rep_item->name, rep_item_name, strlen(rep_item_name));
+        memcpy(rep_item->name, rep_item_name, strlen((const char *)rep_item_name));
     }
     else
     {   /* Set name to name_rep_item */
-        rep_item->name = (unsigned char *)prc_calloc(ctx,
+        rep_item->name = (char*)prc_calloc(ctx,
             strlen((const char *)name_rep_item) + 1, sizeof(unsigned char));
         if (rep_item->name == NULL)
         {
@@ -928,18 +927,18 @@ prc_api_set_part_name(prc_context *ctx, prc_api_part *part,
 
     if (name_in != NULL)
     {
-        part->name = (unsigned char *)prc_calloc(ctx,
-            strlen(name_in) + 1, sizeof(unsigned char));
+        part->name = (char*)prc_calloc(ctx,
+            strlen((const char*) name_in) + 1, sizeof(unsigned char));
         if (part->name == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_part_name\n");
             return PRC_ERROR_MEMORY;
         }
-        memcpy(part->name, name_in, strlen(name_in));
+        memcpy(part->name, name_in, strlen((const char*) name_in));
     }
     else
     {   /* Set name to name_part */
-        part->name = (unsigned char *)prc_calloc(ctx, strlen((const char *)name_part) + 1, sizeof(unsigned char));
+        part->name = (char*)prc_calloc(ctx, strlen((const char *)name_part) + 1, sizeof(unsigned char));
         if (part->name == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_part_name\n");
@@ -1012,6 +1011,7 @@ prc_api_helper_add_ri_to_ri(prc_context *ctx,
             }
         }
     }
+    return 0;
 }
 
 /* Add the representative items */
@@ -1116,7 +1116,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
     unsigned char *name;
     unsigned char name_3d_pmi[] = "3D PMI";
     uint8_t all_brep;
-    char *model_name = NULL;
+    unsigned char *model_name = NULL;
 
     if (*num_nodes == 0)
     {
@@ -1131,7 +1131,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
     if (name_in != NULL)
     {
         len_name = strlen((const char *)name_in);
-        product->name = (unsigned char *)prc_calloc(ctx, len_name + 1, sizeof(unsigned char));
+        product->name = (char*)prc_calloc(ctx, len_name + 1, sizeof(char));
         if (product->name == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
@@ -1350,7 +1350,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
             code = prc_api_set_transform_to_identity(ctx, &pmi_3d_node->location);
 
             /* Set name to name_3d_pmi */
-            pmi_3d_node->name = (unsigned char *)prc_calloc(ctx, strlen((const char *)name_3d_pmi) + 1, sizeof(unsigned char));
+            pmi_3d_node->name = (char *)prc_calloc(ctx, strlen((const char *)name_3d_pmi) + 1, sizeof(char));
             if (pmi_3d_node->name == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
@@ -1367,14 +1367,14 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
             {
                 prc_api_markup *markup = &pmi_3d_node->markup[k];
 
-                markup->name = (unsigned char *)prc_calloc(ctx, strlen(prc_product_parent->markups.markups[k].base.base.name.name.string) + 1, sizeof(unsigned char));
+                markup->name = (char *)prc_calloc(ctx, strlen(prc_product_parent->markups.markups[k].base.base.name.name.string) + 1, sizeof(char));
                 if (markup->name == NULL)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
                     return PRC_ERROR_MEMORY;
                 }
                 memcpy(markup->name, prc_product_parent->markups.markups[k].base.base.name.name.string,
-                    strlen(prc_product_parent->markups.markups[k].base.base.name.name.string));
+                    strlen((const char *)prc_product_parent->markups.markups[k].base.base.name.name.string));
 
                 markup->biased_style_index =
                     prc_product_parent->markups.markups[k].base.graphics_content.biased_index_of_line_style;
@@ -2019,7 +2019,7 @@ prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product)
 
     product->is_model = 1;
     len_name = strlen((const char *)model_name);
-    product->name = (unsigned char *)prc_calloc(ctx, len_name + 1, sizeof(unsigned char));
+    product->name = (char *)prc_calloc(ctx, len_name + 1, sizeof(char));
     if (product->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
@@ -2082,10 +2082,10 @@ prc_api_helper_add_part(prc_context *ctx, char *parent_name, int32_t file_index,
     else
     {
         api_part->name_same_as_product = 0;
-        name = prc_part->base.base.name.name.string;
+        name = (char*) prc_part->base.base.name.name.string;
     }
 
-    api_part->name = (unsigned char *)prc_calloc(ctx, strlen(name) + 1, sizeof(unsigned char));
+    api_part->name = (char *)prc_calloc(ctx, strlen((const char*) name) + 1, sizeof(char));
     if (api_part->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_part\n");
@@ -2134,10 +2134,10 @@ prc_api_helper_add_ri(prc_context *ctx, uint32_t file_index, prc_api_part *api_p
     }
     else
     {
-        name = prc_ri->item_content.base.base.name.name.string;
+        name = (char*) prc_ri->item_content.base.base.name.name.string;
     }
 
-    api_part->name = (unsigned char *)prc_calloc(ctx, strlen(name) + 1, sizeof(unsigned char));
+    api_part->name = (char *)prc_calloc(ctx, strlen((const char*) name) + 1, sizeof(char));
     if (api_part->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri\n");
@@ -2243,7 +2243,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
         name = base_name;
     }
 
-    product_tree->name = (unsigned char *)prc_calloc(ctx, strlen(name) + 1, sizeof(unsigned char));
+    product_tree->name = (char*)prc_calloc(ctx, strlen((const char*) name) + 1, sizeof(unsigned char));
     if (product_tree->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_copy_product_details\n");
@@ -2359,7 +2359,7 @@ prc_api_helper_add_markups(prc_context *ctx, prc_api_data data, uint32_t num_fil
     code = prc_api_set_transform_to_identity(ctx, &pmi_3d_node->location);
 
     /* Set name to name_3d_pmi */
-    pmi_3d_node->name = (unsigned char *)prc_calloc(ctx, strlen((const char *)name_3d_pmi) + 1, sizeof(unsigned char));
+    pmi_3d_node->name = (char*)prc_calloc(ctx, strlen((const char *)name_3d_pmi) + 1, sizeof(char));
     if (pmi_3d_node->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
@@ -2382,11 +2382,11 @@ prc_api_helper_add_markups(prc_context *ctx, prc_api_data data, uint32_t num_fil
         }
         else
         {
-            name = product->markups.markups[k].base.base.name.name.string;
+            name = (char*) product->markups.markups[k].base.base.name.name.string;
         }
 
-        markup->name = (unsigned char *)prc_calloc(ctx, strlen(name) + 1,
-                                                        sizeof(unsigned char));
+        markup->name = (char*)prc_calloc(ctx, strlen((const char*) name) + 1,
+                                                        sizeof(char));
         if (markup->name == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
@@ -2614,7 +2614,7 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
         prc_api_helper_update_parent_style(ctx, prototype_product, file_index,
             &parent_biased_style_index, &parent_biased_style_file_index);
         code = prc_api_helper_add_product(ctx, data, num_files, file_index,
-            base_name, incoming_transform,
+            (unsigned char*) base_name, incoming_transform,
             prototype_product, parent_biased_style_index,
             parent_biased_style_file_index, product_tree, reserve, product_style);
         if (code < 0)

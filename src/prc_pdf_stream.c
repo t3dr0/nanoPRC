@@ -495,8 +495,8 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             ptr = pdf_data + byte_offset;
 
             /* Look for /N */
-            code = pdf_search_for_tag(ctx, ptr, file_end, PDF_N_NAME,
-                PDF_N_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
+            code = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_N_NAME,
+                PDF_N_NAME_LEN, (uint8_t *) PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
             if (!found)
             {
                 /* Not found throw error */
@@ -521,8 +521,8 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
 
             /* Now get /First entry */
             ptr = pdf_data + byte_offset;
-            code = pdf_search_for_tag(ctx, ptr, file_end, PDF_FIRST_NAME,
-                PDF_FIRST_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
+            code = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_FIRST_NAME,
+                PDF_FIRST_NAME_LEN, (uint8_t *) PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
             if (!found)
             {
                 /* Not found throw error */
@@ -546,8 +546,8 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
 
             /* Now get /Filter entry */
             ptr = pdf_data + byte_offset;
-            code = pdf_search_for_tag(ctx, ptr, file_end, PDF_FILTER_NAME,
-                PDF_FILTER_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
+            code = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_FILTER_NAME,
+                PDF_FILTER_NAME_LEN, (uint8_t *) PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
             if (!found)
             {   /* Not found throw error */
                 prc_error(ctx, PRC_ERROR_PARSE, "Failed to find /Filter in PDF object stream\n");
@@ -559,8 +559,8 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
                 ptr += code;
                 ptr += PDF_FILTER_NAME_LEN; /* Move past /Filter name */
                 /* Scan for the filter name */
-                code = pdf_search_for_tag(ctx, ptr, file_end, PDF_FLATEDECODE_NAME,
-                    PDF_FLATEDECODE_NAME_LEN, PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
+                code = pdf_search_for_tag(ctx, ptr, file_end, (uint8_t *) PDF_FLATEDECODE_NAME,
+                    PDF_FLATEDECODE_NAME_LEN, (uint8_t *) PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &found);
                 if (!found)
                 {
                     prc_error(ctx, PRC_ERROR_PARSE, "Failed to find FlateDecode in PDF object stream\n");

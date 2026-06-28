@@ -23,6 +23,7 @@
 #include "prc_vector_util.h"
 #include "prc_internal_api.h"
 #include "prc_pdf.h"
+#include "prc_fwd.h"
 
 #define prc_unsigned_int uint32_t
 #define prc_bool uint8_t
@@ -704,7 +705,6 @@ typedef struct prc_file_struct_internal_global_data_s prc_file_struct_internal_g
 typedef struct prc_graphics_content_s prc_graphics_content;
 typedef struct prc_content_entity_graphics_reference_s prc_content_entity_graphics_reference;
 typedef struct prc_bounding_box_s prc_bounding_box;
-typedef struct prc_base_with_graphics_s prc_base_with_graphics;
 typedef struct prc_additional_target_data_s prc_additional_target_data;
 typedef struct prc_misc_reference_on_topology_s prc_misc_reference_on_topology;
 typedef struct prc_misc_reference_on_prcbase_s prc_misc_reference_on_prcbase;
@@ -715,7 +715,6 @@ typedef struct prc_mkp_leader_s prc_mkp_leader;
 typedef struct prc_mkp_markup_s prc_mkp_markup;
 typedef struct prc_annotation_entries_s prc_annotation_entries;
 typedef struct prc_markup_data_s prc_markup_data;
-typedef struct prc_misc_entity_reference_s prc_misc_entity_reference;
 typedef struct prc_content_entity_filter_item_s prc_content_entity_filter_item;
 typedef struct prc_asm_filter_s prc_asm_filter;
 typedef struct prc_content_surface_s prc_content_surface;
@@ -795,20 +794,6 @@ typedef struct prc_ptr_curve_s prc_ptr_curve;
 typedef struct prc_type_surf_s prc_type_surf;
 typedef struct prc_ptr_surface_s prc_ptr_surface;
 typedef struct prc_topo_s prc_topo;
-typedef struct prc_hcg_iso_plane_s prc_hcg_iso_plane;
-typedef struct prc_hcg_iso_cylinder_s prc_hcg_iso_cylinder;
-typedef struct prc_hcg_iso_torus_s prc_hcg_iso_torus;
-typedef struct prc_hcg_iso_sphere_s prc_hcg_iso_sphere;
-typedef struct prc_hcg_iso_cone_s prc_hcg_iso_cone;
-typedef struct prc_hcg_iso_nurbs_s prc_hcg_iso_nurbs;
-typedef struct prc_hcg_ana_plane_s prc_hcg_ana_plane;
-typedef struct prc_hcg_ana_cylinder_s prc_hcg_ana_cylinder;
-typedef struct prc_hcg_ana_torus_s prc_hcg_ana_torus;
-typedef struct prc_hcg_ana_sphere_s prc_hcg_ana_sphere;
-typedef struct prc_hcg_ana_cone_s prc_hcg_ana_cone;
-typedef struct prc_hcg_ana_generic_face_s prc_hcg_ana_generic_face;
-typedef struct prc_hcg_ana_nurbs_s prc_hcg_ana_nurbs;
-typedef struct prc_ref_or_compressed_curve_s prc_ref_or_compressed_curve;
 typedef struct prc_start_end_data_s prc_start_end_data;
 typedef struct prc_content_compressed_iso_face_s prc_content_compressed_iso_face;
 typedef struct prc_ana_face_trim_loop_s prc_ana_face_trim_loop;
@@ -819,7 +804,6 @@ typedef struct prc_hcg_line_s prc_hcg_line;
 typedef struct prc_hcg_circle_s prc_hcg_circle;
 typedef struct prc_iso_nurbs_trim_crv_s prc_iso_nurbs_trim_crv;
 typedef struct prc_iso_nurbs_trim_curve_s prc_iso_nurbs_trim_curve;
-typedef struct prc_hcg_iso_nurbs_s prc_hcg_iso_nurbs;
 typedef struct prc_internal_inheritance_s prc_internal_inheritance;
 typedef struct prc_internal_detail_inheritance_s prc_internal_detail_inheritance;
 
@@ -2020,7 +2004,7 @@ struct prc_tess_3d_wire_element_s
 {
     prc_unsigned_int number_of_wire_indexes;
     prc_unsigned_int *wire_indexes;
-    uint8_t is_connected;
+    uint32_t is_connected;
 };
 
 /* Table 142 PRC_TYPE_TESS_3D_Wire */

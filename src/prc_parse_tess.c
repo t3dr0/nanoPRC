@@ -669,7 +669,7 @@ prc_parse_tess_3d_wire(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_w
             /* The first value gives us the number */
             uint32_t size = prc_bitread_uint32(ctx, bit_state);
             data->wire_elements[num_wires].number_of_wire_indexes = size & 0x0FFFFFFF;
-            data->wire_elements[num_wires].is_connected = size & 0xF0000000;
+            data->wire_elements[num_wires].is_connected = size & 0x30000000;
             data->wire_elements[num_wires].wire_indexes = (uint32_t *)prc_calloc(ctx, data->wire_elements[num_wires].number_of_wire_indexes, sizeof(uint32_t));
             if (data->wire_elements[num_wires].wire_indexes == NULL)
             {
@@ -684,7 +684,7 @@ prc_parse_tess_3d_wire(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_w
             vertex_color_count += data->wire_elements[num_wires].number_of_wire_indexes;
 
             /* If this one is closing then we have to add another color count */
-            if (data->wire_elements[num_wires].is_connected == PRC_3DWIRETESSDATA_IsClosing)
+            if (data->wire_elements[num_wires].is_connected & PRC_3DWIRETESSDATA_IsClosing)
             {
                 vertex_color_count += 1;
             }
