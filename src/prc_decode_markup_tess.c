@@ -487,11 +487,12 @@ prc_decode_markup_tess(prc_context *ctx, prc_tess_markup *data)
             else if (extra_data_type == PRC_TEXT_ENTITY)
             {
                 /* Add a primitive */
-                uint32_t string_length = strlen(data->text_strings[biased_string_index - 1].string);
+                uint32_t string_length = strlen((const char*) data->text_strings[biased_string_index - 1].string);
                 data->decode_primitives[num_primitives].text = (char *)prc_calloc(ctx, string_length + 1, 1);
                 if (data->decode_primitives[num_primitives].text == NULL)
                     return PRC_ERROR_MEMORY;
-                strcpy(data->decode_primitives[num_primitives].text, data->text_strings[biased_string_index - 1].string);
+                strcpy(data->decode_primitives[num_primitives].text,
+                      (const char*) data->text_strings[biased_string_index - 1].string);
 
                 data->decode_primitives[num_primitives].biased_color_index = biased_color_index;
                 data->decode_primitives[num_primitives].biased_font_index = biased_font_index;

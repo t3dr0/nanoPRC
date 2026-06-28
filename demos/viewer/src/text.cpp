@@ -112,7 +112,7 @@ Font* Font::Derive(int point)
 
 Vector2 Font::MeasureChar(char c, float scale) const
 {
-	if (c < FIRST_GLPYH || c >= FIRST_GLPYH + GLYPH_COUNT)
+	if (c < FIRST_GLPYH)
 		return Vector2(0.0f);
 
 	const stbtt_packedchar &pc = _chars[c-FIRST_GLPYH];
@@ -127,7 +127,7 @@ Vector2 Font::Measure(const char *string, float scale) const
 	Vector2 size;
 	for (char c = *string; c; c = *(++string))
 	{
-		if (c < FIRST_GLPYH || c >= FIRST_GLPYH + GLYPH_COUNT)
+		if (c < FIRST_GLPYH)
 			continue;
 
 		const stbtt_packedchar &pc = _chars[c-FIRST_GLPYH];
@@ -143,7 +143,7 @@ Vector2 Font::Measure(const char *string, float scale) const
 
 const stbtt_packedchar *Font::GetChar(char c) const
 {
-	if (c < FIRST_GLPYH || c >= FIRST_GLPYH + GLYPH_COUNT)
+	if (c < FIRST_GLPYH)
 		return nullptr;
 	return &_chars[c-FIRST_GLPYH];
 }

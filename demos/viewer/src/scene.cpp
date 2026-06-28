@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 #include <prc_api.h>
 #include "text.h"
@@ -488,10 +489,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child->setParent(app_markup_parent);
 
                 /* Append a _1 to the name */
-                char *markup_name = new char[strlen(api_product->markup[k].name) + 3];
-                sprintf(markup_name, "%s_1", api_product->markup[k].name);
-                app_child->setName(markup_name);
-                delete[] markup_name;
+                std::string markup_name = std::string(api_product->markup[k].name) + "_1";
+                app_child->setName(markup_name.c_str());
 
                 app_child->setModel(Matrix4(1.0f));
                 setBounds(ctx, app_child, tess, matrix, location.is_identity, minBound,
@@ -504,10 +503,8 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
                 app_child_text->setParent(app_markup_parent);
 
                 /* Append a _2 to the name */
-                char *markup_name2 = new char[strlen(api_product->markup[k].name) + 3];
-                sprintf(markup_name2, "%s_2", api_product->markup[k].name);
-                app_child_text->setName(markup_name2);
-                delete[] markup_name2;
+                std::string markup_name2 = std::string(api_product->markup[k].name) + "_2";
+                app_child_text->setName(markup_name2.c_str());
 
                 app_child_text->setModel(Matrix4(1.0f));
                 setBounds(ctx, app_child_text, tess, matrix, location.is_identity, minBound,

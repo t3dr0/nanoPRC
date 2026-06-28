@@ -409,7 +409,7 @@ prc_compute_first_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
 
 static void
 prc_store_triangle_indices(prc_context *ctx, treated_triangle *treated_tri,
-    int *triangle_indices, int *vertex_normal_indices, int *triangle_indice_count)
+    uint32_t *triangle_indices, uint32_t *vertex_normal_indices, int *triangle_indice_count)
 {
     if (treated_tri->normal_was_reversed)
     {
