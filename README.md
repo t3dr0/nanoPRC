@@ -38,7 +38,14 @@ Finally, build the project with the generated build system. You may specify your
 cmake -G "Visual Studio 16 2019" ..
 ```
 
+The build process in the case of windows is done by opening the solution file in the build directory and building the projects.
+
 Executables are built to the `bin` directory and libraries to the `lib` directory from within the build directory.
+
+In the case of Linux, your milage may vary. 
+See https://wiki.libsdl.org/SDL3/README-linux#build-dependencies for the dependencies needed for the demo viewer and your flavor of Linux.  The dependencies for just the library are very limited. You will need to make sure you have cmake installed. After the cmake .. command above, you will run make in the build directory to compile the code.  The viewer has been succesfully built and run on WSL.
+
+On macOS, the process is the same but you should not need to do anything special with SDL dependencies. You will need to make sure you have cmake and likely the xcode tools. After the cmake .. command above you will run make in the build directory. The viewer has been built and run on Intel and Apple silicon machines.
 
 ###  quick_start
 See demos/quick_start for a simple example on how to open, parse, and make use of the PRC contents.
