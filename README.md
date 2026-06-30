@@ -48,7 +48,13 @@ See https://wiki.libsdl.org/SDL3/README-linux#build-dependencies for the depende
 On macOS, the process is the same but you should not need to do anything special with SDL dependencies. You will need to make sure you have cmake and likely the xcode tools. After the cmake .. command above you will run make in the build directory. The viewer has been built and run on Intel and Apple silicon machines.
 
 ###  quick_start
-See demos/quick_start for a simple example on how to open, parse, and make use of the PRC contents.
+nanoPRC includes several source-code demonstrations that showcase how to use the core library.
+
+| Location | Description |
+|--------|-------------|
+| demos/quick_start | A simple example on how to open, parse, and make use of the PRC contents |
+| demos/viewer | A basic 3D interactive viewer to display PRC models |
+| demos/json_export | A utility to create a JSON dump from a PRC model |
 
 ### Deterministic Unzipped-Section Fuzzing
 
