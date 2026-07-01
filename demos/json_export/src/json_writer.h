@@ -30,13 +30,30 @@
  * fills, amortizing the cost of write(2)/fwrite(3) calls.
  *
  * The writer intentionally favors very low, constant memory overhead: the
- * nesting-state stack is a fixed-capacity array of bytes (one per nesting
- * level), not a dynamic structure, because the JSON shapes produced by the
- * json_export tool have a known, bounded maximum nesting depth.
+ * nesting-state stack is a dynamically-grown heap array (one entry per
+ * nesting level), so traversal depth is bounded only by available memory
+ * rather than by any fixed compile-time limit.
  *
  * All string output is escaped per RFC 8259. Floating point numbers are
  * written with a caller-controlled precision sufficient for round-tripping
  * single-precision tessellation data without bloating file size.
+ *
+ * Pretty-printing
+ * ----------------
+ * When enabled via json_writer_init(), the writer indents nested objects
+ * and arrays with tabs and inserts newlines after structural punctuation,
+ * producing human-legible output similar to common JSON pretty-printers.
+ * To avoid bloating output size and write volume for the large flat
+ * numeric arrays this tool emits (vertex positions, color channels,
+ * transform matrices, primitive index lists, and so on -- arrays that can
+ * have many thousands or millions of scalar elements), a "compact" array
+ * mode is available: json_writer_begin_array_compact() (and its
+ * ..._key() variant) suppress per-element newlines/indentation for that
+ * one array only, emitting its scalar elements on a single line, while
+ * pretty-printing resumes normally once the array closes and for all
+ * surrounding structure. Compact mode is intended for arrays of plain
+ * scalars (numbers, short strings); arrays of objects should use the
+ * normal (non-compact) array emitters so each object is still legible.
  */
 
 #include <stdio.h>
@@ -51,8 +68,9 @@
 /** Internal per-level container state. */
 typedef struct json_writer_level_s
 {
-    uint8_t is_array;     /* 1 if this level is a JSON array, 0 if object   */
-    uint8_t has_emitted;  /* 1 once at least one element/member was written */
+    uint8_t is_array;     /* 1 if this level is a JSON array, 0 if object    */
+    uint8_t has_emitted;  /* 1 once at least one element/member was written  */
+    uint8_t is_compact;   /* 1 if this level suppresses pretty-print spacing */
 } json_writer_level;
 
 /** Streaming JSON writer instance. Treat as opaque; all access is through
@@ -64,12 +82,13 @@ typedef struct json_writer_s
     size_t buffer_size;           /* Allocated capacity of buffer           */
     size_t buffer_used;           /* Bytes currently staged in buffer       */
     json_writer_level *levels;    /* Heap-allocated nesting-state stack,    */
-                                   /* grown geometrically as depth requires  */
+                                  /* grown geometrically as depth requires  */
     int depth;                    /* Current nesting depth (0 = root)       */
     int level_capacity;           /* Allocated capacity of levels[]         */
     int error;                    /* Sticky error flag; 0 == ok             */
     uint64_t bytes_written;       /* Total bytes flushed to stream so far   */
     int pending_value;            /* 1 immediately after json_writer_key()  */
+    int pretty;                   /* 1 if pretty-printing is enabled        */
 } json_writer;
 
 /**
@@ -79,9 +98,14 @@ typedef struct json_writer_s
  * @param stream Destination stream; caller retains ownership (must close it).
  * @param buffer_size Size in bytes of the internal staging buffer. A value
  *        of 0 selects a sensible default (1 MiB).
+ * @param pretty Non-zero to enable human-legible pretty-printing (tab
+ *        indentation and newlines after structural punctuation). Zero
+ *        produces the most compact possible output. See the "Pretty-
+ *        printing" section above regarding json_writer_begin_array_compact()
+ *        for controlling large scalar arrays independently of this setting.
  * @return 0 on success, -1 on allocation failure.
  */
-int json_writer_init(json_writer *w, FILE *stream, size_t buffer_size);
+int json_writer_init(json_writer *w, FILE *stream, size_t buffer_size, int pretty);
 
 /**
  * @brief Flush any staged bytes to the underlying stream and release the
@@ -119,6 +143,22 @@ void json_writer_end_array(json_writer *w);
  * convenience to keep call sites compact and readable. */
 void json_writer_begin_object_key(json_writer *w, const char *key);
 void json_writer_begin_array_key(json_writer *w, const char *key);
+
+/* Compact-array variants: behave exactly like json_writer_begin_array() /
+ * json_writer_begin_array_key(), except that while pretty-printing is
+ * enabled, elements within *this* array are written on a single line
+ * with no per-element indentation, regardless of the writer's overall
+ * pretty setting. Intended for large flat arrays of scalars (vertex
+ * components, color channels, index lists, matrix entries) where
+ * one-element-per-line formatting would bloat output size without aiding
+ * legibility. Nesting resumes normal pretty-printing once this array
+ * closes. If pretty-printing is disabled entirely, these behave
+ * identically to the normal array emitters. */
+void json_writer_begin_array_compact(json_writer *w);
+void json_writer_begin_array_compact_key(json_writer *w, const char *key);
+/* json_writer_end_array() also closes compact arrays; no separate
+ * end-compact function is needed since the level itself records whether
+ * it was opened in compact mode. */
 
 /* ---- Key / value emitters ---------------------------------------------- */
 

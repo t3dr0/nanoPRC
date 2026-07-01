@@ -48,7 +48,7 @@
  *   - Per-tessellation vertex/index data is processed and written face by
  *     face and primitive by primitive; nanoPRC has already materialized
  *     each tessellation's vertex buffer by the time this program touches
- *     it (that allocation is owned by the library, as in the original
+ *     it (that allocation is owned by the library, as in the
  *     quick-start demo), but this program does not make any additional
  *     full-document copies of that data: each value is read once from the
  *     library's buffer and written once to the JSON stream.
@@ -254,7 +254,7 @@ static void write_vertex(json_writer *w, const prc_api_vertex *v)
 {
     json_writer_begin_object(w);
 
-    json_writer_begin_array_key(w, "position");
+    json_writer_begin_array_compact_key(w, "position");
     json_writer_float(w, v->position[0]);
     json_writer_float(w, v->position[1]);
     json_writer_float(w, v->position[2]);
@@ -262,7 +262,7 @@ static void write_vertex(json_writer *w, const prc_api_vertex *v)
 
     if (v->normal_set)
     {
-        json_writer_begin_array_key(w, "normal");
+        json_writer_begin_array_compact_key(w, "normal");
         json_writer_float(w, v->normal[0]);
         json_writer_float(w, v->normal[1]);
         json_writer_float(w, v->normal[2]);
@@ -271,7 +271,7 @@ static void write_vertex(json_writer *w, const prc_api_vertex *v)
 
     if (v->uv_set)
     {
-        json_writer_begin_array_key(w, "uv");
+        json_writer_begin_array_compact_key(w, "uv");
         json_writer_float(w, v->uv[0]);
         json_writer_float(w, v->uv[1]);
         json_writer_end_array(w);
@@ -279,7 +279,7 @@ static void write_vertex(json_writer *w, const prc_api_vertex *v)
 
     /* Color is always populated by the library (defaulted when unstyled),
        so it is always emitted for consistency of downstream consumers. */
-    json_writer_begin_array_key(w, "color");
+    json_writer_begin_array_compact_key(w, "color");
     json_writer_float(w, v->color[0]);
     json_writer_float(w, v->color[1]);
     json_writer_float(w, v->color[2]);
@@ -288,7 +288,7 @@ static void write_vertex(json_writer *w, const prc_api_vertex *v)
 
     if (v->tri_has_material)
     {
-        json_writer_begin_array_key(w, "diffuse");
+        json_writer_begin_array_compact_key(w, "diffuse");
         json_writer_float(w, v->diffuse[0]);
         json_writer_float(w, v->diffuse[1]);
         json_writer_float(w, v->diffuse[2]);
@@ -343,7 +343,7 @@ static int write_face_primitives(prc_context *ctx, prc_api_data data,
         json_writer_kv_string(w, "type", primitive_type_name(primitive.type));
         json_writer_kv_size(w, "num_indices", primitive.num_indices);
 
-        json_writer_begin_array_key(w, "indices");
+        json_writer_begin_array_compact_key(w, "indices");
         for (idx = 0; idx < primitive.num_indices; idx++)
         {
             json_writer_uint32(w, primitive.indices[idx]);
@@ -363,25 +363,25 @@ static void write_material(json_writer *w, const prc_api_material *m)
 {
     json_writer_begin_object(w);
 
-    json_writer_begin_array_key(w, "diffuse");
+    json_writer_begin_array_compact_key(w, "diffuse");
     json_writer_float(w, m->diffuse[0]);
     json_writer_float(w, m->diffuse[1]);
     json_writer_float(w, m->diffuse[2]);
     json_writer_end_array(w);
 
-    json_writer_begin_array_key(w, "ambient");
+    json_writer_begin_array_compact_key(w, "ambient");
     json_writer_float(w, m->ambient[0]);
     json_writer_float(w, m->ambient[1]);
     json_writer_float(w, m->ambient[2]);
     json_writer_end_array(w);
 
-    json_writer_begin_array_key(w, "specular");
+    json_writer_begin_array_compact_key(w, "specular");
     json_writer_float(w, m->specular[0]);
     json_writer_float(w, m->specular[1]);
     json_writer_float(w, m->specular[2]);
     json_writer_end_array(w);
 
-    json_writer_begin_array_key(w, "emissive");
+    json_writer_begin_array_compact_key(w, "emissive");
     json_writer_float(w, m->emissive[0]);
     json_writer_float(w, m->emissive[1]);
     json_writer_float(w, m->emissive[2]);
@@ -467,13 +467,13 @@ static int write_tessellation(prc_context *ctx, prc_api_data data,
         json_writer_kv_string(w, "name", tess->name);
     }
 
-    json_writer_begin_array_key(w, "bounding_box_min");
+    json_writer_begin_array_compact_key(w, "bounding_box_min");
     json_writer_double(w, tess->bounding_box_min[0]);
     json_writer_double(w, tess->bounding_box_min[1]);
     json_writer_double(w, tess->bounding_box_min[2]);
     json_writer_end_array(w);
 
-    json_writer_begin_array_key(w, "bounding_box_max");
+    json_writer_begin_array_compact_key(w, "bounding_box_max");
     json_writer_double(w, tess->bounding_box_max[0]);
     json_writer_double(w, tess->bounding_box_max[1]);
     json_writer_double(w, tess->bounding_box_max[2]);
@@ -630,7 +630,7 @@ static void write_transform(json_writer *w, const prc_api_transform *t)
     json_writer_begin_object(w);
     json_writer_kv_bool(w, "is_identity", t->is_identity);
 
-    json_writer_begin_array_key(w, "matrix");
+    json_writer_begin_array_compact_key(w, "matrix");
     for (i = 0; i < 16; i++)
     {
         json_writer_double(w, t->matrix[i]);
@@ -810,10 +810,10 @@ static void tess_table_release_faces(tess_table *table)
     {
         /* tess_faces itself is released as part of prc_api_release_data's
            walk over the tessellation array; we only need to make sure we
-           do not leak it if release_data is never reached.
-           prc_api_release_data is always called on every exit path below,
-           so in normal operation this function exists primarily
-           as defensive cleanup glue. */
+           do not leak it if release_data is never reached (e.g. an earlier
+           fatal error during JSON emission). prc_api_release_data is
+           always called on every exit path below, so in normal operation
+           this function exists primarily as defensive cleanup glue. */
         (void)table->tesses[i];
     }
 }
@@ -905,8 +905,12 @@ int main(int argc, char *argv[])
     }
 
     /* A larger-than-default staging buffer reduces fwrite() call overhead
-       for the very large outputs this tool is designed to produce. */
-    if (json_writer_init(&writer, out, 4u << 20 /* 4 MiB */) != 0)
+       for the very large outputs this tool is designed to produce.
+       Pretty-printing is enabled (final argument = 1): scalar arrays of
+       vertex data are written compactly on one line via the compact-array
+       emitters; surrounding structure (objects, faces, products) is
+       indented normally for human legibility. */
+    if (json_writer_init(&writer, out, 4u << 20 /* 4 MiB */, 1 /* pretty */) != 0)
     {
         fprintf(stderr, "error: out of memory initializing JSON writer\n");
         exit_code = 1;

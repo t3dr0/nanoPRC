@@ -78,9 +78,53 @@ static void json_writer_append_str(json_writer *w, const char *s)
     json_writer_append(w, s, strlen(s));
 }
 
+/* Emit a newline followed by (depth) tab characters for indentation.
+   Only called when pretty-printing is enabled and we are not inside a
+   compact array level.  We emit tabs directly from a small static string
+   in chunks to avoid per-character append() overhead on deeply nested
+   documents. */
+static void json_writer_indent(json_writer *w, int depth)
+{
+    static const char tabs[] =
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"  /* 16 */
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"  /* 32 */
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"  /* 48 */
+        "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t"; /* 64 */
+    int remaining = depth;
+
+    json_writer_append(w, "\n", 1);
+    while (remaining > 0)
+    {
+        int chunk = remaining < 64 ? remaining : 64;
+        json_writer_append(w, tabs, (size_t)chunk);
+        remaining -= chunk;
+    }
+}
+
+/* Return 1 if the current (innermost) nesting level is a compact array,
+   or if any enclosing level is compact and has not yet been closed.
+   In practice, compact mode is not nested (json_export only opens compact
+   arrays for flat scalar lists), but we check all open levels for safety
+   so that a compact array nested inside another compact array also
+   suppresses pretty-printing. */
+static int json_writer_in_compact(const json_writer *w)
+{
+    int i;
+    for (i = w->depth - 1; i >= 0; i--)
+    {
+        if (w->levels[i].is_compact)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Emit the comma/structural separator required before the next element or
    member is written, based on the state of the current nesting level. Must
-   be called before writing any value or key. */
+   be called before writing any value or key.  In pretty-print mode this
+   also inserts a newline+indent after the comma (or, for the first element,
+   before it), unless the current container is a compact array. */
 static void json_writer_pre_value(json_writer *w)
 {
     if (w->depth == 0)
@@ -88,12 +132,33 @@ static void json_writer_pre_value(json_writer *w)
         return; /* Single root value; nothing to separate. */
     }
 
-    json_writer_level *lvl = &w->levels[w->depth - 1];
-    if (lvl->has_emitted)
     {
-        json_writer_append(w, ",", 1);
+        json_writer_level *lvl = &w->levels[w->depth - 1];
+        int pretty_here = w->pretty && !json_writer_in_compact(w);
+
+        if (lvl->has_emitted)
+        {
+            json_writer_append(w, ",", 1);
+            if (pretty_here)
+            {
+                json_writer_indent(w, w->depth);
+            }
+            else if (w->pretty && lvl->is_compact)
+            {
+                /* Inside a compact array: separate scalars with a single
+                   space for readability without per-element line breaks. */
+                json_writer_append(w, " ", 1);
+            }
+        }
+        else if (pretty_here)
+        {
+            /* First element of a non-compact container: newline+indent
+               to place it on its own line inside the opening bracket. */
+            json_writer_indent(w, w->depth);
+        }
+
+        lvl->has_emitted = 1;
     }
-    lvl->has_emitted = 1;
 }
 
 /* RFC 8259 string escaping. Operates on a bounded local buffer flushed in
@@ -160,7 +225,7 @@ static void json_writer_emit_escaped(json_writer *w, const char *value)
  * Lifecycle
  * ------------------------------------------------------------------- */
 
-int json_writer_init(json_writer *w, FILE *stream, size_t buffer_size)
+int json_writer_init(json_writer *w, FILE *stream, size_t buffer_size, int pretty)
 {
     memset(w, 0, sizeof(*w));
 
@@ -190,6 +255,7 @@ int json_writer_init(json_writer *w, FILE *stream, size_t buffer_size)
     w->depth = 0;
     w->error = 0;
     w->bytes_written = 0;
+    w->pretty = pretty ? 1 : 0;
 
     return 0;
 }
@@ -249,8 +315,10 @@ static void json_writer_push_level(json_writer *w, uint8_t is_array)
         w->levels = new_levels;
         w->level_capacity = new_capacity;
     }
+    /* Zero the whole level entry so no field (is_compact, has_emitted, ...)
+       carries over from a previous container that occupied this depth slot. */
+    memset(&w->levels[w->depth], 0, sizeof(w->levels[w->depth]));
     w->levels[w->depth].is_array = is_array;
-    w->levels[w->depth].has_emitted = 0;
     w->depth++;
 }
 
@@ -292,6 +360,15 @@ void json_writer_begin_object(json_writer *w)
 
 void json_writer_end_object(json_writer *w)
 {
+    /* Before closing, emit newline+indent at the parent depth so the
+       closing brace lands on its own line, aligned with the opening one.
+       Only when pretty-printing and the object had at least one member
+       (empty objects stay on one line: {}). */
+    if (w->pretty && w->depth > 0 && w->levels[w->depth - 1].has_emitted
+        && !json_writer_in_compact(w))
+    {
+        json_writer_indent(w, w->depth - 1);
+    }
     json_writer_pop_level(w);
     json_writer_append(w, "}", 1);
 }
@@ -301,17 +378,47 @@ void json_writer_begin_array(json_writer *w)
     json_writer_pre_emit_value(w);
     json_writer_append(w, "[", 1);
     json_writer_push_level(w, 1);
+    /* is_compact defaults to 0 (normal array). */
 }
 
 void json_writer_end_array(json_writer *w)
 {
+    /* Emit closing newline+indent for non-compact arrays that had content.
+       Compact arrays close with ] immediately after the last element. */
+    if (w->pretty && w->depth > 0 && w->levels[w->depth - 1].has_emitted
+        && !w->levels[w->depth - 1].is_compact
+        && !json_writer_in_compact(w))
+    {
+        json_writer_indent(w, w->depth - 1);
+    }
     json_writer_pop_level(w);
     json_writer_append(w, "]", 1);
+}
+
+/* Consume the pending-value flag set by json_writer_key() and ensure the
+   parent level (at w->depth - 1, *before* push_level has been called) is
+   marked as having emitted a value, so that the *next* sibling member in
+   the parent object will correctly receive a comma. This must be called
+   for every begin_{object,array}_key() variant, before push_level(). */
+static void json_writer_consume_pending(json_writer *w)
+{
+    w->pending_value = 0;
+    /* Mark the parent level as having emitted a member.  The index is
+       w->depth - 1 because push_level() has not run yet. */
+    if (w->depth > 0)
+    {
+        w->levels[w->depth - 1].has_emitted = 1;
+    }
 }
 
 void json_writer_begin_object_key(json_writer *w, const char *key)
 {
     json_writer_key(w, key);
+    /* Consume the pending-value slot: the opening '{' satisfies it.
+       We do this before push_level so the *new* level starts fresh
+       (has_emitted = 0, pending_value = 0), giving the first member of
+       the new object its own newline+indent line in pretty-print mode. */
+    json_writer_consume_pending(w);
     json_writer_append(w, "{", 1);
     json_writer_push_level(w, 0);
 }
@@ -319,8 +426,42 @@ void json_writer_begin_object_key(json_writer *w, const char *key)
 void json_writer_begin_array_key(json_writer *w, const char *key)
 {
     json_writer_key(w, key);
+    /* Same rationale: the '[' satisfies the key's pending-value slot,
+       and the new level starts clean so its first element receives the
+       newline+indent it deserves in pretty-print mode. */
+    json_writer_consume_pending(w);
     json_writer_append(w, "[", 1);
     json_writer_push_level(w, 1);
+    /* is_compact defaults to 0 (normal, pretty-printed array). */
+}
+
+void json_writer_begin_array_compact(json_writer *w)
+{
+    json_writer_pre_emit_value(w);
+    json_writer_append(w, "[", 1);
+    json_writer_push_level(w, 1);
+    if (w->depth > 0)
+    {
+        /* Mark this level as compact: its elements are written space-
+           separated on a single line, not one per line. */
+        w->levels[w->depth - 1].is_compact = 1;
+    }
+}
+
+void json_writer_begin_array_compact_key(json_writer *w, const char *key)
+{
+    json_writer_key(w, key);
+    /* Consume the pending-value slot. For compact arrays the new level
+       is immediately flagged is_compact, and pre_value() will see that
+       flag and suppress per-element newlines without needing
+       pending_value to intervene. */
+    json_writer_consume_pending(w);
+    json_writer_append(w, "[", 1);
+    json_writer_push_level(w, 1);
+    if (w->depth > 0)
+    {
+        w->levels[w->depth - 1].is_compact = 1;
+    }
 }
 
 /* ----------------------------------------------------------------------
@@ -336,7 +477,17 @@ void json_writer_key(json_writer *w, const char *key)
        emitter call. */
     json_writer_pre_value(w);
     json_writer_emit_escaped(w, key);
-    json_writer_append(w, ":", 1);
+    /* In pretty mode, a single space after the colon mirrors the common
+       convention used by most JSON pretty-printers (e.g. Python's json
+       module with indent=, jq). */
+    if (w->pretty)
+    {
+        json_writer_append(w, ": ", 2);
+    }
+    else
+    {
+        json_writer_append(w, ":", 1);
+    }
     w->pending_value = 1;
 }
 
