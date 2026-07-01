@@ -102,6 +102,8 @@ typedef struct prc_internal_api_uncomm_tess_data_s
     float *decoded_colors;
     uint8_t has_texture_transform;
     double texture_transform[9];
+    uint8_t has_pure_color;
+    float pure_color[4];
 
     /* Mapping from an original API vertex index (index into the initial
        vertex_out array / position_normal_lut) to the first duplicate created

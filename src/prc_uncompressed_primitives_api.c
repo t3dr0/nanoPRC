@@ -265,6 +265,7 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
     uint32_t normal_index = 0;
     uint32_t texture_index = 0;
     uint32_t decode_color_offset;
+    uint8_t has_pure_color = uncompressed_data->has_pure_color;
 
     position_index = face_position_indices[indice_count];
     position_normal_pair = &lut->position_normal_pair[position_index];
@@ -382,12 +383,24 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
             }
             else
             {
-                /* Get color from style */
-                code = prc_internal_api_get_color_from_style(ctx, global_data,
-                    face_out_reserved->style->face_style_index,
-                    vertex_out->vertices[new_api_idx].color);
-                if (code < 0)
-                    return code;
+                if (!has_pure_color)
+                {
+                    /* If we don't have a pure color, then we will use the style color */
+                    /* Get color from style */
+                    code = prc_internal_api_get_color_from_style(ctx, global_data,
+                        face_out_reserved->style->face_style_index,
+                        vertex_out->vertices[new_api_idx].color);
+                    if (code < 0)
+                        return code;
+                }
+                else
+                {
+                    /* If we have a pure color, then we will use that */
+                    vertex_out->vertices[new_api_idx].color[0] = uncompressed_data->pure_color[0];
+                    vertex_out->vertices[new_api_idx].color[1] = uncompressed_data->pure_color[1];
+                    vertex_out->vertices[new_api_idx].color[2] = uncompressed_data->pure_color[2];
+                    vertex_out->vertices[new_api_idx].color[3] = uncompressed_data->pure_color[3];
+                }
             }
         }
 
@@ -511,12 +524,24 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
             }
             else
             {
-                /* Get color from style */
-                code = prc_internal_api_get_color_from_style(ctx, global_data,
-                    face_out_reserved->style->face_style_index,
-                    vertex_out->vertices[new_dup_idx].color);
-                if (code < 0)
-                    return code;
+                if (!has_pure_color)
+                {
+                    /* If we don't have a pure color, then we will use the style color */
+                    /* Get color from style */
+                    code = prc_internal_api_get_color_from_style(ctx, global_data,
+                        face_out_reserved->style->face_style_index,
+                        vertex_out->vertices[new_dup_idx].color);
+                    if (code < 0)
+                        return code;
+                }
+                else
+                {
+                    /* If we have a pure color, then we will use that */
+                    vertex_out->vertices[new_dup_idx].color[0] = uncompressed_data->pure_color[0];
+                    vertex_out->vertices[new_dup_idx].color[1] = uncompressed_data->pure_color[1];
+                    vertex_out->vertices[new_dup_idx].color[2] = uncompressed_data->pure_color[2];
+                    vertex_out->vertices[new_dup_idx].color[3] = uncompressed_data->pure_color[3];
+                }
             }
         }
 

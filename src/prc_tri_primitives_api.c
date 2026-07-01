@@ -1809,9 +1809,9 @@ prc_helper_write_png(char filename[], unsigned char *data, uint32_t width,
 static int
 prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data_in,
     uint32_t file_index, uint32_t style_index, float alpha, uint8_t dont_allow_texture,
-    uint8_t *is_material, uint8_t *is_texture, prc_api_material *material,
-    prc_internal_graph_style *style, float *color, uint32_t face_index, uint32_t tess_index,
-    uint8_t *had_defined_style)
+    uint8_t *is_material, uint8_t *is_texture, uint8_t *is_pure_color,
+    prc_api_material *material, prc_internal_graph_style *style, float *color,
+    uint32_t face_index, uint32_t tess_index, uint8_t *had_defined_style)
 {
     prc_data *data = (prc_data *)data_in;
     prc_filestructure *file_struct;
@@ -1820,6 +1820,7 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
     int code;
     prc_graph_material prc_material;
     *had_defined_style = 0;
+    *is_pure_color = 0;
 
     if (file_index >= data->file_structure_count)
     {
@@ -2108,6 +2109,7 @@ prc_api_helper_get_material_from_style_index(prc_context *ctx, prc_api_data data
             /* This is a color */
             *is_material = 0;
             *is_texture = 0;
+            *is_pure_color = 1;
             color_index_unbiased = color_index_unbiased / 3;
             if (color_index_unbiased < global_data->color_count)
             {
@@ -2135,9 +2137,10 @@ static int
 prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
     uint32_t file_index, uint32_t style_index, float alpha,
     uint8_t dont_allow_texture, uint8_t *is_material, uint8_t *is_texture,
-    prc_api_material *material, prc_internal_graph_style *style, float *color,
-    prc_api_tess *api_tess, prc_api_face *face_out, uint32_t face_index,
-    uint32_t tess_index, uint8_t *had_defined_style)
+    uint8_t *is_pure_color, prc_api_material *material,
+    prc_internal_graph_style *style, float *color, prc_api_tess *api_tess,
+    prc_api_face *face_out, uint32_t face_index, uint32_t tess_index,
+    uint8_t *had_defined_style)
 {
     int32_t code;
     prc_data *data = (prc_data *)data_in;
@@ -2146,8 +2149,8 @@ prc_api_helper_get_face_style(prc_context *ctx, prc_api_data data_in,
 
     code = prc_api_helper_get_material_from_style_index(ctx, data_in,
         file_index, style_index, alpha, dont_allow_texture,
-        is_material, is_texture, material, style, color, face_index, tess_index,
-        had_defined_style);
+        is_material, is_texture, is_pure_color, material, style, color,
+        face_index, tess_index, had_defined_style);
     if (code < 0)
         return code;
 
@@ -2225,7 +2228,7 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
         if (style->base_with_graphics->base.name.name.size > 0 &&
             style->base_with_graphics->base.name.name.string != NULL)
         {
-            char temp_str[] = "mesh (24)\0";
+            char temp_str[] = "MBD_19207_7012761\0";
             if (strncmp(style->base_with_graphics->base.name.name.string, temp_str, strlen(temp_str) - 1) == 0)
             {
                 int zz = 1;
@@ -2744,6 +2747,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     prc_internal_api_normal_state_t normal_state;
     prc_internal_api_texture_state_t texture_state;
     uint8_t has_texture;
+    uint8_t is_pure_color = 0;
     prc_api_tess_vertex_buffer *vertex_out = &api_tess->tess_vertices;
     uint8_t has_face = (face_out != NULL) ? true : false;
     uint8_t has_normals = (api_tess->type != PRC_API_TESS_3D_Wire && api_tess->type != PRC_API_TESS_MarkUp) ? true : false;
@@ -2833,7 +2837,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
             code = prc_api_helper_get_face_style(ctx, data_in, leaf_style_file_index,
                 leaf_style_unbiased_index, alpha, is_uncompressed_with_no_texture_entities,
-                &api_tess->is_material, &has_texture, &api_tess->tess_material,
+                &api_tess->is_material, &has_texture, &is_pure_color, &api_tess->tess_material,
                 face_out_reserved->style, face_color, api_tess, face_out, face_index,
                 tess_index_in, &has_ref_style_defined);
             if (code < 0)
@@ -2918,7 +2922,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 }
                 code = prc_api_helper_get_face_style(ctx, data_in, leaf_style_file_index,
                     leaf_style_unbiased_index, alpha, is_uncompressed_with_no_texture_entities,
-                    &api_tess->is_material, &has_texture, &api_tess->tess_material,
+                    &api_tess->is_material, &has_texture, &is_pure_color, &api_tess->tess_material,
                     &face_out_reserved->style[k], face_color, api_tess, face_out, k,
                     tess_index_in, &has_ref_style_defined);
                 if (code < 0)
@@ -2991,6 +2995,15 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         memset(&uncompressed_data, 0, sizeof(uncompressed_data));
 
+        uncompressed_data.has_pure_color = is_pure_color;
+        if (is_pure_color)
+        {
+            for (k = 0; k < 4; k++)
+            {
+                uncompressed_data.pure_color[k] = face_color[k];
+            }
+        }
+
         if (face_index > tess3d->number_of_face_tessellation - 1)
             return PRC_API_ERROR_PARAMETER;
 
@@ -3005,9 +3018,10 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             code = prc_api_helper_get_face_style(ctx, data_in, file_index,
                 face_out_reserved->style->face_style_index, 1.0,
                 is_uncompressed_with_no_texture_entities,
-                &api_tess->is_material, &has_texture, &api_tess->tess_material,
-                face_out_reserved->style, face_color, api_tess, face_out, face_index,
-                tess_index_in, &has_ref_style_defined);
+                &api_tess->is_material, &has_texture, &is_pure_color,
+                &api_tess->tess_material, face_out_reserved->style, face_color,
+                api_tess, face_out, face_index, tess_index_in,
+                &has_ref_style_defined);
             if (code < 0)
             {
                 prc_error(ctx, PRC_API_ERROR_PARAMETER, "Failed to get face style in prc_api_get_tessellation_vertices\n");
