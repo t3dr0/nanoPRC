@@ -6,3 +6,4 @@ cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 # root solution and can link to the `nano_prc` target.
 add_subdirectory(viewer)
 add_subdirectory(quick_start)
+add_subdirectory(json_export)
