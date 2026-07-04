@@ -441,111 +441,118 @@ prc_internal_set_texture_transform(prc_context *ctx,
     return 0;
 }
 
+/* Iterative (not recursive): the texture-application pipeline
+   (next_texture_index chaining one texture to the next) is attacker-
+   controlled via the file and was previously handled by tail recursion; walk
+   it in a loop instead to avoid unbounded C-stack growth. current_graph_material
+   is a by-value copy (not a pointer) precisely so it survives across loop
+   iterations without depending on any per-iteration stack storage. */
 int
 prc_internal_set_texture_style(prc_context *ctx, prc_file_struct_internal_global_data *global_data,
     prc_file_structure_header *header, const prc_graph_material *graph_material,
     prc_internal_graph_style *style, prc_internal_texture *internal_texture)
 {
-    int code;
-    prc_graph_texture_definition texture_def;
+    prc_graph_material current_graph_material = *graph_material;
+    prc_internal_texture *current_internal_texture = internal_texture;
+    prc_internal_graph_style *current_style = style;
+    prc_internal_graph_style dummy_style;
 
-    /* A texture can still set the material values though... */
-    style->material_type = PRC_TYPE_GRAPH_TextureApplication;
-    int32_t texture_index = graph_material->biased_texture_definition_index - 1;
-
-    if (texture_index < global_data->texture_count)
+    for (;;)
     {
-        texture_def = global_data->textures[texture_index];
-        internal_texture->texture_definition_index = texture_index;
-        internal_texture->next_texture_index = graph_material->biased_next_texture_index - 1;
-        internal_texture->uv_coordinates_index = graph_material->biased_uv_coordinates_index - 1;
-        internal_texture->material_generic_index = graph_material->biased_material_generic_index - 1;
-        internal_texture->picture_index = texture_def.biased_picture_index - 1;
-        internal_texture->wrapping_u = texture_def.texture_wrapping_mode_s; /* Repeat in u */
-        internal_texture->wrapping_v = texture_def.texture_wrapping_mode_t; /* Repeat in v */
-        internal_texture->has_texture_transform = texture_def.has_texture_transformation;
-        if (internal_texture->has_texture_transform)
+        int code;
+        prc_graph_texture_definition texture_def;
+        int32_t texture_index;
+
+        /* A texture can still set the material values though... */
+        current_style->material_type = PRC_TYPE_GRAPH_TextureApplication;
+        texture_index = current_graph_material.biased_texture_definition_index - 1;
+
+        if (texture_index < global_data->texture_count)
         {
-            code = prc_internal_set_texture_transform(ctx, &texture_def.texture_transformation,
-                internal_texture->texture_transform);
-            if (code != 0)
+            texture_def = global_data->textures[texture_index];
+            current_internal_texture->texture_definition_index = texture_index;
+            current_internal_texture->next_texture_index = current_graph_material.biased_next_texture_index - 1;
+            current_internal_texture->uv_coordinates_index = current_graph_material.biased_uv_coordinates_index - 1;
+            current_internal_texture->material_generic_index = current_graph_material.biased_material_generic_index - 1;
+            current_internal_texture->picture_index = texture_def.biased_picture_index - 1;
+            current_internal_texture->wrapping_u = texture_def.texture_wrapping_mode_s; /* Repeat in u */
+            current_internal_texture->wrapping_v = texture_def.texture_wrapping_mode_t; /* Repeat in v */
+            current_internal_texture->has_texture_transform = texture_def.has_texture_transformation;
+            if (current_internal_texture->has_texture_transform)
             {
-                return code;
+                code = prc_internal_set_texture_transform(ctx, &texture_def.texture_transformation,
+                    current_internal_texture->texture_transform);
+                if (code != 0)
+                {
+                    return code;
+                }
             }
-        }
 
-        /* Get the pointer to the image data. We probably need a image type. e.g. RGB RGBA etc */
-        if (global_data->pictures != NULL && internal_texture->picture_index > -1 &&
-            internal_texture->picture_index < global_data->picture_count)
-        {
-            internal_texture->picture_width = header->files[internal_texture->picture_index].x;
-            internal_texture->picture_height = header->files[internal_texture->picture_index].y;
-            internal_texture->num_elements_per_pixel = header->files[internal_texture->picture_index].n;
-
-            int32_t file_index = global_data->pictures[internal_texture->picture_index].biased_uncompressed_file_index - 1;
-            if (file_index > -1 && file_index < header->file_count && header->files[file_index].raw_image != NULL)
+            /* Get the pointer to the image data. We probably need a image type. e.g. RGB RGBA etc */
+            if (global_data->pictures != NULL && current_internal_texture->picture_index > -1 &&
+                current_internal_texture->picture_index < global_data->picture_count)
             {
-                internal_texture->picture_data = header->files[file_index].raw_image;
-            }
-        }
+                current_internal_texture->picture_width = header->files[current_internal_texture->picture_index].x;
+                current_internal_texture->picture_height = header->files[current_internal_texture->picture_index].y;
+                current_internal_texture->num_elements_per_pixel = header->files[current_internal_texture->picture_index].n;
 
-        /* Deal with the generic material */
-        if (internal_texture->material_generic_index > -1 &&
-            internal_texture->material_generic_index < global_data->material_count)
-        {
-            prc_api_material generic_material;
-            code = prc_internal_get_surface_material(ctx, global_data,
-                internal_texture->material_generic_index, &generic_material);
-            if (code != 0)
+                int32_t file_index = global_data->pictures[current_internal_texture->picture_index].biased_uncompressed_file_index - 1;
+                if (file_index > -1 && file_index < header->file_count && header->files[file_index].raw_image != NULL)
+                {
+                    current_internal_texture->picture_data = header->files[file_index].raw_image;
+                }
+            }
+
+            /* Deal with the generic material */
+            if (current_internal_texture->material_generic_index > -1 &&
+                current_internal_texture->material_generic_index < global_data->material_count)
             {
-                return code;
-            }
-            style->ambient_alpha = generic_material.ambient_alpha;
-            style->diffuse_alpha = generic_material.diffuse_alpha;
-            style->emissive_alpha = generic_material.emissive_alpha;
-            style->specular_alpha = generic_material.specular_alpha;
-            style->shininess = generic_material.shininess;
+                prc_api_material generic_material;
+                code = prc_internal_get_surface_material(ctx, global_data,
+                    current_internal_texture->material_generic_index, &generic_material);
+                if (code != 0)
+                {
+                    return code;
+                }
+                current_style->ambient_alpha = generic_material.ambient_alpha;
+                current_style->diffuse_alpha = generic_material.diffuse_alpha;
+                current_style->emissive_alpha = generic_material.emissive_alpha;
+                current_style->specular_alpha = generic_material.specular_alpha;
+                current_style->shininess = generic_material.shininess;
 
-            memcpy(style->ambient_color, generic_material.ambient, 3 * sizeof(float));
-            memcpy(style->diffuse_color, generic_material.diffuse, 3 * sizeof(float));
-            memcpy(style->emissive_color, generic_material.emissive, 3 * sizeof(float));
-            memcpy(style->specular_color, generic_material.specular, 3 * sizeof(float));
+                memcpy(current_style->ambient_color, generic_material.ambient, 3 * sizeof(float));
+                memcpy(current_style->diffuse_color, generic_material.diffuse, 3 * sizeof(float));
+                memcpy(current_style->emissive_color, generic_material.emissive, 3 * sizeof(float));
+                memcpy(current_style->specular_color, generic_material.specular, 3 * sizeof(float));
+            }
+            else
+            {
+                return PRC_ERROR_PARSE;
+            }
         }
         else
         {
             return PRC_ERROR_PARSE;
         }
-    }
-    else
-    {
-        return PRC_ERROR_PARSE;
-    }
 
-    /* We may have a pipeline going on here. Recursive method */
-    if (internal_texture->next_texture_index >= 0)
-    {
+        /* We may have a pipeline going on here. */
+        if (current_internal_texture->next_texture_index < 0)
+        {
+            return 0;
+        }
+
         /* Multiple texture case. We are setup right now to
            just deal with two of these */
-        uint8_t next_is_texture;
-        uint8_t next_is_material;
-        float next_color[4];
-        prc_internal_graph_style dummy_style;
-        prc_graph_material next_graph_material = global_data->materials[internal_texture->next_texture_index];
-
-        internal_texture->next_texture = (prc_internal_texture *)prc_calloc(ctx, 1, sizeof(prc_internal_texture));
-        if (internal_texture->next_texture == NULL)
+        current_internal_texture->next_texture = (prc_internal_texture *)prc_calloc(ctx, 1, sizeof(prc_internal_texture));
+        if (current_internal_texture->next_texture == NULL)
         {
             return PRC_API_ERROR_MEMORY;
         }
-        code = prc_internal_set_texture_style(ctx, global_data, header, &next_graph_material,
-                                              &dummy_style, internal_texture->next_texture);
-        if (code < 0)
-        {
-            return code;
-        }
-    }
 
-    return 0;
+        current_graph_material = global_data->materials[current_internal_texture->next_texture_index];
+        current_internal_texture = current_internal_texture->next_texture;
+        current_style = &dummy_style;
+    }
 }
 
 int

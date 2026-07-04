@@ -609,44 +609,101 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
     return 0;
 }
 
-/* There can be multiple xrefs each referenced by the \Prev entry of the current
-   xref. Recurse through them. */
+/* No legitimate PDF has anywhere near this many incremental-update xref
+   sections; this exists purely to bound the /Prev chain walk below against a
+   crafted file. */
+#define PRC_PDF_MAX_XREF_CHAIN 4096
+
+/* There can be multiple xrefs each referenced by the \Prev entry of the
+   current xref. Walk them iteratively (not recursively): /Prev is an
+   attacker-controlled offset with no relation to prior ones, so a crafted
+   file could otherwise build a cycle (A -> B -> A) causing infinite
+   recursion, or simply a very long chain driving stack depth proportional to
+   file size. The heap-allocated offsets array also gives us cycle detection
+   and a chain-length cap for free, which the recursive form did not have. */
 int
 pdf_count_xref_sections(prc_context *ctx, uint8_t *pdf_buff_in,
     uint32_t xref_offset, uint32_t size_in, uint32_t *num_xrefs,
     uint32_t **xref_offsets)
 {
-    int code;
     uint8_t *file_end = pdf_buff_in + size_in;
-    uint32_t prev_offset;
-    uint8_t *ptr = pdf_buff_in + xref_offset;
-    uint32_t current_num_xrefs = *num_xrefs;
+    uint32_t capacity = (*num_xrefs > 0) ? *num_xrefs : 1;
+    uint32_t count = 0;
+    uint32_t current_offset = xref_offset;
+    uint32_t *offsets;
 
-    code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_PREV_NAME,
-        PDF_PREV_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &prev_offset);
-    if (code < 0)
+    offsets = (uint32_t *)prc_calloc(ctx, capacity, sizeof(uint32_t));
+    if (offsets == NULL)
     {
-        *xref_offsets = (uint32_t *)prc_calloc(ctx, current_num_xrefs, sizeof(uint32_t));
-        if (*xref_offsets == NULL)
-        {
-            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate xref_offsets\n");
-            return PRC_ERROR_MEMORY;
-        }
-        (*xref_offsets)[current_num_xrefs - 1] = xref_offset;
+        prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate xref_offsets\n");
+        return PRC_ERROR_MEMORY;
     }
-    else
+
+    for (;;)
     {
-        /* Recursive */
-        *num_xrefs = current_num_xrefs + 1;
-        code = pdf_count_xref_sections(ctx, pdf_buff_in, prev_offset,
-            size_in, num_xrefs, xref_offsets);
+        uint32_t prev_offset;
+        uint32_t k;
+        int code;
+        uint8_t *ptr;
+
+        /* Cycle guard: reject a /Prev chain that revisits an offset. */
+        for (k = 0; k < count; k++)
+        {
+            if (offsets[k] == current_offset)
+            {
+                prc_error(ctx, PRC_ERROR_PDF, "Cyclic /Prev chain in PDF xref\n");
+                prc_free(ctx, offsets);
+                return PRC_ERROR_PDF;
+            }
+        }
+
+        if (count >= PRC_PDF_MAX_XREF_CHAIN)
+        {
+            prc_error(ctx, PRC_ERROR_PDF, "/Prev xref chain too long in PDF\n");
+            prc_free(ctx, offsets);
+            return PRC_ERROR_PDF;
+        }
+
+        if (count >= capacity)
+        {
+            uint32_t *new_offsets;
+            capacity *= 2;
+            new_offsets = (uint32_t *)prc_realloc(ctx, offsets, capacity * sizeof(uint32_t));
+            if (new_offsets == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed to grow xref_offsets\n");
+                prc_free(ctx, offsets);
+                return PRC_ERROR_MEMORY;
+            }
+            offsets = new_offsets;
+        }
+
+        offsets[count] = current_offset;
+        count++;
+
+        /* /Prev is file-supplied with no other validation; bound it against
+           the buffer before dereferencing at that offset. */
+        if (current_offset >= size_in)
+        {
+            prc_error(ctx, PRC_ERROR_PDF, "Invalid xref offset in PDF\n");
+            prc_free(ctx, offsets);
+            return PRC_ERROR_PDF;
+        }
+
+        ptr = pdf_buff_in + current_offset;
+        code = pdf_get_integer_prc(ctx, ptr, file_end, (uint8_t *)PDF_PREV_NAME,
+            PDF_PREV_NAME_LEN, (uint8_t *)PDF_STREAM_NAME, PDF_STREAM_NAME_LEN, &prev_offset);
         if (code < 0)
         {
-            return code;
+            /* No /Prev -- this was the last (oldest) xref section. */
+            break;
         }
-        /* Now add this offset */
-        (*xref_offsets)[current_num_xrefs - 1] = xref_offset;
+
+        current_offset = prev_offset;
     }
+
+    *xref_offsets = offsets;
+    *num_xrefs = count;
     return 0;
 }
 

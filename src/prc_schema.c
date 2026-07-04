@@ -65,19 +65,27 @@ find_dict_entry(prc_context *ctx, uint32_t key, schema_dict *dict)
     return SCHEMA_DICT_ENTRY_NOTFOUND;
 }
 
+#define PRC_SKIP_TOKENS_RECURSION_MAX 4096
+
 /* Used to skip over sections in the conditional clauses. This is tricky
    and care must be taken */
 static int
-skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
+skip_tokens(prc_context * ctx, uint32_t *codes, int offset, int depth)
 {
-    /* If we are pointing at a block or block version skip 
+    if (depth > PRC_SKIP_TOKENS_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_SCHEMA_ERROR, "skip_tokens recursion depth exceeded\n");
+        return PRC_SCHEMA_ERROR;
+    }
+
+    /* If we are pointing at a block or block version skip
        including the end.  Other wise just skip the next command */
     if (codes[offset] == EPRCSchema_Block_Version)
     {
         offset = offset + 2; /* Skip the version number too */
         while (codes[offset] != EPRCSchema_Block_End)
         {
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -92,7 +100,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
         offset = offset + 1;
         while (codes[offset] != EPRCSchema_Block_End)
         {
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -126,7 +134,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
             return offset + 1;
 
         case EPRCSchema_If:
-            offset = skip_tokens(ctx, codes, offset + 1);
+            offset = skip_tokens(ctx, codes, offset + 1, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -134,7 +142,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
             }
 
             /* Now skip the value that the if statement would have executed */
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -144,7 +152,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
             /* Check for presence of else */
             if (codes[offset] == EPRCSchema_Else)
             {
-                offset = skip_tokens(ctx, codes, offset + 1);
+                offset = skip_tokens(ctx, codes, offset + 1, depth + 1);
                 return offset;
             }
             else
@@ -163,7 +171,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
 
         case EPRCSchema_Value_DeclareAndSet:
         case EPRCSchema_Value_Set:
-            offset = skip_tokens(ctx, codes, offset + 2);
+            offset = skip_tokens(ctx, codes, offset + 2, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -172,7 +180,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
             return offset;
 
         case EPRCSchema_SimpleFor:
-            offset = skip_tokens(ctx, codes, offset + 1);
+            offset = skip_tokens(ctx, codes, offset + 1, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -191,13 +199,13 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset)
         case EPRCSchema_Operator_ADD:
         case EPRCSchema_Operator_DIV:
         case EPRCSchema_Operator_MULT:
-            offset = skip_tokens(ctx, codes, offset + 1);
+            offset = skip_tokens(ctx, codes, offset + 1, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
                 return offset;
             }
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
@@ -276,15 +284,30 @@ get_integer(prc_context *ctx, prc_schema_read *data_read, int32_t *value)
     return 0;
 }
 
+#define PRC_SCHEMA_INSTRUCTION_RECURSION_MAX 4096
+
 /* Execute the token */
 static int
 prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
     uint32_t *codes, int offset, prc_schema_read *data_read,
-    schema_dict **variable_dict, prc_schema_read *parent_read)
+    schema_dict **variable_dict, prc_schema_read *parent_read, int depth)
 {
     int code;
     uint32_t key;
     schema_dict *dict_entry;
+
+    /* This is a recursive-descent evaluator over the schema token stream;
+       nested expressions/blocks are attacker-controlled via token_count, so
+       cap the depth instead of letting it grow unbounded. Kept as recursion
+       (rather than a full heap-based rewrite) since this is a many-case
+       expression evaluator where only the depth, not the mechanism, needed
+       fixing -- same tradeoff as prc_parse_ri/prc_parse_topo elsewhere in
+       this codebase. */
+    if (depth > PRC_SCHEMA_INSTRUCTION_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_SCHEMA_ERROR, "prc_execute_schema_instruction recursion depth exceeded\n");
+        return PRC_SCHEMA_ERROR;
+    }
     double val1, val2;
     int32_t intval;
     uint32_t vers;
@@ -435,7 +458,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
     case EPRCSchema_For:
         /* First get the number of times to execute the loop. */
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                                data_read, variable_dict, parent_read);
+                                                data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_For\n");
@@ -452,7 +475,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
             data_read->loop_value = k;
             offset = curr_offset;
             offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                                    data_read, variable_dict, parent_read);
+                                                    data_read, variable_dict, parent_read, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_For\n");
@@ -475,7 +498,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
                 data_read->loop_value = kk;
                 offset = curr_offset;
                 offset = prc_execute_schema_instruction(ctx, bit_state, codes,
-                                  offset, data_read, variable_dict, parent_read);
+                                  offset, data_read, variable_dict, parent_read, depth + 1);
                 if (offset < 0)
                 {
                     prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_SimpleFor\n");
@@ -489,7 +512,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
     case EPRCSchema_If:
         /* Execute the next operator which should return a boolean */
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_If\n");
@@ -504,7 +527,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         {
             /* Execute the if statement */
             offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_If\n");
@@ -515,7 +538,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
             if (codes[offset] == EPRCSchema_Else)
             {
                 /* Skip the else and what the else executes */
-                offset = skip_tokens(ctx, codes, offset + 1);
+                offset = skip_tokens(ctx, codes, offset + 1, 0);
             }
         }
         else
@@ -523,14 +546,14 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
             /* We need to check if there is an else statement. But first we
                need to skip any instructions that are remaining in the if clause */
             /* Skip the if tokens */
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, 0);
             
             /* Check for else */
             if (codes[offset] == EPRCSchema_Else)
             {
                 /* Execute the else statement */
                 offset = prc_execute_schema_instruction(ctx, bit_state, codes,
-                             offset + 1, data_read, variable_dict, parent_read);
+                             offset + 1, data_read, variable_dict, parent_read, depth + 1);
                 if (offset < 0)
                 {
                     prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_If\n");
@@ -551,7 +574,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         while (codes[offset] != EPRCSchema_Block_End)
         {
             offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Block_Start\n");
@@ -572,7 +595,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
             while (codes[offset] != EPRCSchema_Block_End)
             {
                 offset = prc_execute_schema_instruction(ctx, bit_state, codes,
-                                  offset, data_read, variable_dict, parent_read);
+                                  offset, data_read, variable_dict, parent_read, depth + 1);
                 if (offset < 0)
                 {
                     prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Block_Version\n");
@@ -591,7 +614,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         else
         {
-            offset = skip_tokens(ctx, codes, offset);
+            offset = skip_tokens(ctx, codes, offset, 0);
 
             /* skip_tokens will skip any block end command */
             return offset;
@@ -640,7 +663,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         {
             /* Now execute the next code to get the value */
             offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 2,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
             if (offset < 0)
             {
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Value_Set\n");
@@ -693,7 +716,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
         /* Now execute the next code to get the value */
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 2,
-                                           data_read, variable_dict, parent_read);
+                                           data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Value_DeclareAndSet\n");
@@ -765,7 +788,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_MULT:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                           data_read, variable_dict, parent_read);
+                                           data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_MULT\n");
@@ -773,7 +796,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_MULT\n");
@@ -786,7 +809,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_DIV:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_DIV\n");
@@ -794,7 +817,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                           data_read, variable_dict, parent_read);
+                                           data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_DIV\n");
@@ -812,7 +835,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_ADD:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_ADD\n");
@@ -820,7 +843,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_ADD\n");
@@ -833,7 +856,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_SUB:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_SUB\n");
@@ -841,7 +864,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_SUB\n");
@@ -854,7 +877,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_LT:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                             data_read, variable_dict, parent_read);
+                                             data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_LT\n");
@@ -862,7 +885,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_LT\n");
@@ -875,7 +898,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_LE:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_LE\n");
@@ -883,7 +906,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_LE\n");
@@ -896,7 +919,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_GT:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_GT\n");
@@ -904,7 +927,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_GT\n");
@@ -917,7 +940,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_GE:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_GE\n");
@@ -925,7 +948,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                           data_read, variable_dict, parent_read);
+                                           data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_GE\n");
@@ -938,7 +961,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_EQ:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                             data_read, variable_dict, parent_read);
+                                             data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_EQ\n");
@@ -946,7 +969,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                           data_read, variable_dict, parent_read);
+                                           data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_EQ\n");
@@ -959,7 +982,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
 
     case EPRCSchema_Operator_NEQ:
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset + 1,
-                                            data_read, variable_dict, parent_read);
+                                            data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_NEQ\n");
@@ -967,7 +990,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
         }
         get_double(ctx, data_read, &val1);
         offset = prc_execute_schema_instruction(ctx, bit_state, codes, offset,
-                                          data_read, variable_dict, parent_read);
+                                          data_read, variable_dict, parent_read, depth + 1);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with EPRCSchema_Operator_NEQ\n");
@@ -1025,7 +1048,7 @@ prc_execute_schema(prc_context *ctx, prc_bit_state *bit_state,
     for (offset = 0; offset < schema->token_count;)
     {
         offset = prc_execute_schema_instruction(ctx, bit_state, schema->schema_tokens,
-                                      offset, &data_read, &variable_dict, &parent_read);
+                                      offset, &data_read, &variable_dict, &parent_read, 0);
         if (offset < 0)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error with prc_execute_schema_instruction\n");

@@ -22,7 +22,16 @@
 
 #define DEBUG_TREE 0
 
-static int prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data);
+/* prc_parse_ri and prc_parse_ri_set are mutually recursive (a RI can wrap a
+   nested RI, and an RI_Set contains an array of RIs, each of which can again
+   be an RI_Set). Both nestings are attacker-controlled via the file, so cap
+   the depth to avoid unbounded C-stack recursion. */
+#define PRC_RI_RECURSION_MAX 256
+/* prc_parse_mkp_annotation_set_notag self-recurses on nested annotation
+   sets, also attacker-controlled nesting depth. */
+#define PRC_MKP_ANNOTATION_SET_RECURSION_MAX 256
+
+static int prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth);
 
 /* Table 117 */
 static int
@@ -189,7 +198,7 @@ prc_parse_ri_poly_wire(prc_context *ctx, prc_bit_state *bit_state, prc_ri_poly_w
 
 /* Table 124 */
 static int
-prc_parse_ri_set(prc_context *ctx, prc_bit_state *bit_state, prc_ri_set *data)
+prc_parse_ri_set(prc_context *ctx, prc_bit_state *bit_state, prc_ri_set *data, int depth)
 {
     uint32_t k;
     int code;
@@ -208,7 +217,7 @@ prc_parse_ri_set(prc_context *ctx, prc_bit_state *bit_state, prc_ri_set *data)
 
         for (k = 0; k < data->number_of_items; k++)
         {
-            code = prc_parse_ri(ctx, bit_state, &data->rep_items[k]);
+            code = prc_parse_ri(ctx, bit_state, &data->rep_items[k], depth + 1);
             if (code < 0)
             {
                 prc_error(ctx, code, "Parsing error in prc_parse_ri_set\n");
@@ -257,9 +266,19 @@ prc_parse_ri_coordinate_system(prc_context *ctx, prc_bit_state *bit_state, prc_r
 
 /* TODO prc_execute_schema_instruction on these... */
 static int
-prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data)
+prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth)
 {
     int code;
+
+    /* prc_parse_ri and prc_parse_ri_set are mutually recursive on file-
+       controlled nesting (a nested RepresentationalItem, or an RI_Set whose
+       items can themselves be RI_Sets); cap the depth instead of letting it
+       grow unbounded. */
+    if (depth > PRC_RI_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "prc_parse_ri recursion depth exceeded\n");
+        return PRC_ERROR_PARSE;
+    }
 
     /* Read the tag to see what we have */
     data->representation_type = prc_bitread_uint32(ctx, bit_state);
@@ -282,7 +301,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data)
             prc_error(ctx, PRC_ERROR_MEMORY, "Parsing error in prc_parse_ri\n");
             return PRC_ERROR_MEMORY;
         }
-        code = prc_parse_ri(ctx, bit_state, data->ri_rep_item);
+        code = prc_parse_ri(ctx, bit_state, data->ri_rep_item, depth + 1);
         if (code < 0)
         {
             prc_error(ctx, code, "Parsing error in prc_parse_ri\n");
@@ -411,7 +430,7 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data)
         }
         data->ri_set->tag = data->representation_type;
         data->ri_set->item_content = data->item_content;
-        code = prc_parse_ri_set(ctx, bit_state, data->ri_set);
+        code = prc_parse_ri_set(ctx, bit_state, data->ri_set, depth + 1);
         if (code < 0)
         {
             prc_error(ctx, code, "Parsing error in prc_parse_ri_set\n");
@@ -778,10 +797,19 @@ prc_parse_mkp_annotation_ref_notag(prc_context *ctx, prc_bit_state *bit_state, p
 
 /* Table 134 */
 static int
-prc_parse_mkp_annotation_set_notag(prc_context *ctx, prc_bit_state *bit_state, prc_type_mkp_annotation_set *data)
+prc_parse_mkp_annotation_set_notag(prc_context *ctx, prc_bit_state *bit_state,
+    prc_type_mkp_annotation_set *data, int depth)
 {
     int code;
     uint32_t k;
+
+    /* Nested annotation sets are attacker-controlled via the file; cap the
+       depth instead of letting it grow unbounded. */
+    if (depth > PRC_MKP_ANNOTATION_SET_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "prc_parse_mkp_annotation_set_notag recursion depth exceeded\n");
+        return PRC_ERROR_PARSE;
+    }
 
     code = prc_parse_base_with_graphics(ctx, bit_state, false, NULL, &data->base);
     if (code < 0)
@@ -821,7 +849,7 @@ prc_parse_mkp_annotation_set_notag(prc_context *ctx, prc_bit_state *bit_state, p
 
             case PRC_TYPE_MKP_AnnotationSet:
                 data->annotations[k].set.tag = tag;
-                code = prc_parse_mkp_annotation_set_notag(ctx, bit_state, &data->annotations[k].set);
+                code = prc_parse_mkp_annotation_set_notag(ctx, bit_state, &data->annotations[k].set, depth + 1);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Parsing error in prc_parse_mkp_annotation_set_notag\n");
@@ -1028,7 +1056,7 @@ prc_parse_markup_data(prc_context *ctx, prc_bit_state *bit_state, prc_markup_dat
 
             case PRC_TYPE_MKP_AnnotationSet:
                 data->annotation_entities[k].set.tag = data->annotation_entities[k].tag;
-                code = prc_parse_mkp_annotation_set_notag(ctx, bit_state, &data->annotation_entities[k].set);
+                code = prc_parse_mkp_annotation_set_notag(ctx, bit_state, &data->annotation_entities[k].set, 0);
                 if (code < 0)
                 {
                     prc_error(ctx, code, "Parsing error in prc_parse_mkp_annotation_set_notag\n");
@@ -1837,7 +1865,7 @@ prc_parse_parts(prc_context *ctx, prc_bit_state *bit_state, prc_asm_parts_defini
 
         for (k = 0; k < data->num_rep_items; k++)
         {
-            code = prc_parse_ri(ctx, bit_state, &data->rep_items[k]);
+            code = prc_parse_ri(ctx, bit_state, &data->rep_items[k], 0);
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_parse_ri\n");
