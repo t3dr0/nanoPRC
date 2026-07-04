@@ -24,3 +24,4 @@ __pycache__/
 docs/doxygen/html/
 docs/doxygen/xml-public/
 docs/doxygen/*.log
+CLAUDE.md
