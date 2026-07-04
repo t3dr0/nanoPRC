@@ -23,7 +23,7 @@
 #include "prc_parse_common.h"
 
 /* Test code for many of the reading and writing methods */
-static uint8_t* 
+static uint8_t*
 add_bit_in_array(prc_context *ctx, uint8_t *pbBitArray, uint8_t bValue, unsigned *uMaxSize, unsigned *uSize)
 {
     if (*uSize == *uMaxSize)
@@ -173,11 +173,11 @@ huffman_tree_calculation(prc_context *ctx, unsigned char* pcArray, unsigned int 
         return PRC_ERROR_MEMORY;
     }
 
-    /* Now make a priority queue that consists of prc_huff_node objects.  We will combine 
+    /* Now make a priority queue that consists of prc_huff_node objects.  We will combine
        the two least frequent into a new node, assign its freq. as the sum of the two
        and place it back in the queue and its appropriate location.  In the PRC spec,
        only the leave values are stored along with their code and code length. A decoder
-       tree, must be constructed from this information and used to decode the incoming data stream */ 
+       tree, must be constructed from this information and used to decode the incoming data stream */
     /* Initialize */
     curr_node = &node_bank[0];
     curr_node->is_leaf = true;
@@ -464,7 +464,7 @@ void
 write_boolean(uint8_t val, prc_bit_state *state)
 {
     write_bits(val, 1, state);
-    
+
 }
 
 void
@@ -574,7 +574,7 @@ get_number_bits_to_store_unsigned_integer2(unsigned int  uValue)
     return uNbBit;
 }
 
-void 
+void
 write_character(uint8_t data, prc_bit_state *state)
 {
     uint32_t k;
@@ -583,7 +583,7 @@ write_character(uint8_t data, prc_bit_state *state)
     for (k = 0; k < 8; k++)
     {
         val = data & (1 << (7 - k));
-        
+
         if (val == 0)
             write_bits(0, 1, state);
         else
@@ -596,7 +596,7 @@ write_character(uint8_t data, prc_bit_state *state)
  * implementation.  The value Numberofbits_used_in_last_integer
  * is not defined, nor set.  And the method WriteUncompressedUnsignedInteger
  * is not defined.  Nor is HuffmanCompression(); */
-int 
+int
 write_character_array(prc_context *ctx,
     unsigned char* pcArray, unsigned int uCharArraySize,
     unsigned int uBitNumber, uint8_t bWriteCompressStrategy,

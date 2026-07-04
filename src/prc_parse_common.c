@@ -160,7 +160,7 @@ prc_parse_3d_transform(prc_context *ctx, prc_bit_state *bit_state, prc_trans_3d 
     {
         data->translation = prc_parse_3d_vector(ctx, bit_state);
     }
- 
+
     if (data->behavior & PRC_TRANSFORMATION_NonOrtho)
     {
         data->non_ortho_matrix[0] = prc_parse_3d_vector(ctx, bit_state);
@@ -502,7 +502,7 @@ static int
 prc_parse_attribute_key_values(prc_context *ctx, prc_bit_state *bit_state, prc_attribute_key_value *data)
 {
     int code;
-    
+
     code = prc_get_attribute_title(ctx, bit_state, &data->title);
     if (code < 0)
     {
@@ -578,7 +578,7 @@ prc_parse_attribute_data(prc_context *ctx, prc_bit_state *bit_state, prc_attribu
             data->attributes[k].number_attributes = prc_bitread_uint32(ctx, bit_state);
             if (data->attributes[k].number_attributes > 0)
             {
-                data->attributes[k].attributes = 
+                data->attributes[k].attributes =
                     (prc_attribute_key_value *)prc_calloc(ctx, data->attributes[k].number_attributes,
                         sizeof(prc_attribute_key_value));
                 if (data->attributes == NULL)
@@ -671,9 +671,9 @@ prc_parse_representation_item_content(prc_context *ctx, prc_bit_state *bit_state
     return 0;
 }
 
-/* Returns < 0 if a mismatch occurs. Returns 0 if tag is OK and no schema present, Returns > 0 if schema present and 
+/* Returns < 0 if a mismatch occurs. Returns 0 if tag is OK and no schema present, Returns > 0 if schema present and
    returns the schema index + 1 (biased value). */
-int 
+int
 prc_read_check_tag(prc_context *ctx, prc_bit_state *bit_state, prc_unsigned_int expected_tag, prc_unsigned_int *read_tag)
 {
     prc_schema *schema = ctx->internal.schema;
@@ -686,7 +686,7 @@ prc_read_check_tag(prc_context *ctx, prc_bit_state *bit_state, prc_unsigned_int 
     }
 
     if (schema != NULL)
-    { 
+    {
         uint32_t k;
         uint32_t schema_count = schema->schema_count;
 
@@ -996,7 +996,7 @@ prc_parse_math_fct_3d_linear(prc_context *ctx, prc_bit_state *bit_state,
     {
         data->tag = PRC_TYPE_MATH_FCT_3D_Linear;
     }
-    
+
     for (uint32_t k = 0; k < 9; k++)
     {
         data->mat[k] = prc_bitread_double(ctx, bit_state);

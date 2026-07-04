@@ -567,7 +567,7 @@ prc_parse_main_header(prc_context *ctx, uint8_t *buff)
     ptr = prc_read_uniqueid(ctx, ptr, &header->unique_id_file);
     ptr = prc_read_uniqueid(ctx, ptr, &header->unique_id_application);
     ptr = prc_read_32bits_unsigned(ctx, ptr, &header->filestructure_count);
-    
+
     if (header->filestructure_count > 0)
     {
         header->file_info = prc_create_file_struct_array(ctx, header->filestructure_count);
@@ -685,7 +685,7 @@ prc_open_contents(prc_context *ctx, const char* infile)
     size_read = fread(buff, 1, size, fid);
     fclose(fid);
 
-    /* Determine if this is a PDF or a PRC file */ 
+    /* Determine if this is a PDF or a PRC file */
     if (buff[0] != 'P' && buff[1] != 'R' && buff[2] != 'C')
     {
         /* Not a PRC file. Check if it is a PDF file */
@@ -882,11 +882,11 @@ prc_open_contents(prc_context *ctx, const char* infile)
                     }
                     else
                     {
-                        /* The items are supposed to be in the order that they 
+                        /* The items are supposed to be in the order that they
                            are given in Table 6. I have a table that has a tag
                            type encoded as 30651 Very odd
                            as 306 is PRC_TYPE_ASM_FileStructureGeometry and that
-                           is the position that this section is.  Does one 
+                           is the position that this section is.  Does one
                            throw an error or move on. */
                         type = prc_bitread_uint32(ctx, &bit_state);
 

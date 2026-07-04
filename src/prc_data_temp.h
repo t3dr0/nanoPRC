@@ -1098,7 +1098,7 @@ struct prc_type_asm_file_struct_internal_data_s
     prc_unsigned_int index_product_occurrence;
 };
 
-/* Table 92 � prc_graph_material AND Table 95 PRC_TYPE_GRAPH_TextureApplication 
+/* Table 92 � prc_graph_material AND Table 95 PRC_TYPE_GRAPH_TextureApplication
    Turns out both of these types can occur in the materials. Grumble. */
 struct prc_graph_material_s
 {
@@ -1515,7 +1515,7 @@ struct prc_graph_camera_s
     double clip_near;
     double clip_far;
     double zoom;
-}; 
+};
 
 /* Table 113 � PRC_TYPE_GRAPH_SceneDisplayParameters */
 struct prc_scene_display_parameters_s

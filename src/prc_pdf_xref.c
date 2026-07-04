@@ -415,7 +415,7 @@ prc_pdf_xref_stream_parse(prc_context *context, prc_pdf_head_xref *xref,
 
     *num_content_streams = 0;
 
-    if (context == NULL || xref == NULL || data == NULL || byte_widths == NULL || 
+    if (context == NULL || xref == NULL || data == NULL || byte_widths == NULL ||
         byte_widths[0] < 1 || byte_widths[1] < 1)
     {
         return PRC_ERROR_PDF;

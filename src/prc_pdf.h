@@ -561,7 +561,7 @@ typedef enum
     PRC_PDF_PREDICTOR_PNG_OPTIM = 15
 } prc_pdf_stream_predictor_t;
 
-/* Encryption related material */ 
+/* Encryption related material */
 struct CRYPT_sha2_context_s {
     uint64_t total_bytes;
     uint64_t state[8];

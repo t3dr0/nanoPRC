@@ -527,7 +527,7 @@ prc_pdf_dict_get_type(prc_context *ctx, uint8_t *input_buffer, uint8_t *buffer_e
     return found_key;
 }
 
-/* Get a hex string. These are delimited by < and >. Read in two  hex characters at a time 
+/* Get a hex string. These are delimited by < and >. Read in two  hex characters at a time
    and merge them into a single entry */
 int
 prc_pdf_dict_get_hexstring(prc_context *ctx, uint8_t *input_buffer, uint8_t *buffer_end,

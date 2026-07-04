@@ -72,7 +72,7 @@ void
 prc_release_context(prc_context *ctx)
 {
     if (ctx != NULL)
-    {   
+    {
         if (ctx->exception != NULL)
         {
             prc_exception *curr = ctx->exception;

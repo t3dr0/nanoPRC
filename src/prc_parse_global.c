@@ -644,7 +644,7 @@ prc_parse_graph_textures(prc_context *ctx, prc_bit_state *bit_state, prc_graph_t
         }
     }
 
-    /* blend_des_rgb and blend_des_alpha are mentioned above the table but not in 
+    /* blend_des_rgb and blend_des_alpha are mentioned above the table but not in
        the table.  Turns out there is a dependency on the read */
     data->blend_src_rgb = prc_bitread_int32(ctx, bit_state);
     if (data->blend_src_rgb != 0)

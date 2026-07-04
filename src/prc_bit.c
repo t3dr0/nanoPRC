@@ -181,7 +181,7 @@ prc_debug_stream(prc_context *ctx, prc_bit_state *bit_state)
 
         //PRC_TYPE_GRAPH_Material
         //PRC_TYPE_GRAPH_TextureTransformation
-        
+
         if (value2 == PRC_TYPE_TOPO_Connex ||
             value2 == PRC_TYPE_TOPO_Shell ||
             value2 == PRC_TYPE_TOPO_Face ||
@@ -411,7 +411,7 @@ prc_bitread_string(prc_context *ctx, prc_bit_state *state, prc_string* string)
     return 0;
 }
 
-float 
+float
 prc_bitread_float(prc_context *ctx, prc_bit_state *state)
 {
     union float_uint val;
@@ -540,7 +540,7 @@ static prc_huff_node*
 prc_new_huff_node(prc_context *ctx)
 {
     prc_huff_node *node = (prc_huff_node*)prc_malloc(ctx, sizeof(prc_huff_node));
-    
+
     if (node == NULL)
     {
         return NULL;
@@ -550,30 +550,30 @@ prc_new_huff_node(prc_context *ctx)
     node->left = NULL;
     node->right = NULL;
     node->next = NULL;
-    
+
     return node;
 }
 
 /* Huffman decoder. Can be used to decode data of different bit lengths on the leaves.
 *  This particular implemenation can support char (1 byte) or short (2 byte) arrays
-*  as input to the encoder, and compresses them using a number of bits that depends 
+*  as input to the encoder, and compresses them using a number of bits that depends
 *  upon the maximum value that the array contains.  This number of bits used,
 *  is specified by the data type. For example, for the Edge_status_array the number
 *  is equal to 2.  In that case, it is writing out a character array each with 2 bits
-*  per character.  normal_angle_array is a shortarray with 16bits per character.  
+*  per character.  normal_angle_array is a shortarray with 16bits per character.
 *  This decoder, always returns data of uint32_t but data could have been smaller when compressed.
 *  The characterArray, shortArray, character_array_compressed
-* 
+*
 *  Here is some types and bit sizes that the spec says:
-* 
-*  CharacterArray 
+*
+*  CharacterArray
 *  point_color_array --> CharacterArray  8 bits.  Is it compressed?
 *  behaviors_array --> CharacterArray 8 bits.  Is it compressed?
 *  edge_status_array --> CharacterArray with 2 bits per character. Is it huffman compressed?
 *  character_array (character_array_compressed) 6 bits.  I guess if a character array is compressed it uses 6 bits.
 *  point_reference_array --> CompressedIndiceArray.  An odd one with the flag of it being compressed specified if number_of_reference_points >= 3 is from CompressedIndiceArray type.
 *  normal_angle_array (normal_angle_array_compressed) optionally compressed using normal_angle_number_of_bits.  Is should be lower than 16 and set to 10 for good performance
-* 
+*
 * ShortArray
 * normal_angle_array, line_attribute_array, line_attribute_array  --> is compressed bit will tell if data is compressed and using huffman. But what is the number of bits used?
 *
@@ -699,7 +699,7 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
         num_bits_read += code_length[k];
     }
 
-    /* Allocate an array to hold all the nodes of the tree in a linear list 
+    /* Allocate an array to hold all the nodes of the tree in a linear list
        to make deallocation easier */
     linear_list_capacity = PRC_HUFFMAN_INITIAL_NODES;
     linear_list = (prc_huff_node **)prc_calloc(ctx, linear_list_capacity, sizeof(prc_huff_node *));
@@ -1246,7 +1246,7 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
             data[k] = prc_bitread_uint8(ctx, state);
         }
         return data;
-    }   
+    }
     return NULL;
 }
 
@@ -1364,7 +1364,7 @@ prc_bitread_compressed_entity_type(prc_context *ctx, prc_bit_state *state,
             /* Read the next two bits */
             bit2 = prc_bitread_bit(ctx, state);
             bit3 = prc_bitread_bit(ctx, state);
-            
+
             if (bit2 != 0)
             {
                 prc_error(ctx, PRC_ERROR_PARSE, "Unknown entity type %d in prc_bit_read_compressed_entity_type\n", value);
@@ -1550,9 +1550,9 @@ prc_bitread_compressed_indice_array(prc_context *ctx, prc_bit_state *state,
     if (data == NULL)
         return NULL;
 
-    /* This is not clear in the spec bit lengths must be less than 32 which 
+    /* This is not clear in the spec bit lengths must be less than 32 which
        is 1 for the sign bit and 31 for the unsignedinteger.  Make sure we
-       are less than 32. If not, then the encoding is negative??? Looking 
+       are less than 32. If not, then the encoding is negative??? Looking
        carefully at this these are always 6 bits.  If they are negative
        the sixth bit (32) is set.  In that case, or this with 0xC0 to get
        the proper negative number */

@@ -457,7 +457,7 @@ pdf_parse_text_prc(prc_context *ctx, uint32_t length, uint8_t *ptr_in,
     }
     count = count + 2;
 
-    /* Read the characters into a string until we get to ) 
+    /* Read the characters into a string until we get to )
        But this is only the case if we dont know the length */
     while (!(*ptr_temp == ')' || (length != 0 && count == length)))
     {
@@ -2681,7 +2681,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         goto fail;
     }
 
-    code = pdf_get_file_id(ctx, pdf_buff_in, size_in, decrypt_params.file_id, 
+    code = pdf_get_file_id(ctx, pdf_buff_in, size_in, decrypt_params.file_id,
                            &decrypt_params.file_id_length);
     if (code < 0)
     {
@@ -2896,7 +2896,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         }
     }
 
-    /* Now we have the offset to the PRC object, we need to get the buffer from 
+    /* Now we have the offset to the PRC object, we need to get the buffer from
        stream to endstream */
     ptr = pdf_buff_in + prc_offset;
     code = pdf_get_stream_info(ctx, ptr, file_end, &ptr_stream, &stream_length,
@@ -2910,7 +2910,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     /* This is an interesting one. I have seen cases there the PRC stream
        is encrypted and cases where it is not. Why bother encrypting the
        thing as already crazy. In any event look for the PRC header in the
-       stream code. If present, assume it is not encrypted even if the 
+       stream code. If present, assume it is not encrypted even if the
        streams are supposedly encrypted. */
     if (stream_length > PDF_PRC_STREAM_HEADER_LEN &&
         strncmp((const char *)ptr_stream, PDF_PRC_STREAM_HEADER, PDF_PRC_STREAM_HEADER_LEN) == 0)

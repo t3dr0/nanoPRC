@@ -217,7 +217,7 @@ typedef struct prc_api_entity_ref_s
     uint32_t file_index;
 } prc_api_entity_ref;
 
-/* A rep item can have a rep item. For example, an RI SET type has rep items. 
+/* A rep item can have a rep item. For example, an RI SET type has rep items.
    We will just treat all of these as a type of part as it simplifies the code
    */
 typedef struct prc_api_part_s prc_api_part;

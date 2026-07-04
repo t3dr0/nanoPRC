@@ -450,7 +450,7 @@ prc_pdf_object_stream_decompress(prc_context *ctx, uint8_t *pdf_data,
             found = 0;
             for (j = 0; j < num_found; j++)
             {
-                if (uncompressed_list->ustream[j].stream_object_number == 
+                if (uncompressed_list->ustream[j].stream_object_number ==
                                                     xref_object->byte_offset)
                 {
                     /* Already found this one, go to the next object */

@@ -21,7 +21,7 @@
  * This utility traverses the Product Representation Compact (PRC)
  * model tree and streams geometric tessellations into a high-performance, single-pass
  * binary STL file layout suitable for 3D printing and CAD interchange.
- * 
+ *
  * - Lumps all faces into a single mesh without hierarchy or part structure.
  * - Only exports face normals, as the average of vertex normals or derived from the face geometry.
  * - Mesh connectivity is ignored, each triangle is independent using duplicate vertices.
@@ -73,8 +73,8 @@ static int compute_geometric_normal(const float v1[3], const float v2[3], const 
     out_normal[1] = u[2] * v[0] - u[0] * v[2];
     out_normal[2] = u[0] * v[1] - u[1] * v[0];
 
-    float length = sqrtf(out_normal[0] * out_normal[0] + 
-                         out_normal[1] * out_normal[1] + 
+    float length = sqrtf(out_normal[0] * out_normal[0] +
+                         out_normal[1] * out_normal[1] +
                          out_normal[2] * out_normal[2]);
 
     if (length < EPSILON)
@@ -130,7 +130,7 @@ static void process_and_write_triangle(FILE *out, prc_api_vertex v1, prc_api_ver
         final_n[0] = (v1.normal[0] + v2.normal[0] + v3.normal[0]) / 3.0f;
         final_n[1] = (v1.normal[1] + v2.normal[1] + v3.normal[1]) / 3.0f;
         final_n[2] = (v1.normal[2] + v2.normal[2] + v3.normal[2]) / 3.0f;
-        
+
         float n_len = sqrtf(final_n[0] * final_n[0] + final_n[1] * final_n[1] + final_n[2] * final_n[2]);
         if (n_len > EPSILON)
         {
@@ -193,13 +193,13 @@ int main(int argc, char *argv[])
     prc_api_print_error_stack(ctx);
 
     /* Construct assembly structural model tree using the simplified checking macro */
-    PRC_CHECK_RC(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups), 
+    PRC_CHECK_RC(prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups),
                  "prc_api_prep_model_tree failed");
 
-    PRC_CHECK_RC(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups), 
+    PRC_CHECK_RC(prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups),
                  "prc_api_create_model_tree failed");
 
-    PRC_CHECK_RC(prc_api_get_number_tessellations(ctx, data, model_tree, &total_tessellations, &total_line_tessellations), 
+    PRC_CHECK_RC(prc_api_get_number_tessellations(ctx, data, model_tree, &total_tessellations, &total_line_tessellations),
                  "prc_api_get_number_tessellations failed");
 
     if (total_tessellations == 0)
@@ -221,7 +221,7 @@ int main(int argc, char *argv[])
     {
         prc_api_tess *tess = &tesses[k];
         uint32_t num_faces = prc_api_get_number_faces(ctx, data, k);
-        
+
         tess->num_faces = num_faces;
         tess->tess_faces = calloc(num_faces, sizeof(prc_api_face));
         if (!tess->tess_faces)
@@ -231,7 +231,7 @@ int main(int argc, char *argv[])
         }
 
         uint8_t has_lines = 0;
-        PRC_CHECK_RC(prc_api_initialize_tessellation(ctx, data, model_tree, k, tess, NULL, &has_lines), 
+        PRC_CHECK_RC(prc_api_initialize_tessellation(ctx, data, model_tree, k, tess, NULL, &has_lines),
                      "prc_api_initialize_tessellation failed");
 
         if (tess->type == PRC_API_TESS_UNKNOWN || tess->type == PRC_API_TESS_3D_Wire || tess->type == PRC_API_TESS_MarkUp)
@@ -242,7 +242,7 @@ int main(int argc, char *argv[])
 
         for (uint32_t j = 0; j < tess->num_faces; j++)
         {
-            PRC_CHECK_RC(prc_api_get_tessellation_vertices(ctx, data, model_tree, k, j, tess->tess_faces + j, tess), 
+            PRC_CHECK_RC(prc_api_get_tessellation_vertices(ctx, data, model_tree, k, j, tess->tess_faces + j, tess),
                          "prc_api_get_tessellation_vertices failed");
         }
     }

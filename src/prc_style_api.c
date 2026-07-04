@@ -746,7 +746,7 @@ prc_internal_api_get_style(prc_context *ctx, prc_file_struct_internal_global_dat
         material->specular[0] = style->specular_color[0];
         material->specular[1] = style->specular_color[1];
         material->specular[2] = style->specular_color[2];
-        
+
         return 0;
     }
     /* style_index_in is biased */

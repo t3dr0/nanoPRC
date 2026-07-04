@@ -138,7 +138,7 @@ prc_api_open_contents(prc_context *ctx, const char *infile)
 
 /* Here we release the API visible data that was created. Not the parsed objects. */
 PRC_EXPORT void
-prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_in, 
+prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_in,
     uint32_t num_tess, prc_api_tess *line_tess, uint32_t num_line_tess,
     prc_api_product *product_tree)
 {
@@ -261,7 +261,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                 {
                     if (tess_in[k].tess_faces[j].reserved != NULL)
                     {
-                        prc_internal_api_face *face_out_reserved = 
+                        prc_internal_api_face *face_out_reserved =
                             (prc_internal_api_face *)(tess_in[k].tess_faces[j].reserved);
                         if (face_out_reserved->vertex_indices != NULL)
                             prc_free(ctx, face_out_reserved->vertex_indices);
@@ -693,12 +693,12 @@ prc_api_matrix_identity_check(prc_context *ctx, prc_api_transform *transform)
 
 /* Matrix elements are stored in column first order assuming we are multiplying
    on the right of the matrix by the column position vector.
-   
+
    M00 M01 M02 M03
    M10 M11 M12 M13
    M20 M21 M22 M23
-   0   0   0   1    
-   
+   0   0   0   1
+
    where the element indices are as given in the PRC spec. So data is stored
    in memory as M00, M10, M20, 0, M01, M11, ... */
 
@@ -711,7 +711,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
         prc_error(ctx, PRC_ERROR_MEMORY, "location is NULL in prc_api_set_transform\n");
         return PRC_ERROR_MEMORY;
     }
-    
+
     uint8_t other_flags_set = 0;
     double *matrix = location->matrix;
     location->is_identity = 0;
@@ -744,7 +744,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
             matrix[13] = prc_trans->cartesian.translation.y;
             matrix[14] = prc_trans->cartesian.translation.z;
         }
- 
+
         if (behavior & PRC_TRANSFORMATION_NonOrtho)
         {
             /* TODO Check this. */
@@ -789,7 +789,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
             matrix[8] = z_axis.x;
             matrix[9] = z_axis.y;
             matrix[10] = z_axis.z;
- 
+
             other_flags_set = 1;
         }
 
@@ -1336,7 +1336,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
                     prc_free(ctx, product->part->name);
                     product->part->name = NULL;
                 }
-                code = prc_api_set_part_name(ctx, product->part, 
+                code = prc_api_set_part_name(ctx, product->part,
                     prc_part->rep_items[0].item_content.base.base.name.name.string);
                 if (code < 0)
                 {
@@ -1346,7 +1346,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
 
                 /* Also set the tessellation index and the style index */
                 product->part->biased_tess_index = tess_index_ri;
-                product->part->biased_style_index = 
+                product->part->biased_style_index =
                     prc_part->rep_items[0].item_content.base.graphics_content.biased_index_of_line_style;
             }
             else if (all_brep)
@@ -1400,7 +1400,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
                 {
                     prc_error(ctx, code, "Failed in prc_api_helper_add_ri_items\n");
                     return code;
-                }  
+                }
             }
         }
     }
@@ -1994,7 +1994,7 @@ prc_api_helper_set_inheritance_data(prc_context *ctx,
             parent_inherit->line_pattern.inherited_file_index);
         child_inherit->has_any_inheritance = 1;
     }
-    
+
     if (parent_graphics->behavior_bit_field1 & PRC_GRAPHICS_ChildHeritLineWidth)
     {
         prc_api_helper_set_inheritance_detail(ctx, &child_inherit->line_width,
@@ -2103,7 +2103,7 @@ prc_api_helper_get_ri_items(prc_context *ctx, prc_ri *ri, uint32_t *num_rep_item
 }
 
 /* A recusive method that goes through all the trees and figures out what we
-   need to allocate node wise. It also looks at the bit behavior fields as 
+   need to allocate node wise. It also looks at the bit behavior fields as
    we traverse the tree, looking at the ChildHerit settings to catch cases
    where the RI leaves (children) inherit the style, transparency of a parent.
    The spec is not clear on this. There is also a ParentHerit case which makes
@@ -2319,7 +2319,7 @@ prc_api_prep_model_tree(prc_context *ctx, prc_api_data data, uint32_t *num_parts
     prc_asm_product_occurrence *prc_product;
     int code;
     uint32_t num_files;
-  
+
     num_files = data_in->file_structure_count;
     last_file_index = num_files - 1;
     last_tree = data_in->file_struct[last_file_index].tree;
@@ -2685,7 +2685,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
                         entity_ref_file_index = biased_file_index - 1;
                     }
                     else
-                    { 
+                    {
                         /* Something wrong here. Just get out of it */
                         break;
                     }
@@ -2711,7 +2711,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
 
                         /* Update the style information based upon the reference. */
                         ri_item->base.graphics_content.has_entity_ref = 1;
-                        ri_item->base.graphics_content.entity_ref.biased_index_of_line_style = 
+                        ri_item->base.graphics_content.entity_ref.biased_index_of_line_style =
                             product->entity_reference->content_entity_ref.base.graphics_content.biased_index_of_line_style;
                         ri_item->base.graphics_content.entity_ref.biased_layer_index =
                             product->entity_reference->content_entity_ref.base.graphics_content.biased_layer_index;
@@ -3724,7 +3724,7 @@ prc_api_helper_get_tess_and_file_index(prc_context *ctx, prc_api_data data_in,
         }
         *file_index_out = markup_details[tess_index].tess_file_index;
         *tess_index_out = markup_details[tess_index].tessellation_index;
-    } 
+    }
     else
     {
         /* This is a part tessellation */
@@ -3769,7 +3769,7 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
 
     if (tess_index >= data->unique_part_count)
     {
-        /* This means this is a markup tessellation. We need to adjust the 
+        /* This means this is a markup tessellation. We need to adjust the
            index to look in the markup details and not the part details */
         tess_index = tess_index - data->unique_part_count;
         if (tess_index >= data->unique_markup_count)
@@ -3939,7 +3939,7 @@ prc_api_get_number_faces(prc_context *ctx, prc_api_data data_in,
         if (tessellation->tess_3d_compressed->line_attribute_array != NULL ||
             (tessellation->tess_3d_compressed->decoded_point_color_array != NULL))
         {
-            /* We may need to look at the content of the line_attribute array 
+            /* We may need to look at the content of the line_attribute array
                and see that they are all the same */
 			return 1;
 		}
@@ -3998,7 +3998,7 @@ prc_api_face_is_material(prc_context *ctx, const prc_api_tess *api_tess,
     {
         if (api_tess->type == PRC_API_TESS_3D_Compressed)
         {
-            if (api_tess->tess_faces[face_index].face_has_single_style && 
+            if (api_tess->tess_faces[face_index].face_has_single_style &&
                 api_tess->is_material)
             {
                 return 1;
@@ -4033,18 +4033,18 @@ prc_api_face_is_material(prc_context *ctx, const prc_api_tess *api_tess,
     return 0;
 }
 
-PRC_EXPORT void 
+PRC_EXPORT void
 prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess,
     prc_api_material *material, uint32_t face_index)
 {
     if (api_tess->type == PRC_API_TESS_3D)
-    {    
+    {
         if (api_tess->num_faces == 0)
         {
             return;
         }
 
-        prc_internal_api_face *face_reserved = 
+        prc_internal_api_face *face_reserved =
             (prc_internal_api_face *) api_tess->tess_faces[face_index].reserved;
         if (face_reserved == NULL)
         {

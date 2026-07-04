@@ -100,7 +100,7 @@ prc_parse_file_globals(prc_context *ctx, prc_filestructure *file_struct, prc_bit
         {
             file_struct->globals->unique_ids[k] = prc_get_compressed_unique_id(ctx, bit_state);
         }
-    } 
+    }
 
     /* Now the actual global data */
     code = prc_parse_global_data(ctx, bit_state, &file_struct->globals->global_data, file_struct->header);

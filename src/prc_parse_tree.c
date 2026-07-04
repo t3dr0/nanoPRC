@@ -41,7 +41,7 @@ prc_parse_ri_brep_model(prc_context *ctx, prc_bit_state *bit_state, prc_ri_brep_
 
     data->exact_geometry = prc_bitread_bit(ctx, bit_state);
     if (data->exact_geometry)
-    { 
+    {
         data->index_topological_context = prc_bitread_uint32(ctx, bit_state);
         data->index_body = prc_bitread_uint32(ctx, bit_state);
     }
@@ -65,7 +65,7 @@ prc_parse_ri_curve(prc_context *ctx, prc_bit_state *bit_state, prc_ri_curve *dat
 
     data->exact_geometry = prc_bitread_bit(ctx, bit_state);
     if (data->exact_geometry)
-    { 
+    {
         data->index_topological_context = prc_bitread_uint32(ctx, bit_state);
         data->index_body = prc_bitread_uint32(ctx, bit_state);
     }
@@ -117,7 +117,7 @@ prc_parse_ri_plane(prc_context *ctx, prc_bit_state *bit_state, prc_ri_plane *dat
 
     data->exact_geometry = prc_bitread_bit(ctx, bit_state);
     if (data->exact_geometry)
-    { 
+    {
         data->index_topological_context = prc_bitread_uint32(ctx, bit_state);
         data->index_body = prc_bitread_uint32(ctx, bit_state);
     }
@@ -1610,7 +1610,7 @@ prc_parse_references_of_product_occurrence(prc_context *ctx, prc_bit_state *bit_
     data->number_of_child_product_occurrences = prc_bitread_uint32(ctx, bit_state);
     if (data->number_of_child_product_occurrences > 0)
     {
-        data->index_child_occurrence = (prc_unsigned_int *)prc_calloc(ctx, 
+        data->index_child_occurrence = (prc_unsigned_int *)prc_calloc(ctx,
             data->number_of_child_product_occurrences, sizeof(prc_unsigned_int));
         if (data->index_child_occurrence == NULL)
         {
@@ -1645,7 +1645,7 @@ prc_parse_references_of_product_occurrence(prc_context *ctx, prc_bit_state *bit_
         DEBUG_LOG2("         Entity exists in same FileStructure = %d\n", data->external_data_in_same_file_structure.flag);
         if (data->external_data_in_same_file_structure.flag == 0)
         {
-            DEBUG_LOG2("         File id = [%u %u %u %u]\n", 
+            DEBUG_LOG2("         File id = [%u %u %u %u]\n",
                 data->external_data_in_same_file_structure.unique_id.unique_id0,
                 data->external_data_in_same_file_structure.unique_id.unique_id1,
                 data->external_data_in_same_file_structure.unique_id.unique_id2,
@@ -1690,7 +1690,7 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
     }
 
     data->product_behavior = prc_bitread_uint8(ctx, bit_state);
-    
+
     code = prc_parse_product_information(ctx, bit_state, &data->product_information);
     if (code < 0)
     {

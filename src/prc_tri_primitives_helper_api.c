@@ -46,7 +46,7 @@ prc_api_helper_set_texture_coordinates(prc_context *ctx,
     position_normal_pair[vertex_out_pos].texture_set = PRC_INTERNAL_API_TEXTURE_SET;
 }
 
-void 
+void
 prc_api_helper_set_face_color(prc_context *ctx,
     prc_api_tess_vertex_buffer *vertex_out, uint32_t vertex_out_pos,
     float *face_color, prc_internal_api_position_normal_pair *position_normal_pair)
@@ -310,7 +310,7 @@ prc_api_helper_set_tri_style(prc_context *ctx,
         return PRC_ERROR_PARSE; /* Invalid state to set the style from */
     }
 
-    code = prc_internal_api_get_style(ctx, global_data, header, line_style_index, 
+    code = prc_internal_api_get_style(ctx, global_data, header, line_style_index,
         &is_material, &is_texture, &material, &style, style_color, alpha, false);
     if (code < 0)
         return code;

@@ -23,7 +23,7 @@
 #include "text.h"
 
 class MeshShader;
-class Graphics2D; 
+class Graphics2D;
 
 struct MeshSpec
 {

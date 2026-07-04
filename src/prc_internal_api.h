@@ -44,7 +44,7 @@ typedef struct prc_internal_api_texture_indices_s
    Essentially an array of the same size as the prc positions
    vertices but at each position we have a linked list that
    we can go through to check for a normal vector and get the
-   index into the api vertex data that has that position and normal vector AND 
+   index into the api vertex data that has that position and normal vector AND
    texture vertices if theu are being used */
 typedef struct prc_internal_api_position_normal_pair_s prc_internal_api_position_normal_pair;
 
@@ -88,7 +88,7 @@ typedef enum {
 /* Special note on prc_vertex_color_index which is a member variable below. So if we
    are dealing with vertex colors then every vertex has a color. We of course have
    a list of indices into the vertices. The count into the indices array is the count
-   that is used to get the color in the decode_array (which is where we store the 
+   that is used to get the color in the decode_array (which is where we store the
    vertex colors).  In searching for matching vertices we check for a match of the color
    not the indice though. */
 struct prc_internal_api_position_normal_pair_s
@@ -256,7 +256,7 @@ typedef struct prc_api_child_reserve_s
    will want to be able to traverse back up the tree to get the style
    information for the face that we are processing. Products can have multiple
    entity references which specify styles for different RIs. They can
-   also specify styles for specific faces of those RIs. We want to build 
+   also specify styles for specific faces of those RIs. We want to build
    a tree of object styles that we can traverse forward AND backward. We will
    build it in the forward direction as we go from the base product through
    the product prototypes to a part and finally a RI (which is actually a part).*/

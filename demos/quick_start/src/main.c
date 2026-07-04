@@ -20,7 +20,7 @@
 
 #define MAX_VERTICES_PRINT 10
 
-/* This is a simple demo that shows how to navigate through the model 
+/* This is a simple demo that shows how to navigate through the model
    and the tessellation data in the PRC file */
 int main(int argc, char *argv[])
 {
@@ -168,7 +168,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Lets print some of the tessellation data. Just do this for the first 
+    /* Lets print some of the tessellation data. Just do this for the first
        face of the first tessellation. Skip if they are markups or line types */
     if (totalTesselations > 0)
     {
@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
                 prc_api_tess_vertex_buffer *tess_vertices = &tess->tess_vertices;
 
                 /* Graphic primitives and indices are stored here though */
-                face = &tess->tess_faces[face_index]; 
+                face = &tess->tess_faces[face_index];
 
                 num_vertices_print = tess_vertices->num_vertices < MAX_VERTICES_PRINT ?
                                      tess_vertices->num_vertices : MAX_VERTICES_PRINT;

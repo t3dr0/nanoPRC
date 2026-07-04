@@ -464,7 +464,7 @@ prc_adjust_offsets(prc_context *ctx, prc_tess_3d *data)
 
         /* It is not clear if we would even be in here in the one normal case.
            What does it mean if we have to calculate normals and we have a normal
-           for the whole face? For now, assume its the same as above. Probably 
+           for the whole face? For now, assume its the same as above. Probably
            should put and assert here to catch this case */
         current_offset += number_triangles_one_normal * 3; /* 3 positions per triangle */
         current_offset += number_fan_indices_one_normal; /* One position for each indice */
@@ -473,7 +473,7 @@ prc_adjust_offsets(prc_context *ctx, prc_tess_3d *data)
         current_offset += number_triangles_multi_normal_texture * 3 * (1 + texture_offset); /* tvtvtv  per triangle */
         current_offset += number_fan_indices_multi_normal_texture * (1 + texture_offset); /* tv each indice */
         current_offset += number_strip_indices_multi_normal_texture * (1 + texture_offset); /* tv each indice */
-            
+
         /* Same as before.  We are in one normal case here */
         current_offset += number_triangles_one_normal_texture * 3 * (1 + texture_offset); /* tvtvtv  per triangle */
         current_offset += number_fan_indices_one_normal_texture * (1 + texture_offset); /* tv each indice */
@@ -791,7 +791,7 @@ prc_parse_tess_markup(prc_context *ctx, prc_bit_state *bit_state, prc_tess_marku
         return 0; /* Nothing more to do */
     }
 
-    /* Process the markup tessellation data into something useful that we can push 
+    /* Process the markup tessellation data into something useful that we can push
        through the API */
     code = prc_decode_markup_tess(ctx, data);
 
@@ -925,7 +925,7 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
        seems to not be defined. */
     /* If the number of reference points is greater than 3 then the point_reference_array is compressed */
     /* HTML doc has < 3 but <= 3 seems to be uncompressed */
-    data->point_reference_array = prc_bitread_compressed_indice_array(ctx, bit_state, 
+    data->point_reference_array = prc_bitread_compressed_indice_array(ctx, bit_state,
                         &data->point_reference_array_size, false, number_ref_points);
     if (data->point_reference_array == NULL && data->point_reference_array_size != 0)
     {
@@ -1167,7 +1167,7 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     {
         data->behaviors_array = prc_bitread_character_array(ctx, bit_state,
                                             &data->behaviors_array_size, 8, true,
-                                            0); 
+                                            0);
         if (data->behaviors_array == NULL && data->behaviors_array_size != 0)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_tess_3d_compressed\n");

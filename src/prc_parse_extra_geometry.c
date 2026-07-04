@@ -137,7 +137,7 @@ prc_parse_compressed_point(prc_context *ctx, prc_bit_state *bit_state,
 #endif
         /* Spec seems to be wrong about this. At least if we are coming from
            isonurbs and the uNbBits is 31 we just do 3 double reads it seems */
-        
+
         if (data->uNbBits == 31)
         {
             data->point.x = prc_bitread_double(ctx, bit_state);
@@ -227,7 +227,7 @@ prc_parse_particular_circle(prc_context *ctx, prc_bit_state *bit_state,
     int code;
 
     data->full_circle = prc_bitread_bit(ctx, bit_state);
-    
+
     if (!compressed_data->compressed_iso_spline)
     {
         code = prc_parse_start_end_data(ctx, bit_state, compressed_data,
@@ -969,7 +969,7 @@ prc_parse_content_compressed_face(prc_context *ctx, prc_bit_state *bit_state,
 
     data->orientation_surface_with_shell = prc_bitread_bit(ctx, bit_state);
     data->is_an_iso_face = is_an_iso_face;
- 
+
     if (data->is_an_iso_face)
     {
         code = prc_parse_content_compressed_iso_face(ctx, bit_state,
@@ -1036,7 +1036,7 @@ prc_parse_hcg_iso_cylinder(prc_context *ctx, prc_bit_state *bit_state,
 
 /* Table 206 PRC_HCG_IsoTorus */
 static int
-prc_parse_hcg_iso_torus(prc_context *ctx, prc_bit_state *bit_state, 
+prc_parse_hcg_iso_torus(prc_context *ctx, prc_bit_state *bit_state,
     prc_nano_brep_compressed_data *compressed_data, prc_hcg_iso_torus *data)
 {
     int code;
@@ -1200,7 +1200,7 @@ prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
         prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_knots\n");
         return PRC_ERROR_MEMORY;
     }
-    
+
     for (i = 0; i < num_knots; i++)
     {
         if (data->number_bit_parameter > 30)
@@ -1875,7 +1875,7 @@ prc_parse_compressed_face(prc_context *ctx, prc_bit_state *bit_state,
             prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
                 "PRC_HCG_NewLoop not implemented yet\n");
         break;
-        
+
         case PRC_HCG_EndLoop:
             //code = prc_parse_hcg_endloop(ctx, bit_state, &data->)
             prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
@@ -2345,7 +2345,7 @@ prc_parse_crv_circle(prc_context *ctx, prc_bit_state *bit_state,
         }
     }
     else
-    {         
+    {
         data->tag = PRC_TYPE_CRV_Circle;
     }
     code = prc_parse_content_curve(ctx, bit_state, &data->curve_data);
@@ -2868,8 +2868,8 @@ prc_parse_ptr_curve(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_curve *d
         switch (data->curve_type)
         {
         case PRC_TYPE_ROOT:
-            /* PRC_TYPE_ROOT (0) is used to indicate that the entity corresponds 
-               to a NULL pointer and no additional data is saved. Otherwise, the 
+            /* PRC_TYPE_ROOT (0) is used to indicate that the entity corresponds
+               to a NULL pointer and no additional data is saved. Otherwise, the
                integer shall be one of the subtypes of curve, surface, or topology.*/
             break;
         case PRC_TYPE_CRV_Blend02Boundary:
@@ -3130,14 +3130,14 @@ prc_parse_content_wire_edge(prc_context *ctx, prc_bit_state *bit_state, prc_cont
     if (data->is_trimmed)
     {
         data->trim_interval = prc_parse_interval(ctx, bit_state);
-    }   
+    }
 
     return 0;
 }
 
 /* Table 183 � PRC_TYPE_TOPO_WireEdge */
 static int
-prc_parse_topo_wire_edge(prc_context *ctx, prc_bit_state *bit_state, 
+prc_parse_topo_wire_edge(prc_context *ctx, prc_bit_state *bit_state,
     prc_topo_wire_edge *data, uint8_t read_tag)
 {
     int code;
@@ -5174,7 +5174,7 @@ prc_parse_face(prc_context *ctx, prc_bit_state *bit_state,
     {
         data->tolerance = prc_bitread_double(ctx, bit_state);
     }
-    
+
     data->number_of_loops = prc_bitread_uint32(ctx, bit_state);
 
     /* This should be set to -1 if it is not defined */

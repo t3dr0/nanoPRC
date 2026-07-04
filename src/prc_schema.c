@@ -148,7 +148,7 @@ skip_tokens(prc_context * ctx, uint32_t *codes, int offset, int depth)
                 prc_error(ctx, PRC_SCHEMA_ERROR, "Error with skip_tokens\n");
                 return offset;
             }
-            
+
             /* Check for presence of else */
             if (codes[offset] == EPRCSchema_Else)
             {
@@ -547,7 +547,7 @@ prc_execute_schema_instruction(prc_context *ctx, prc_bit_state *bit_state,
                need to skip any instructions that are remaining in the if clause */
             /* Skip the if tokens */
             offset = skip_tokens(ctx, codes, offset, 0);
-            
+
             /* Check for else */
             if (codes[offset] == EPRCSchema_Else)
             {

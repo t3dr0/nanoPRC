@@ -81,7 +81,7 @@ struct edge_entry_s
     prc_edge_treated_case_t edge_status;
 };
 
-/* treated_edge_list_s structure allows us to do a faster search for edges that 
+/* treated_edge_list_s structure allows us to do a faster search for edges that
    have already been treated as we make our way through the stack. The issue is
    that when we pop the edge off the stack, we have to make sure that it was not
    already handled. If it was, we pop the next one.  If a treated triangle does
