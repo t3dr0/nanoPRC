@@ -100,7 +100,7 @@ prc_release_base_with_graphics(prc_context *ctx, prc_base_with_graphics *data)
 static void
 prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
 {
-    size_t k;
+    size_t k, j;
 
     if (base == NULL)
         return;
@@ -110,10 +110,17 @@ prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
 
     for (k = 0; k < attribute_data.attribute_count; k++)
     {
-        prc_release_string(ctx, &attribute_data.attributes[k].attribute_title.string_title);
+        prc_release_attribute_title(ctx, &attribute_data.attributes[k].attribute_title);
+        if (attribute_data.attributes[k].attributes != NULL)
+        {
+            for (j = 0; j < attribute_data.attributes[k].number_attributes; j++)
+            {
+                prc_release_attribute_key_value(ctx, &attribute_data.attributes[k].attributes[j]);
+            }
+        }
         prc_free(ctx, (attribute_data.attributes[k].attributes));
-        prc_free(ctx, &attribute_data.attributes[k]);
     }
+    prc_free(ctx, (attribute_data.attributes));
 }
 
 static void

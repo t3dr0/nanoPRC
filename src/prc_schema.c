@@ -60,6 +60,7 @@ find_dict_entry(prc_context *ctx, uint32_t key, schema_dict *dict)
     {
         if (curr_entry->key == key)
             return curr_entry;
+        curr_entry = curr_entry->next;
     }
     return SCHEMA_DICT_ENTRY_NOTFOUND;
 }
@@ -994,6 +995,8 @@ prc_entity_schema*
 prc_get_schema(prc_context *ctx, uint32_t number)
 {
     prc_schema *schema = ctx->internal.schema;
+    if (schema == NULL || number >= schema->schema_count)
+        return NULL;
     return &schema->entity_schema[number];
 }
 
@@ -1006,6 +1009,12 @@ prc_execute_schema(prc_context *ctx, prc_bit_state *bit_state,
     schema_dict *variable_dict = NULL;
     int parent_code;
     int code;
+
+    if (schema == NULL)
+    {
+        prc_error(ctx, PRC_SCHEMA_ERROR, "NULL schema passed to prc_execute_schema\n");
+        return PRC_SCHEMA_ERROR;
+    }
 
     data_read.in_for_loop = 0;
     data_read.data_type = EPRCSchema_Operator_IGNORE1;
@@ -1036,19 +1045,34 @@ prc_execute_schema(prc_context *ctx, prc_bit_state *bit_state,
 
     if (parent_read.data_type == EPRCSchema_PARENT_TYPE)
     {
+        prc_entity_schema *parent_schema;
+
         *recursion = *recursion + 1;
-        parent_code = prc_check_for_schema(ctx, parent_read.parent_type);
-        code = prc_execute_schema(ctx, bit_state, prc_get_schema(ctx, parent_code - 1),
-                                  recursion);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Error in prc_execute_schema recursion\n");
-            return code;
-        }
         if (*recursion > SCHEMA_RECURSION_MAX)
         {
             prc_error(ctx, PRC_SCHEMA_ERROR, "Error in prc_execute_schema recursion\n");
             return PRC_SCHEMA_ERROR;
+        }
+
+        parent_code = prc_check_for_schema(ctx, parent_read.parent_type);
+        if (parent_code <= 0)
+        {
+            prc_error(ctx, PRC_SCHEMA_ERROR, "Unknown parent schema type in prc_execute_schema\n");
+            return PRC_SCHEMA_ERROR;
+        }
+
+        parent_schema = prc_get_schema(ctx, (uint32_t)(parent_code - 1));
+        if (parent_schema == NULL)
+        {
+            prc_error(ctx, PRC_SCHEMA_ERROR, "Invalid parent schema index in prc_execute_schema\n");
+            return PRC_SCHEMA_ERROR;
+        }
+
+        code = prc_execute_schema(ctx, bit_state, parent_schema, recursion);
+        if (code < 0)
+        {
+            prc_error(ctx, code, "Error in prc_execute_schema recursion\n");
+            return code;
         }
     }
 

@@ -680,13 +680,30 @@ prc_set_one_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     int nz_ref0;
     prc_vec3 V0;
     int code;
+    uint32_t num_points = data->point_array_size / 3;
 
     /* First get the two encoded points */
     encoded_point1 = point_array_scaled[*point_array_count];
     encoded_point2 = point_array_scaled[*point_array_count + 1];
 
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before indexing into
+       point_reference_array and before using the value to index vertices_out,
+       otherwise a crafted file causes an out-of-bounds heap read. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* And now the one reference point */
     nz_ref0 = data->point_reference_array[*reference_array_count];
+    if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+        return PRC_ERROR_PARSE;
+    }
     ref_point = vertices_out[nz_ref0];
 
     /* The options are that we can have 0 0 1, 1 0 0, or 0 1 0 
@@ -798,8 +815,20 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     prc_vec3 encoded_point1, new_point, V0, V1, V2, temp2;
     int nz_ref0, nz_ref1, nz_ref2;
     uint32_t edge_index = 0;
+    uint32_t num_points = data->point_array_size / 3;
 
     /* We have two references and one point to decode */
+
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before reading the two
+       entries this function consumes, otherwise a crafted file causes an
+       out-of-bounds heap read below. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) + 1 >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
 
     if (point_is_ref[0] == 0)
     {
@@ -808,6 +837,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
 		prc_vec_add(point_array_scaled[*point_array_count], data->origin_array, &V0);
 		nz_ref1 = data->point_reference_array[*reference_array_count];
 		nz_ref2 = data->point_reference_array[*reference_array_count + 1];
+		if (nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points ||
+		    nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+		{
+		    prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+		    return PRC_ERROR_PARSE;
+		}
 		V1 = vertices_out[nz_ref1];
 		V2 = vertices_out[nz_ref2];
         prc_vec_copy(V0, &new_point, 0);
@@ -823,6 +858,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
         /* Non-ref point is the second one */
         nz_ref0 = data->point_reference_array[*reference_array_count];
         nz_ref2 = data->point_reference_array[*reference_array_count + 1];
+        if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+            nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+            return PRC_ERROR_PARSE;
+        }
         V0 = vertices_out[nz_ref0];
         V2 = vertices_out[nz_ref2];
         encoded_point1 = point_array_scaled[*point_array_count];
@@ -842,6 +883,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
             average of the first two reference points */
         nz_ref0 = data->point_reference_array[*reference_array_count];
         nz_ref1 = data->point_reference_array[*reference_array_count + 1];
+        if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+            nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+            return PRC_ERROR_PARSE;
+        }
         V0 = vertices_out[nz_ref0];
         V1 = vertices_out[nz_ref1];
         encoded_point1 = point_array_scaled[*point_array_count];
@@ -873,16 +920,35 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     return 0;
 }
 
-static void
+static int
 prc_set_three_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
      prc_vec3 *vertices_out, treated_triangle *treated_tri, int *reference_array_count)
 {
     int32_t nz_ref0, nz_ref1, nz_ref2;
     prc_vec3 V0, V1, V2;
+    uint32_t num_points = data->point_array_size / 3;
+
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before reading the three
+       entries this function consumes, otherwise a crafted file causes an
+       out-of-bounds heap read below. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) + 2 >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
 
     nz_ref0 = data->point_reference_array[*reference_array_count];
     nz_ref1 = data->point_reference_array[*reference_array_count + 1];
     nz_ref2 = data->point_reference_array[*reference_array_count + 2];
+    if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+        nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points ||
+        nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+        return PRC_ERROR_PARSE;
+    }
     V0 = vertices_out[nz_ref0];
     V1 = vertices_out[nz_ref1];
     V2 = vertices_out[nz_ref2];
@@ -890,6 +956,7 @@ prc_set_three_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compresse
     prc_set_treated_triangle(ctx, treated_tri, V0, V1, V2, nz_ref0,
                                 nz_ref1, nz_ref2, 0, 0, 0, 0);
     *reference_array_count += 3;
+    return 0;
 }
 
 static int
@@ -1028,6 +1095,19 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     int code;
     uint8_t point_is_ref[3], num_ref_points;
 
+    /* triangle_face_array_size (which drives how many times this function gets
+       called) and reference_array_size (which bounds points_is_reference_array)
+       are independently attacker-controlled counts read from the file with no
+       relation to each other. Validate the index here instead of trusting them
+       to stay in sync, otherwise a crafted file walks this read past the end
+       of points_is_reference_array. */
+    if (*points_is_reference_index < 0 ||
+        (uint32_t)(*points_is_reference_index) + 3 > data->reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "points_is_reference_array index out of range\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* Get the next three references */
     point_is_ref[0] = data->points_is_reference_array[*points_is_reference_index];
     point_is_ref[1] = data->points_is_reference_array[*points_is_reference_index + 1];
@@ -1062,8 +1142,12 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     }
     else if (num_ref_points == 3)
     {
-        prc_set_three_ref_treated_triangle(ctx, data, vertices_out,
+        code = prc_set_three_ref_treated_triangle(ctx, data, vertices_out,
             treated_tri, reference_array_count);
+        if (code < 0)
+        {
+            return code;
+        }
     }
     else
     {
@@ -2343,13 +2427,40 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 
 		if (!stack_was_empty)
 		{
+            /* points_is_reference_index/reference_array_count are driven by
+               independently attacker-controlled counts from the file. Validate
+               them and the resulting point_reference_array value before using
+               them to index points_is_reference_array/vertices_out, otherwise a
+               crafted file causes an out-of-bounds heap read. */
+            if (points_is_reference_index < 0 ||
+                (uint32_t)points_is_reference_index >= data->reference_array_size)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "points_is_reference_index out of range\n");
+                return PRC_ERROR_PARSE;
+            }
+
             /* Only one point is a reference.. */
             if (data->points_is_reference_array[points_is_reference_index] == 1)
             {
+                int32_t ref_value;
+
+                if (reference_array_count < 0 ||
+                    (uint32_t)reference_array_count >= data->point_reference_array_size)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+                ref_value = data->point_reference_array[reference_array_count];
+                if (ref_value < 0 || (uint32_t)ref_value >= (uint32_t)num_points)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+
                 /* This is a reference point */
                 /* Grab the existing point we decoded already. Stick into new_point. */
-                prc_vec_copy(vertices_out[data->point_reference_array[reference_array_count]], &new_point, 0);
-                new_indice_index = data->point_reference_array[reference_array_count];
+                prc_vec_copy(vertices_out[ref_value], &new_point, 0);
+                new_indice_index = ref_value;
 
                 reference_array_count++;
 

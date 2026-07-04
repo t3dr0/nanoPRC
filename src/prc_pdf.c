@@ -272,6 +272,16 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read stream length in PDF object\n");
                 return PRC_ERROR_PARSE;
             }
+
+            /* The /Length value is attacker-controlled. Validate it against the
+               bytes actually remaining after the stream start in this buffer
+               before any caller uses it to allocate/copy, otherwise a crafted
+               /Length larger than the real stream causes an out-of-bounds read. */
+            if (ptr_stream > boundary || (size_t)*stream_length > (size_t)(boundary - ptr_stream))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "PDF stream /Length exceeds available data\n");
+                return PRC_ERROR_PARSE;
+            }
             break;
         }
 
@@ -300,8 +310,9 @@ pdf_get_ptr_to_obj(prc_context *ctx, uint32_t object_num_in, uint8_t *ptr_in,
     {
         if (strncmp((const char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
         {
-            /* Make sure we are not at an endobj */
-            if (strncmp((const char *)(ptr - 3), PDF_ENDOBJ_NAME,
+            /* Make sure we are not at an endobj. Only look 3 bytes back if
+               there actually are 3 bytes before ptr in this buffer. */
+            if (ptr - ptr_in >= 3 && strncmp((const char *)(ptr - 3), PDF_ENDOBJ_NAME,
                 PDF_ENDOBJ_NAME_LEN) == 0)
             {
                 ptr += 3;

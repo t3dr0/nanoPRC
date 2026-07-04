@@ -24,6 +24,8 @@ struct prc_bit_state_s
 	uint8_t bitmask;
 	int64_t bit_count;
     int64_t bit_position;
+	uint8_t overrun; /* set once a read is attempted past bit_count; callers should
+	                    treat the stream as invalid once this is set */
 	prc_name *curr_name;
 	prc_graphics_content graphics_content;
 };
@@ -67,7 +69,7 @@ uint32_t* prc_bitread_compressed_integer_array(prc_context* ctx, prc_bit_state* 
 int32_t* prc_bitread_compressed_indice_array(prc_context* ctx, prc_bit_state* state, uint32_t* data_size, uint8_t has_comp_bit, uint32_t known_count);
 int32_t prc_bitread_uncompressed_uint32(prc_context* ctx, prc_bit_state* state);
 uint32_t prc_bitread_huff_data(prc_context* ctx, prc_bit_state* state, uint32_t num_bits);
-void prc_init_huff_bit_state(prc_context* ctx, prc_bit_state* state, uint8_t* ptr);
+void prc_init_huff_bit_state(prc_context* ctx, prc_bit_state* state, uint8_t* ptr, int64_t max_bits);
 void prc_bitread_rewind(prc_context *ctx, prc_bit_state *state, uint8_t backup_bits);
 int32_t *prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_size, uint8_t has_comp_bit, uint8_t number_of_bits);
 uint32_t prc_bitread_number_of_bits_then_unsigned_int(prc_context* ctx, prc_bit_state* state);
