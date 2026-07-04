@@ -24,6 +24,10 @@
 #define CURVES_PERLOOP_INITIAL_SIZE 10
 #define BREP_VERTEX_INITIAL_SIZE 1000
 #define BREP_EDGE_INITIAL_SIZE 1000
+/* Generous upper bound on a NURBS surface's control-point grid (u*v). No
+   legitimate CAD model approaches this; it exists to reject file-supplied
+   counts before their product is used for allocation sizing/loop bounds. */
+#define PRC_MAX_NURBS_CONTROL_POINTS 16000000ULL
 
 /* Forward declarations due to circular dependencies */
 static int prc_parse_ptr_surface(prc_context *ctx, prc_bit_state *bit_state,
@@ -36,8 +40,9 @@ static int prc_parse_base_topology(prc_context *ctx, prc_bit_state *bit_state,
     prc_base_topology *data);
 static int prc_parse_content_body(prc_context *ctx, prc_bit_state *bit_state,
     prc_content_body *data);
+#define PRC_TOPO_BODY_RECURSION_MAX 256
 static int prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state,
-    prc_topo *data);
+    prc_topo *data, int depth);
 static int prc_parse_surf(prc_context *ctx, prc_bit_state *bit_state,
     prc_type_surf *data);
 void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
@@ -1311,6 +1316,22 @@ prc_parse_compressed_control_points(prc_context *ctx, prc_bit_state *bit_state,
     uint32_t num_bits_for_rest, uint32_t num_control_points_u,
     uint32_t num_control_points_v, prc_compressed_control_points *data)
 {
+    /* num_control_points_u/v are derived from file-controlled knot
+       multiplicities and can be 0 (making num_control_points_u - 1 wrap to
+       UINT32_MAX) or large enough that (num_control_points_u - 1) *
+       (num_control_points_v - 1), computed in 32-bit arithmetic, overflows
+       and wraps to a small value before ever reaching prc_calloc -- which
+       would then allocate a small buffer while the nested loop below still
+       writes the full, un-wrapped number of interior points (heap OOB
+       write). Reject invalid counts and do the multiplication in 64-bit. */
+    if (num_control_points_u == 0 || num_control_points_v == 0 ||
+        (uint64_t)(num_control_points_u - 1) * (uint64_t)(num_control_points_v - 1) >
+            PRC_MAX_NURBS_CONTROL_POINTS)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Invalid NURBS control point counts\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* Here is p[0][0] */
     data->p00 = prc_parse_3d_vector(ctx, bit_state);
 
@@ -2081,7 +2102,7 @@ prc_parse_ptr_topology(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_topol
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_topology\n");
             return PRC_ERROR_MEMORY;
         }
-        code = prc_parse_topo(ctx, bit_state, data->topo);
+        code = prc_parse_topo(ctx, bit_state, data->topo, 0);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_parse_topo\n");
@@ -5254,9 +5275,18 @@ prc_parse_shell(prc_context *ctx, prc_bit_state *bit_state,
 
 /* Abstract type */
 static int
-prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data)
+prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data, int depth)
 {
     int code = 0;
+
+    /* PRC_TYPE_TOPO_Body self-recurses with a tag pair supplied entirely by the
+       file (a few bytes per level), so an attacker can drive recursion depth
+       proportional to file size. Cap it to avoid stack exhaustion. */
+    if (depth > PRC_TOPO_BODY_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "prc_parse_topo recursion depth exceeded\n");
+        return PRC_ERROR_PARSE;
+    }
 
     data->tag = prc_bitread_uint32(ctx, bit_state);
 
@@ -5363,7 +5393,7 @@ prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data)
             return PRC_ERROR_MEMORY;
         }
         /* Note the recursion */
-        code = prc_parse_topo(ctx, bit_state, data->topo_body);
+        code = prc_parse_topo(ctx, bit_state, data->topo_body, depth + 1);
         break;
 
     case PRC_TYPE_TOPO_SingleWireBody:
@@ -5488,7 +5518,7 @@ prc_parse_topo_contexts(prc_context *ctx, prc_bit_state *bit_state,
 
         for (k = 0; k < data->number_of_bodies; k++)
         {
-            code = prc_parse_topo(ctx, bit_state, &data->bodies[k]);
+            code = prc_parse_topo(ctx, bit_state, &data->bodies[k], 0);
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_parse_topo\n");

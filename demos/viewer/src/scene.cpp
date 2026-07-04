@@ -499,6 +499,20 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
              * the text. If it has only graphics or only text, we will not create
              * the parent */
             tess = prc_api_get_markup_tessellation(ctx, api_product, k);
+            if (tess == NULL)
+            {
+                /* No tessellation resolved for this markup (e.g. an invalid or
+                   unresolved biased_index_tessellation in the file). Still
+                   create a tree node for consistency, but skip geometry/bounds
+                   since there is nothing to read -- dereferencing a NULL tess
+                   here would crash. */
+                Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_product);
+                app_child->setName(api_product->markup[k].name);
+                app_child->setModel(Matrix4(1.0f));
+                continue;
+            }
             uint8_t needs_parent = (tess->num_line_primitives > 0 && tess->num_text_primitives > 0);
 
             if (needs_parent)

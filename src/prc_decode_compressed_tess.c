@@ -2476,6 +2476,18 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
             }
             else
             {
+                /* point_array_count/vertex_treatment_count are driven by
+                   triangle_face_array_size, a count independent of point_array_size
+                   (the actual capacity of point_array/vertices_out). Validate before
+                   reading/writing, otherwise a crafted file causes an out-of-bounds
+                   heap read (point_array) or write (vertices_out). */
+                if (point_array_count >= (uint32_t)num_points ||
+                    vertex_treatment_count >= num_points)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "point_array_count/vertex_treatment_count out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+
                 DEBUG_LOG("Origin: [%.17f %.17f %.17f]\n", treated_details.origin.x,
                     treated_details.origin.y, treated_details.origin.z);
 

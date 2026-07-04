@@ -707,6 +707,16 @@ prc_internal_api_remap_indices(prc_context *ctx,
         /* There may be an issue here if we have multiple texture coordinates
            Waiting to find a file with this. For now, we are just using the first coordinate */
         uint32_t texture_index = texture_indices[0] / 2;
+        uint32_t num_texture_coords_prc = uncompressed_data->tess->tess_3d->number_of_texture_coordinates / 2;
+
+        /* Sanity check for malicious file data. prc_texture_indice_to_api_texture_indice
+           and texture_coordinates are both sized off number_of_texture_coordinates/2, but
+           texture_index comes straight from the file's index stream with no relation to
+           that count, so validate it here (mirrors the position_index/normal_index checks
+           above). */
+        if (texture_index >= num_texture_coords_prc)
+            return PRC_API_ERROR_PARSER;
+
         if (prc_texture_indice_to_api_texture_indice[texture_index] == UINT32_MAX)
         {
             prc_texture_indice_to_api_texture_indice[texture_index] = *texture_count;

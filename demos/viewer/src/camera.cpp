@@ -93,7 +93,7 @@ Matrix4 Camera::getCurrentViewCameraMatrix(void)
 
 void Camera::addView(double *in_matrix, double z_center, int index, char *name)
 {
-    if (index > _numViews)
+    if (index < 0 || index >= _numViews)
     {
         return;
     }
