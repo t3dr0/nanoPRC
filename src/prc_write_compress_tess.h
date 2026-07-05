@@ -48,4 +48,25 @@ int prc_encode_preprocess(prc_context *ctx,
 
 void prc_encode_preprocess_free(prc_context *ctx, prc_encode_mesh *m);
 
+typedef struct prc_encode_traversal_result_s
+{
+    int32_t  *point_array;               /* 3 int32 per emitted point, DV triples */
+    uint32_t  point_array_size;          /* == 3 * number of points emitted */
+    uint8_t  *edge_status_array;         /* 1 byte per triangle: bit0 = right edge grows, bit1 = left edge grows */
+    uint32_t  edge_status_array_size;    /* == num_triangles */
+    int32_t  *triangle_face_array;       /* 1 per triangle, in traversal emission order */
+    uint32_t  triangle_face_array_size;  /* == num_triangles */
+    uint8_t  *points_is_reference_array; /* 1 byte (0/1) per reference-bit slot */
+    uint32_t  points_is_reference_array_size;
+    int32_t  *point_reference_array;     /* existing-vertex index per reference slot consumed */
+    uint32_t  point_reference_array_size;
+    double    origin[3];                 /* the one global chain origin (decoder's origin_array) */
+} prc_encode_traversal_result;
+
+int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
+    const uint32_t *face_indices, double tolerance_mm,
+    prc_encode_traversal_result *out);
+
+void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
+
 #endif

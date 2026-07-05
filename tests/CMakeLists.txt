@@ -18,3 +18,8 @@ add_executable(test_compress_tess tests/unit/test_compress_tess.c)
 target_link_libraries(test_compress_tess prc_static)
 target_include_directories(test_compress_tess PRIVATE tests)
 add_test(NAME test_compress_tess COMMAND test_compress_tess)
+
+add_executable(test_traversal tests/unit/test_traversal.c)
+target_link_libraries(test_traversal prc_static)
+target_include_directories(test_traversal PRIVATE tests)
+add_test(NAME test_traversal COMMAND test_traversal)
