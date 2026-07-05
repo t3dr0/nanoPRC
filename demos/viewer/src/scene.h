@@ -94,7 +94,7 @@ public:
 
     void setShowExtraWireOverlays(bool enabled);
     constexpr bool showExtraWireOverlays() const { return _showExtraWireOverlays; }
-    
+
     constexpr int width() const { return _width; }
     constexpr int height() const { return _height; }
 

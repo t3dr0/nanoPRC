@@ -495,10 +495,24 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
         for (k = 0; k < num_markups; k++)
         {
             /* If it has both graphics and text primitives we will create a
-             * parent and then two children, one for the graphics and one for 
+             * parent and then two children, one for the graphics and one for
              * the text. If it has only graphics or only text, we will not create
              * the parent */
             tess = prc_api_get_markup_tessellation(ctx, api_product, k);
+            if (tess == NULL)
+            {
+                /* No tessellation resolved for this markup (e.g. an invalid or
+                   unresolved biased_index_tessellation in the file). Still
+                   create a tree node for consistency, but skip geometry/bounds
+                   since there is nothing to read -- dereferencing a NULL tess
+                   here would crash. */
+                Product *app_child = app_product->getChildFromHeap(k, heap, product_count);
+                *product_count += 1;
+                app_child->setParent(app_product);
+                app_child->setName(api_product->markup[k].name);
+                app_child->setModel(Matrix4(1.0f));
+                continue;
+            }
             uint8_t needs_parent = (tess->num_line_primitives > 0 && tess->num_text_primitives > 0);
 
             if (needs_parent)
@@ -637,7 +651,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
        vary in spatial transformations will be using the same vertex information.
        Of course we still have to worry about the various faces of the
        tessellations.  Also, we may have to add line (wire) type tessellations
-       when we in fact have a 3D compressed or 3D uncompressed tessellation. 
+       when we in fact have a 3D compressed or 3D uncompressed tessellation.
        The compressed ones, we add line data for the extreme crease angles (not
        in the spec but Adobe does this) and we can have line data in the uncompressed
        tessellation */
@@ -667,8 +681,8 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
         }
     }
 
-    /* Lets go through all the tessellations and get the data assigning it to 
-       the part and markups. We have to worry about different faces due to 
+    /* Lets go through all the tessellations and get the data assigning it to
+       the part and markups. We have to worry about different faces due to
        the styles that can vary across them.  Also, the 3D tessellations
        can generate line (wire) tessellations */
     for (k = 0; k < totalTesselations; k++)
@@ -879,7 +893,7 @@ void Scene::load(const char *infile, Camera *camera, bool memoryLeakCheck)
    // setCameraInitialPosition(camera);
 
     /* Clean up */
-    prc_api_release_data(ctx, data, tesses, totalTesselations, tesses_line, 
+    prc_api_release_data(ctx, data, tesses, totalTesselations, tesses_line,
         totalLineTesselations, model_tree);
 
     for (uint32_t i = 0; i < totalTesselations; i++)

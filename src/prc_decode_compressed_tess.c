@@ -348,7 +348,7 @@ prc_scale_data_points(prc_context *ctx, const prc_tess_3d_compressed *data,
 static int
 prc_derive_normal(prc_context *ctx, const prc_tess_3d_compressed *data,
     uint32_t triangle_index, treated_triangle *treated_tri, prc_vec3 *normal)
-{ 
+{
     prc_vec3 midpoint, v1, v2;
     int code = 0;
     prc_basis basis;
@@ -382,7 +382,7 @@ prc_derive_normal(prc_context *ctx, const prc_tess_3d_compressed *data,
 
 /* Compute the first triangle */
 static void
-prc_compute_first_triangle(prc_context *ctx, const prc_tess_3d_compressed *data, 
+prc_compute_first_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
                                 prc_vec3 *point_array_scaled, uint32_t *point_array_index,
                                 treated_triangle *treated_tri)
 {
@@ -401,7 +401,7 @@ prc_compute_first_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
     prc_vec_add(point_array_scaled[*point_array_index + 2], temp, &V2);
 
     /* Current triangle. Treatment order this one is always 0 1 2 */
-    prc_set_treated_triangle(ctx, treated_tri, V0, V1, V2, *point_array_index, 
+    prc_set_treated_triangle(ctx, treated_tri, V0, V1, V2, *point_array_index,
         *point_array_index + 1, *point_array_index + 2, 0, 0, 0, 0);
 
     *point_array_index += 3;
@@ -432,7 +432,7 @@ prc_store_triangle_indices(prc_context *ctx, treated_triangle *treated_tri,
         vertex_normal_indices[*triangle_indice_count + 2] = treated_tri->normal_indices[1];
     }
 
-    DEBUG_LOG("\ntreatment [%d, %d, %d]\n", triangle_indices[*triangle_indice_count], 
+    DEBUG_LOG("\ntreatment [%d, %d, %d]\n", triangle_indices[*triangle_indice_count],
         triangle_indices[*triangle_indice_count + 1], triangle_indices[*triangle_indice_count + 2]);
 
     *triangle_indice_count += 3;
@@ -556,7 +556,7 @@ static int
 prc_set_left_right_edge_indices(prc_context *ctx, const prc_tess_3d_compressed *data,
     int triangle_count, treated_triangle *treated_tri, const prc_treated_details *treated_details,
     const prc_vec3 *normals_vertex)
-{ 
+{
     int right_base[3], left_base[3];
     int temp_base[3];
     uint32_t temp;
@@ -653,7 +653,7 @@ prc_set_left_right_edge_indices(prc_context *ctx, const prc_tess_3d_compressed *
     {
         /* If normal is reversed AND right base x treatment > y AND left base x treatment > y
            AND we have a right edge but not a left edge. In this case, we need to
-           process the left edge but not the right edge. Use the original data to 
+           process the left edge but not the right edge. Use the original data to
            determine if this is the case*/
         DEBUG_LOG("Special case: Forcing left edge to be treated and right edge to be not treated\n");
         treated_tri->right_edge.edge_status = PRC_EDGE_TREATED;
@@ -680,16 +680,33 @@ prc_set_one_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     int nz_ref0;
     prc_vec3 V0;
     int code;
+    uint32_t num_points = data->point_array_size / 3;
 
     /* First get the two encoded points */
     encoded_point1 = point_array_scaled[*point_array_count];
     encoded_point2 = point_array_scaled[*point_array_count + 1];
 
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before indexing into
+       point_reference_array and before using the value to index vertices_out,
+       otherwise a crafted file causes an out-of-bounds heap read. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* And now the one reference point */
     nz_ref0 = data->point_reference_array[*reference_array_count];
+    if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+        return PRC_ERROR_PARSE;
+    }
     ref_point = vertices_out[nz_ref0];
 
-    /* The options are that we can have 0 0 1, 1 0 0, or 0 1 0 
+    /* The options are that we can have 0 0 1, 1 0 0, or 0 1 0
         where the 0 represents the encoded points and the 1
         represents the reference point.  The decode depends upon
         the order */
@@ -798,8 +815,20 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     prc_vec3 encoded_point1, new_point, V0, V1, V2, temp2;
     int nz_ref0, nz_ref1, nz_ref2;
     uint32_t edge_index = 0;
+    uint32_t num_points = data->point_array_size / 3;
 
     /* We have two references and one point to decode */
+
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before reading the two
+       entries this function consumes, otherwise a crafted file causes an
+       out-of-bounds heap read below. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) + 1 >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
 
     if (point_is_ref[0] == 0)
     {
@@ -808,6 +837,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
 		prc_vec_add(point_array_scaled[*point_array_count], data->origin_array, &V0);
 		nz_ref1 = data->point_reference_array[*reference_array_count];
 		nz_ref2 = data->point_reference_array[*reference_array_count + 1];
+		if (nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points ||
+		    nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+		{
+		    prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+		    return PRC_ERROR_PARSE;
+		}
 		V1 = vertices_out[nz_ref1];
 		V2 = vertices_out[nz_ref2];
         prc_vec_copy(V0, &new_point, 0);
@@ -823,6 +858,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
         /* Non-ref point is the second one */
         nz_ref0 = data->point_reference_array[*reference_array_count];
         nz_ref2 = data->point_reference_array[*reference_array_count + 1];
+        if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+            nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+            return PRC_ERROR_PARSE;
+        }
         V0 = vertices_out[nz_ref0];
         V2 = vertices_out[nz_ref2];
         encoded_point1 = point_array_scaled[*point_array_count];
@@ -842,6 +883,12 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
             average of the first two reference points */
         nz_ref0 = data->point_reference_array[*reference_array_count];
         nz_ref1 = data->point_reference_array[*reference_array_count + 1];
+        if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+            nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+            return PRC_ERROR_PARSE;
+        }
         V0 = vertices_out[nz_ref0];
         V1 = vertices_out[nz_ref1];
         encoded_point1 = point_array_scaled[*point_array_count];
@@ -873,16 +920,35 @@ prc_set_two_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed 
     return 0;
 }
 
-static void
+static int
 prc_set_three_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compressed *data,
      prc_vec3 *vertices_out, treated_triangle *treated_tri, int *reference_array_count)
 {
     int32_t nz_ref0, nz_ref1, nz_ref2;
     prc_vec3 V0, V1, V2;
+    uint32_t num_points = data->point_array_size / 3;
+
+    /* point_reference_array entries and reference_array_count are attacker-
+       controlled/derived from the file. Validate before reading the three
+       entries this function consumes, otherwise a crafted file causes an
+       out-of-bounds heap read below. */
+    if (*reference_array_count < 0 ||
+        (uint32_t)(*reference_array_count) + 2 >= data->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+        return PRC_ERROR_PARSE;
+    }
 
     nz_ref0 = data->point_reference_array[*reference_array_count];
     nz_ref1 = data->point_reference_array[*reference_array_count + 1];
     nz_ref2 = data->point_reference_array[*reference_array_count + 2];
+    if (nz_ref0 < 0 || (uint32_t)nz_ref0 >= num_points ||
+        nz_ref1 < 0 || (uint32_t)nz_ref1 >= num_points ||
+        nz_ref2 < 0 || (uint32_t)nz_ref2 >= num_points)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+        return PRC_ERROR_PARSE;
+    }
     V0 = vertices_out[nz_ref0];
     V1 = vertices_out[nz_ref1];
     V2 = vertices_out[nz_ref2];
@@ -890,6 +956,7 @@ prc_set_three_ref_treated_triangle(prc_context *ctx, const prc_tess_3d_compresse
     prc_set_treated_triangle(ctx, treated_tri, V0, V1, V2, nz_ref0,
                                 nz_ref1, nz_ref2, 0, 0, 0, 0);
     *reference_array_count += 3;
+    return 0;
 }
 
 static int
@@ -904,7 +971,7 @@ prc_compute_triangle_basis(prc_context *ctx, const prc_vec3 *vertices_out,
     int code;
     uint8_t use_alternate_basis = 0;
     prc_basis basis;
-    
+
     if (edge_case != PRC_EDGE_RIGHT && edge_case != PRC_EDGE_LEFT)
     {
         return PRC_ERROR_PARSE;
@@ -1028,6 +1095,19 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     int code;
     uint8_t point_is_ref[3], num_ref_points;
 
+    /* triangle_face_array_size (which drives how many times this function gets
+       called) and reference_array_size (which bounds points_is_reference_array)
+       are independently attacker-controlled counts read from the file with no
+       relation to each other. Validate the index here instead of trusting them
+       to stay in sync, otherwise a crafted file walks this read past the end
+       of points_is_reference_array. */
+    if (*points_is_reference_index < 0 ||
+        (uint32_t)(*points_is_reference_index) + 3 > data->reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "points_is_reference_array index out of range\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* Get the next three references */
     point_is_ref[0] = data->points_is_reference_array[*points_is_reference_index];
     point_is_ref[1] = data->points_is_reference_array[*points_is_reference_index + 1];
@@ -1062,8 +1142,12 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     }
     else if (num_ref_points == 3)
     {
-        prc_set_three_ref_treated_triangle(ctx, data, vertices_out,
+        code = prc_set_three_ref_treated_triangle(ctx, data, vertices_out,
             treated_tri, reference_array_count);
+        if (code < 0)
+        {
+            return code;
+        }
     }
     else
     {
@@ -1318,7 +1402,7 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
             else
             {
                 /* First time on this face. */
-                /* It is possible that the first vertex of the triangle in 
+                /* It is possible that the first vertex of the triangle in
                    non-multiple and has already been set. If it has been,
                    then just use that for the face IF it was not a multiple */
 
@@ -1409,8 +1493,8 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                 else
                 {
                     /* In this case, the first vertex of the first triangle on
-                       face must have multiple normals we are either going to 
-                       reference an existing one, or add one to this vertex. 
+                       face must have multiple normals we are either going to
+                       reference an existing one, or add one to this vertex.
                        Regardless, that normal is used for the entire face */
                     is_a_reference = normal_bin_data[0];
                     normal_bin_data += 1;
@@ -1451,7 +1535,7 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                         treated_tri->normal_indices[2] = existing_normal_index;
 
                         normal_state->face_normal_decoded[face_index] = 1;
-						normal_state->face_normals[face_index] = 
+						normal_state->face_normals[face_index] =
                             normal_state->normals_vertex[existing_normal_index];
                         normal_state->face_normal_indices[face_index] = existing_normal_index;
 
@@ -1506,9 +1590,9 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                         treated_tri->normal_indices[2] = normal_state->normals_vertex_count - 1;
 
                         normal_state->face_normal_decoded[face_index] = 1;
-                        normal_state->face_normals[face_index] = 
+                        normal_state->face_normals[face_index] =
                             normal_state->normals_vertex[normal_state->normals_vertex_count - 1];
-                        normal_state->face_normal_indices[face_index] = 
+                        normal_state->face_normal_indices[face_index] =
                             normal_state->normals_vertex_count - 1;
                         normal_state->normal = normal_state->face_normals[face_index];
                     }
@@ -1537,14 +1621,14 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                the has_multiple_normal bit set.  If it did then the next bit is
                has_multiple_normal and the next three bits are like what we have above.
                If the previous index did NOT have has_multiple_normals set then
-               the next bit is a is_a_reference bit.  If is_a_reference is 0 then 
+               the next bit is a is_a_reference bit.  If is_a_reference is 0 then
                we have the same three bits stored. If instead is_a_reference is 1
                then the index number to the normal is pickled in the normal_bit_data
                and we get the normal for this vertex from there. */
             for (k = 0; k < 3; k++)
             {
                 vertex_index = treated_tri->treated_index[k];
-                if (multiple_normals[vertex_index].vertex_normal_state == 
+                if (multiple_normals[vertex_index].vertex_normal_state ==
                                             PRC_VERTEX_NORM_NOT_ENCOUNTERED)
                 {
                     /* We have not processed this normal yet in the bin data
@@ -1564,12 +1648,12 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
 
                     if (has_multiple_normals)
                     {
-                        multiple_normals[vertex_index].vertex_normal_state = 
+                        multiple_normals[vertex_index].vertex_normal_state =
                             PRC_VERTEX_NORM_IS_MULTIPLE;
                         multiple_normals[vertex_index].num_already_stored_normals_on_vertex = 1;
 
-                        multiple_normals[vertex_index].normal_indices = 
-                            (uint32_t *)prc_calloc(ctx, 
+                        multiple_normals[vertex_index].normal_indices =
+                            (uint32_t *)prc_calloc(ctx,
                             PRC_INITIAL_MULTI_NORMAL_CAPACITY, sizeof(uint32_t));
                         if (multiple_normals[vertex_index].normal_indices == NULL)
                         {
@@ -1582,14 +1666,14 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                     }
                     else
                     {
-                        multiple_normals[vertex_index].vertex_normal_state = 
+                        multiple_normals[vertex_index].vertex_normal_state =
                             PRC_VERTEX_NORM_IS_NOT_MULTIPLE;
                         multiple_normals[vertex_index].non_multiple_normal_index =
                             normal_state->normals_vertex_count;
                     }
 
                     /* Set the treated triangles normal indice */
-                    treated_tri->normal_indices[k] = 
+                    treated_tri->normal_indices[k] =
                         normal_state->normals_vertex_count;
 
                     /* Decode the normal (and store the normal) */
@@ -1607,7 +1691,7 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
                    previously decoded normals for this vertex. IF instead this
                    vertex did NOT have multiple normals then we just use the
                    normal index we previously used for this vertex */
-                else if (multiple_normals[vertex_index].vertex_normal_state == 
+                else if (multiple_normals[vertex_index].vertex_normal_state ==
                             PRC_VERTEX_NORM_IS_NOT_MULTIPLE)
                 {
                     treated_tri->normal_indices[k] =
@@ -1956,16 +2040,16 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 	uint32_t *triangle_style_array = NULL;
     uint32_t style_index = 0;
 
-    /* Initially set the edge_list to be of size that is half the number of 
+    /* Initially set the edge_list to be of size that is half the number of
        points since we will be referencing by the smallest index */
-    
+
 	num_edges = num_points / 2;
 	edge_list.edge = (treated_edge *)prc_calloc(ctx, num_edges, sizeof(treated_edge));
 	if (edge_list.edge == NULL)
 		return PRC_ERROR_MEMORY;
 	edge_list.capacity = num_edges;
 
-    /* Items needed if the normals are compressed in the stream and do 
+    /* Items needed if the normals are compressed in the stream and do
        not need to be calculated. We still need to do calculations, just
        different ones... */
     int must_calculate_normals = data->must_recalculate_normals;
@@ -1993,7 +2077,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
        need to consider the case where each triangle has its own style. This
        can occur if we have is_multiple_attribute TRUE.  If that master boolean
        is true, then when we encounter a face, we need to look
-       at the setting of the boolean value for the face which is set in 
+       at the setting of the boolean value for the face which is set in
        is_multiple_line_attribute_on_face.  If that is false then we just have
        a single global style for the face. If that is true, then each triangle
        in the face has its style added to line_attribute array. Note that face
@@ -2037,7 +2121,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
             return PRC_ERROR_MEMORY;
         prc_decode_angles(ctx, data, decoded_angles);
     }
- 
+
     stack.details = NULL;
     stack.size = 0;
 
@@ -2196,7 +2280,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 
     /* Start at triangle 2 since we already computed one */
     for (k = 1; k < num_triangles; k++)
-    {   
+    {
          /* k - 1 since we are looking at the previous treated triangle */
          edge_count = prc_set_left_right_edge_indices(ctx, data, k - 1, &treated_tri,
                                     &treated_details, normals_vertex);
@@ -2263,7 +2347,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
                 }
             }
         }
-        
+
         DEBUG_LOG("Stack size is %d\n", stack.size);
 
         stack_was_empty = 0;
@@ -2273,7 +2357,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
             1) A single reference point and two decoded points.
             2) Two reference points and one decoded point.
             3) Three reference points.
-            
+
             In any event we need to look at the reference point array and determine
             which of the three we have to deal with */
 
@@ -2343,13 +2427,40 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
 
 		if (!stack_was_empty)
 		{
+            /* points_is_reference_index/reference_array_count are driven by
+               independently attacker-controlled counts from the file. Validate
+               them and the resulting point_reference_array value before using
+               them to index points_is_reference_array/vertices_out, otherwise a
+               crafted file causes an out-of-bounds heap read. */
+            if (points_is_reference_index < 0 ||
+                (uint32_t)points_is_reference_index >= data->reference_array_size)
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "points_is_reference_index out of range\n");
+                return PRC_ERROR_PARSE;
+            }
+
             /* Only one point is a reference.. */
             if (data->points_is_reference_array[points_is_reference_index] == 1)
             {
+                int32_t ref_value;
+
+                if (reference_array_count < 0 ||
+                    (uint32_t)reference_array_count >= data->point_reference_array_size)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "reference_array_count out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+                ref_value = data->point_reference_array[reference_array_count];
+                if (ref_value < 0 || (uint32_t)ref_value >= (uint32_t)num_points)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "point_reference_array value out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+
                 /* This is a reference point */
                 /* Grab the existing point we decoded already. Stick into new_point. */
-                prc_vec_copy(vertices_out[data->point_reference_array[reference_array_count]], &new_point, 0);
-                new_indice_index = data->point_reference_array[reference_array_count];
+                prc_vec_copy(vertices_out[ref_value], &new_point, 0);
+                new_indice_index = ref_value;
 
                 reference_array_count++;
 
@@ -2365,6 +2476,18 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
             }
             else
             {
+                /* point_array_count/vertex_treatment_count are driven by
+                   triangle_face_array_size, a count independent of point_array_size
+                   (the actual capacity of point_array/vertices_out). Validate before
+                   reading/writing, otherwise a crafted file causes an out-of-bounds
+                   heap read (point_array) or write (vertices_out). */
+                if (point_array_count >= (uint32_t)num_points ||
+                    vertex_treatment_count >= num_points)
+                {
+                    prc_error(ctx, PRC_ERROR_PARSE, "point_array_count/vertex_treatment_count out of range\n");
+                    return PRC_ERROR_PARSE;
+                }
+
                 DEBUG_LOG("Origin: [%.17f %.17f %.17f]\n", treated_details.origin.x,
                     treated_details.origin.y, treated_details.origin.z);
 
@@ -2390,7 +2513,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
                     new_normal_index, 0);
             }
 
-            /* One point in this case */ 
+            /* One point in this case */
             points_is_reference_index++;
         }
 
@@ -2733,7 +2856,7 @@ prc_compressed_tess_find_open_edge_hashed(prc_compressed_tess_edge_list *edge_li
     return NULL;
 }
 
-/* In this function we build the edge list from the triangle list. The edge list 
+/* In this function we build the edge list from the triangle list. The edge list
    consists of a list of edges. The members of each edge will be the list of vertices
    for each of the two triangles that share that edge. We use the edge list to step
    through the tessellation and compare the normals.  Making use of the crease angle
@@ -2753,7 +2876,7 @@ prc_compressed_tess_build_edge_list(prc_context *ctx,  prc_tess_3d_compressed *d
     uint32_t *hash_next = NULL;
     uint32_t hash_capacity = 1;
     uint32_t hash_mask;
-    
+
     /* We will definitely need less than this */
     edge_list->capacity = num_triangles * 3;
     edge_list->num_edges = 0;
@@ -2894,7 +3017,7 @@ prc_compressed_tess_build_edge_list(prc_context *ctx,  prc_tess_3d_compressed *d
 }
 
 static int
-prc_compressed_tess_get_indice_offset(prc_context *ctx, uint32_t *indices, 
+prc_compressed_tess_get_indice_offset(prc_context *ctx, uint32_t *indices,
     uint32_t num_indices, uint32_t index)
 {
     uint32_t k;

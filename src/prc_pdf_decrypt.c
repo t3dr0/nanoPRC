@@ -1045,7 +1045,7 @@ CRYPT_AESDecrypt(prc_context *ctx, CRYPT_aes_context *aes_ctx,
     return 0;
 }
 
-size_t 
+size_t
 pdf_decrypt_get_size(prc_context *ctx, prc_pdf_decrypt_params *decrypt_params,
                      size_t src_size)
 {
@@ -2083,8 +2083,8 @@ pdf_revision6_hash(prc_context *ctx, CRYPT_sha2_context *sha, uint8_t *pkey,
             }
             code = CRYPT_SHA256Generate(ctx, encrypted_output, (uint32_t)encrypted_output_size, inter_digest);
             if (code < 0)
-            { 
-                prc_free(ctx, encrypted_output); 
+            {
+                prc_free(ctx, encrypted_output);
                 prc_free(ctx, inter_digest);
                 return code;
             }

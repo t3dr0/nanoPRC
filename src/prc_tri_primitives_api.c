@@ -52,9 +52,9 @@ prc_internal_api_find_edge(prc_internal_api_edge_list *edge_list, uint32_t index
         edge = &edge_list->edge[k];
         if (edge->num_triangles == 2)
             continue; /* This edge already has a partner. We are looking for singles */
-        if ((edge->tri_one_edge_indices[0] == index1 && 
+        if ((edge->tri_one_edge_indices[0] == index1 &&
              edge->tri_one_edge_indices[1] == index2) ||
-            (edge->tri_one_edge_indices[0] == index2 && 
+            (edge->tri_one_edge_indices[0] == index2 &&
              edge->tri_one_edge_indices[1] == index1))
         {
             return edge;
@@ -158,7 +158,7 @@ prc_internal_api_process_vertex_color_data(prc_context *ctx, uint32_t num_vertic
             }
         }
         else
-        {   
+        {
             /* We already applied the "same as" and copied the color when we read the array */
             array_offset = k * 4;
             decoded_colors[array_offset] = color_data->remaining_vertices[k - 1].color.red / 255.0f;
@@ -311,7 +311,7 @@ prc_internal_api_compute_normal(prc_api_vertex *vertices, prc_vec3 *normal)
 static void
 prc_internal_api_get_normals_state(prc_context *ctx, prc_internal_api_edge *edge,
                                   prc_api_vertex *vertices, uint8_t *normal0_set,
-                                   uint8_t *normal1_set, uint8_t triangle_index) 
+                                   uint8_t *normal1_set, uint8_t triangle_index)
 {
     prc_internal_api_edge_check_case_t edge_case;
     *normal0_set = false;
@@ -1436,7 +1436,7 @@ prc_internal_api_find_bounding_box(prc_context *ctx, prc_tess *tess, prc_api_tes
 }
 
 static int
-prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in, 
+prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
                 uint32_t file_index, uint32_t tess_index,
                 prc_internal_api_vertex **vertex_buffer_out,
                 size_t *num_vertices_out)
@@ -1466,7 +1466,7 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
             return PRC_API_ERROR_PARSER;
 
         *num_vertices_out = num_vertices;
-        prc_internal_api_vertex *vertex_buffer = 
+        prc_internal_api_vertex *vertex_buffer =
             (prc_internal_api_vertex*) prc_calloc(ctx, num_vertices,
                                                   sizeof(prc_internal_api_vertex));
         if (vertex_buffer == NULL)
@@ -1488,14 +1488,14 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
     }
     case PRC_TYPE_TESS_3D_Compressed:
     {
-        prc_tess_3d_compressed *tess = 
+        prc_tess_3d_compressed *tess =
             file_struct->tessellation->tess[tess_index].tess_3d_compressed;
         num_vertices = (size_t)tess->num_vertices_prc_compressed_3d;
         if (num_vertices == 0)
             return PRC_API_ERROR_PARSER;
 
         *num_vertices_out = num_vertices;
-        prc_internal_api_vertex *vertex_buffer = 
+        prc_internal_api_vertex *vertex_buffer =
             (prc_internal_api_vertex*) prc_calloc(ctx, num_vertices,
                                                   sizeof(prc_internal_api_vertex));
         if (vertex_buffer == NULL)
@@ -1508,11 +1508,11 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
 
         for (k = 0; k < num_vertices; k++)
         {
-            vertex_buffer[k].position[0] = 
+            vertex_buffer[k].position[0] =
                 (float)tess->vertices_prc_compressed_3d[k * 3];
-            vertex_buffer[k].position[1] = 
+            vertex_buffer[k].position[1] =
                 (float)tess->vertices_prc_compressed_3d[k * 3 + 1];
-            vertex_buffer[k].position[2] = 
+            vertex_buffer[k].position[2] =
                 (float)tess->vertices_prc_compressed_3d[k * 3 + 2];
         }
         *vertex_buffer_out = vertex_buffer;
@@ -1580,7 +1580,7 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
         }
 
         *vertex_buffer_out = vertex_buffer;
-        break;   
+        break;
     }
 
     default:
@@ -1591,7 +1591,7 @@ prc_internal_api_get_vertices(prc_context *ctx, prc_api_data data_in,
 
 static int
 prc_internal_api_get_normals(prc_context *ctx, prc_api_data data_in,
-                             uint32_t file_index, uint32_t tess_index, 
+                             uint32_t file_index, uint32_t tess_index,
                              prc_internal_api_normal **normals_buffer_out,
                              size_t *num_normals_out)
 {
@@ -1650,7 +1650,7 @@ prc_internal_api_get_normals(prc_context *ctx, prc_api_data data_in,
             return PRC_API_ERROR_PARSER;
 
         *num_normals_out = num_normals;
-        prc_internal_api_normal *normals_buffer = 
+        prc_internal_api_normal *normals_buffer =
             (prc_internal_api_normal*) prc_calloc(ctx, num_normals,
                                                   sizeof(prc_internal_api_normal));
         file_struct->tessellation->tess[tess_index].normals_internal = normals_buffer;
@@ -1659,11 +1659,11 @@ prc_internal_api_get_normals(prc_context *ctx, prc_api_data data_in,
 
         for (k = 0; k < num_normals; k++)
         {
-            normals_buffer[k].normal[0] = 
+            normals_buffer[k].normal[0] =
                 (float)tess->normals_prc_compressed_3d[k * 3];
-            normals_buffer[k].normal[1] = 
+            normals_buffer[k].normal[1] =
                 (float)tess->normals_prc_compressed_3d[k * 3 + 1];
-            normals_buffer[k].normal[2] = 
+            normals_buffer[k].normal[2] =
                 (float)tess->normals_prc_compressed_3d[k * 3 + 2];
         }
         *normals_buffer_out = normals_buffer;
@@ -2255,7 +2255,7 @@ prc_api_helper_get_style_index_from_leaf(prc_context *ctx, prc_data *data,
                     prc_misc_reference_on_prcbase *nontopo_ref = &reference_data->non_topo_reference;
                     if (!nontopo_ref->flag)
                     {
-                        biased_file_index = 
+                        biased_file_index =
                             prc_api_helper_get_biased_file_index_from_unique_id(ctx, data,
                                                 nontopo_ref->different_unique_id);
                         if (biased_file_index != 0)
@@ -2727,7 +2727,7 @@ prc_api_get_line_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     return 0;
 }
 
-/* tess_index_in is an index into the tessellations in part_details or 
+/* tess_index_in is an index into the tessellations in part_details or
    markup_details in prc_data */
 PRC_EXPORT int
 prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
@@ -2860,7 +2860,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             /* Compressed case */
             /* The style can be defined by reference for the faces OR it
                can be defined in the tessellation via the line styles or
-               even by the vertex color. Question what do you do when you 
+               even by the vertex color. Question what do you do when you
                have both. */
             prc_tess_3d_compressed *tess_compressed = tess->tess_3d_compressed;
             if (tess_compressed == NULL)
@@ -2914,7 +2914,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 {
                     if (leaf_style_unbiased_index != leaf_style_face_0)
                     {
-                        /* We have different styles for different faces. We won't 
+                        /* We have different styles for different faces. We won't
                            be able to use the optimization of just looking at the
                            first face's style and applying it to all the faces. */
                         has_more_than_one_ref_style = true;
@@ -3013,7 +3013,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         {
             /* line_attributes is biased */
             face_out_reserved->style->face_style_index = face.line_attributes[0] - 1;
-        
+
             /* Use the tessellation file index */
             code = prc_api_helper_get_face_style(ctx, data_in, file_index,
                 face_out_reserved->style->face_style_index, 1.0,
@@ -3192,7 +3192,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* For the mapping tables we have to take the max of the indices and the
            number of vertices */
-        prc_vertex_indice_to_api_vertex_indice = 
+        prc_vertex_indice_to_api_vertex_indice =
             (uint32_t *)prc_calloc(ctx, tess->num_vertices_internal, sizeof(uint32_t));
         if (prc_vertex_indice_to_api_vertex_indice == NULL)
         {
@@ -3227,7 +3227,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             prc_texture_indice_to_api_texture_indice = NULL;
         }
 
-        /* Initialize prc_vertex_indice_to_api_vertex_indice, and 
+        /* Initialize prc_vertex_indice_to_api_vertex_indice, and
            prc_normal_indice_to_api_normal_indice to UINT32MAX */
         for (k = 0; k < tess->num_vertices_internal; k++)
         {
@@ -3334,7 +3334,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
            a match to one that we are wanting to add to our vertices. If we find
            it, then we use that one. Otherwise we add a new one to the list */
         tess->position_normal_lut.number_values = num_indices;
-        tess->position_normal_lut.position_normal_pair = 
+        tess->position_normal_lut.position_normal_pair =
             (prc_internal_api_position_normal_pair *)prc_calloc(ctx, num_indices,
             sizeof(prc_internal_api_position_normal_pair));
         if (tess->position_normal_lut.position_normal_pair == NULL)
@@ -3472,7 +3472,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* This section is where all heavy work happens */
         /* Multiple norm non-textured cases */
-        code = prc_internal_api_vertex_triangle_multinorm(ctx, 
+        code = prc_internal_api_vertex_triangle_multinorm(ctx,
                             entities_multiple_norms->num_triangles, false,
                             &uncompressed_data);
         if (code < 0)
@@ -3530,7 +3530,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             entities_textured_multiple_norms->num_strips,
             entities_textured_multiple_norms->strip_offsets,
             true, &uncompressed_data);
-        if (code < 0)     
+        if (code < 0)
             return code;
 
         /* Single norm textured case */
@@ -3627,9 +3627,9 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     {
         /* If we are dealing with multiple faces in the compressed case, we want
            to do this a little different and just hand vertices that are relevant
-           for this face and not all of the vertices. So lets do that as a special 
+           for this face and not all of the vertices. So lets do that as a special
            case */
-        prc_tess_3d_compressed *tess = 
+        prc_tess_3d_compressed *tess =
             file_struct->tessellation->tess[tess_index].tess_3d_compressed;
         int num_prc_indices = tess->num_triangle_indices_prc_compressed_3d;
         uint8_t has_vertex_colors =
@@ -3680,7 +3680,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         }
 
         /* Note. If has_style == TRUE && has_more_than_one_tri_style == FALSE,
-           then all the triangles have the same style! That is the easy case. 
+           then all the triangles have the same style! That is the easy case.
            Just set that as the DEFAULT style for every thing */
 
         /* The compressed tessellation contains only triangles. It does have
@@ -3717,7 +3717,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
            that go with that position
 
             position(0) -> normal(3), normal(2), normal(5)
-            position(1) -> normal(3), normal(0) 
+            position(1) -> normal(3), normal(0)
             etc.
 
             Then we will make our way through the list, creating a new vertex for
@@ -3726,8 +3726,8 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
         /* Create one of these for each vertex. Then each vertex will contain
            multiple normals in a list */
-        position_normal_pair = 
-            (prc_internal_api_position_normal_pair *)prc_calloc(ctx, num_prc_vertices, 
+        position_normal_pair =
+            (prc_internal_api_position_normal_pair *)prc_calloc(ctx, num_prc_vertices,
                                         sizeof(prc_internal_api_position_normal_pair));
         if (position_normal_pair == NULL)
             return PRC_API_ERROR_MEMORY;
@@ -3761,7 +3761,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         }
 
         /* Everything has the same style. This means no need to check,
-           but we will set it to the face/ref style which should at 
+           but we will set it to the face/ref style which should at
            least be the default */
         initial_style_state = PRC_INTERNAL_API_NO_STYLE;
 
@@ -3853,7 +3853,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 face_style_index, face_style_file_index);
         }
 
-        /* Now lets start going through the prc indices, assigning multiple normals to 
+        /* Now lets start going through the prc indices, assigning multiple normals to
            vertex positions and creating new vertex data that includes position,
            normal, and color (texture or vertex color) */
         for (k = 0; k < num_prc_indices; k++)
@@ -3943,8 +3943,8 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 {
                     if (has_ref_style_defined)
                     {
-                        /* Use the style for this entire face get it from 
-                           the tessellation data. global data is the 
+                        /* Use the style for this entire face get it from
+                           the tessellation data. global data is the
                            proper place */
                         prc_api_helper_set_vertex_style_from_face_ref(ctx,
                             face_out->vertices_have_style, vertex_out,
@@ -4302,7 +4302,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
             current = position_normal_pair[k].next;
             while (current != NULL)
-            {   
+            {
                 temp = current;
                 current = current->next;
                 prc_free(ctx, temp);
@@ -4442,7 +4442,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
 
             /* For now allocate enough to hold the twice the number of wire indexes.
                This is sufficient to hold all the primitives if they are all connected */
-            prc_internal_api_wire *wire = (prc_internal_api_wire *)prc_calloc(ctx, 
+            prc_internal_api_wire *wire = (prc_internal_api_wire *)prc_calloc(ctx,
                                                     2 * tess->number_of_wire_indexes,
                                                     sizeof(prc_internal_api_wire));
             if (wire == NULL)
@@ -4582,11 +4582,11 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
             api_tess->text_primitives = (prc_api_text_primitive *)prc_calloc(ctx,
                 api_tess->num_text_primitives, sizeof(prc_api_text_primitive));
             if (api_tess->text_primitives == NULL)
-                return PRC_API_ERROR_MEMORY;        
+                return PRC_API_ERROR_MEMORY;
         }
 
         if (api_tess->num_line_primitives)
-        {          
+        {
             /* Allocate the space for the primitives */
              wire = (prc_internal_api_wire *)prc_calloc(ctx,
                  tess->decode_number_primitives,
@@ -4648,7 +4648,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                     api_tess->text_primitives[text_prim_count].color[2] = 0.0;
                 }
                 else
-                {                    
+                {
                     uint32_t color_index = (tess->decode_primitives[k].biased_color_index - 1)/3;
                     if (color_index > global_data->color_count)
                     return PRC_API_ERROR_PARSER;
@@ -4667,9 +4667,9 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                     tess->decode_primitives[k].face_frame_draw_origin.y;
                 api_tess->text_primitives[text_prim_count].origin[2] =
                     tess->decode_primitives[k].face_frame_draw_origin.z;
-                api_tess->text_primitives[text_prim_count].text_width = 
+                api_tess->text_primitives[text_prim_count].text_width =
                     tess->decode_primitives[k].text_width;
-                api_tess->text_primitives[text_prim_count].text_height = 
+                api_tess->text_primitives[text_prim_count].text_height =
                     tess->decode_primitives[k].text_height;
                 api_tess->text_primitives[text_prim_count].mode =
                     (prc_api_text_block_mode_t) tess->decode_primitives[k].block_mode;
@@ -4722,7 +4722,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
     return 0;
 }
 
-PRC_EXPORT uint32_t 
+PRC_EXPORT uint32_t
 prc_api_number_of_materials(prc_context *ctx, prc_api_data data_in, const prc_api_tess *tess)
 {
     uint32_t num_faces = tess->num_faces;
@@ -4917,9 +4917,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
                 {
                     /* Return a fan */
                     graphics_object->type = PRC_API_FAN;
-                    graphics_object->num_indices = 
+                    graphics_object->num_indices =
                         entity->fan_offsets[2 * graphics_index + 1];
-                    graphics_object->indices = 
+                    graphics_object->indices =
                         &face->vertex_indices[entity->fan_offsets[2 * graphics_index]];
                     return 0;
                 }
@@ -4927,9 +4927,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
                 {
                     graphics_index = graphics_index - entity->num_fans;
                     graphics_object->type = PRC_API_STRIP;
-                    graphics_object->num_indices = 
+                    graphics_object->num_indices =
                         entity->strip_offsets[2 * graphics_index + 1];
-                    graphics_object->indices = 
+                    graphics_object->indices =
                         &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
                     return 0;
                 }
@@ -4938,9 +4938,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
             {
                 /* Return a strip */
                 graphics_object->type = PRC_API_STRIP;
-                graphics_object->num_indices = 
+                graphics_object->num_indices =
                     entity->strip_offsets[2 * graphics_index + 1];
-                graphics_object->indices = 
+                graphics_object->indices =
                     &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
                 return 0;
             }
@@ -4955,9 +4955,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
                 {
                     /* Return a fan */
                     graphics_object->type = PRC_API_FAN;
-                    graphics_object->num_indices = 
+                    graphics_object->num_indices =
                         entity->fan_offsets[2 * graphics_index + 1];
-                    graphics_object->indices = 
+                    graphics_object->indices =
                         &face->vertex_indices[entity->fan_offsets[2 * graphics_index]];
                     return 0;
                 }
@@ -4966,9 +4966,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
                     graphics_index = graphics_index - entity->num_fans;
                     /* Return a strip */
                     graphics_object->type = PRC_API_STRIP;
-                    graphics_object->num_indices = 
+                    graphics_object->num_indices =
                         entity->strip_offsets[2 * graphics_index + 1];
-                    graphics_object->indices = 
+                    graphics_object->indices =
                         &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
                     return 0;
                 }
@@ -4977,9 +4977,9 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
             {
                 /* Return a strip */
                 graphics_object->type = PRC_API_STRIP;
-                graphics_object->num_indices = 
+                graphics_object->num_indices =
                     entity->strip_offsets[2 * graphics_index + 1];
-                graphics_object->indices = 
+                graphics_object->indices =
                     &face->vertex_indices[entity->strip_offsets[2 * graphics_index]];
                 return 0;
             }

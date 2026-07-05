@@ -64,7 +64,7 @@ public:
     constexpr void setFar(float far) { _far = far; }
     constexpr void setAspect(float aspect) { _aspect = aspect; }
 
-    constexpr void setNumViews(uint32_t numViews) { _numViews = numViews; } 
+    constexpr void setNumViews(uint32_t numViews) { _numViews = numViews; }
     constexpr uint32_t &getNumViews() { return _numViews; }
     constexpr char* getViewName(int index) { return _views[index].name; }
 
@@ -207,7 +207,7 @@ public:
                 _productModel = Matrix4(1.0f); // Reset the model transformation
                 product.setModel(_productModel);
             }
-            
+
             /*
             _position.x = _views[_currentViewIndex].position.x * (1.0 - _viewConvexStep) +
                 _views[_newViewIndex].position.x * _viewConvexStep;

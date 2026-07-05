@@ -26,25 +26,65 @@
 
 #define PARTS_DETAIL_INIT_SIZE 100
 
+/* Iterative (not recursive): the style tree's depth follows the assembly/RI
+   tree nesting in the file, which is attacker-controlled and could otherwise
+   drive unbounded C-stack recursion. Uses an explicit heap-allocated work
+   list instead of the call stack. Visit order doesn't matter here -- each
+   node only frees its own children array, independent of sibling/descendant
+   state -- so a simple stack (LIFO) work list is sufficient. */
 void
 prc_api_release_style_tree(prc_context *ctx, prc_api_object_style *node)
 {
-    uint32_t k;
+    prc_api_object_style **worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity;
 
     if (node == NULL)
         return;
 
-    for (k = 0; k < node->num_children; k++)
+    worklist_capacity = 64;
+    worklist = (prc_api_object_style **)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_object_style *));
+    if (worklist == NULL)
+        return;
+    worklist[worklist_size++] = node;
+
+    while (worklist_size > 0)
     {
-        prc_api_release_style_tree(ctx, node->children[k]);
+        prc_api_object_style *curr;
+        uint32_t k;
+
+        curr = worklist[--worklist_size];
+        if (curr == NULL)
+            continue;
+
+        for (k = 0; k < curr->num_children; k++)
+        {
+            if (worklist_size >= worklist_capacity)
+            {
+                prc_api_object_style **new_worklist;
+                worklist_capacity *= 2;
+                new_worklist = (prc_api_object_style **)prc_realloc(ctx, worklist,
+                    worklist_capacity * sizeof(prc_api_object_style *));
+                if (new_worklist == NULL)
+                {
+                    prc_free(ctx, worklist);
+                    return;
+                }
+                worklist = new_worklist;
+            }
+            worklist[worklist_size++] = curr->children[k];
+        }
+
+        if (curr->children != NULL)
+        {
+            prc_free(ctx, curr->children);
+            curr->children = NULL;
+        }
+        curr->num_children = 0;
     }
 
-    if (node->children != NULL)
-    {
-        prc_free(ctx, node->children);
-        node->children = NULL;
-    }
-    node->num_children = 0;
+    prc_free(ctx, worklist);
 }
 
 PRC_EXPORT prc_context*
@@ -98,7 +138,7 @@ prc_api_open_contents(prc_context *ctx, const char *infile)
 
 /* Here we release the API visible data that was created. Not the parsed objects. */
 PRC_EXPORT void
-prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_in, 
+prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_in,
     uint32_t num_tess, prc_api_tess *line_tess, uint32_t num_line_tess,
     prc_api_product *product_tree)
 {
@@ -221,7 +261,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                 {
                     if (tess_in[k].tess_faces[j].reserved != NULL)
                     {
-                        prc_internal_api_face *face_out_reserved = 
+                        prc_internal_api_face *face_out_reserved =
                             (prc_internal_api_face *)(tess_in[k].tess_faces[j].reserved);
                         if (face_out_reserved->vertex_indices != NULL)
                             prc_free(ctx, face_out_reserved->vertex_indices);
@@ -653,12 +693,12 @@ prc_api_matrix_identity_check(prc_context *ctx, prc_api_transform *transform)
 
 /* Matrix elements are stored in column first order assuming we are multiplying
    on the right of the matrix by the column position vector.
-   
+
    M00 M01 M02 M03
    M10 M11 M12 M13
    M20 M21 M22 M23
-   0   0   0   1    
-   
+   0   0   0   1
+
    where the element indices are as given in the PRC spec. So data is stored
    in memory as M00, M10, M20, 0, M01, M11, ... */
 
@@ -671,7 +711,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
         prc_error(ctx, PRC_ERROR_MEMORY, "location is NULL in prc_api_set_transform\n");
         return PRC_ERROR_MEMORY;
     }
-    
+
     uint8_t other_flags_set = 0;
     double *matrix = location->matrix;
     location->is_identity = 0;
@@ -704,7 +744,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
             matrix[13] = prc_trans->cartesian.translation.y;
             matrix[14] = prc_trans->cartesian.translation.z;
         }
- 
+
         if (behavior & PRC_TRANSFORMATION_NonOrtho)
         {
             /* TODO Check this. */
@@ -749,7 +789,7 @@ prc_api_set_transform(prc_context *ctx, prc_api_transform *location,
             matrix[8] = z_axis.x;
             matrix[9] = z_axis.y;
             matrix[10] = z_axis.z;
- 
+
             other_flags_set = 1;
         }
 
@@ -964,131 +1004,244 @@ prc_api_helper_ri_items_all_brep(prc_context *ctx, uint32_t num_refs,
     return 1;
 }
 
-/* A recursive method to add RIs to RIs. Only valid if parent is PRC_TYPE_RI_Set */
+typedef struct
+{
+    uint32_t num_rep_items;
+    prc_ri_set *ri_set;
+    prc_api_part *api_rep;
+} prc_api_add_ri_to_ri_work;
+
+static int
+prc_api_add_ri_to_ri_push(prc_context *ctx, prc_api_add_ri_to_ri_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint32_t num_rep_items,
+    prc_ri_set *ri_set, prc_api_part *api_rep)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_api_add_ri_to_ri_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_add_ri_to_ri_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_add_ri_to_ri_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].num_rep_items = num_rep_items;
+    (*worklist)[*worklist_size].ri_set = ri_set;
+    (*worklist)[*worklist_size].api_rep = api_rep;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* Adds RIs to RIs. Only valid if parent is PRC_TYPE_RI_Set. Iterative (not
+   recursive): RI_Set nesting follows the file's structure, which is
+   attacker-controlled and could otherwise drive unbounded C-stack recursion.
+   Uses an explicit heap-allocated work list instead. */
 static int32_t
 prc_api_helper_add_ri_to_ri(prc_context *ctx,
     prc_api_tess *tessellations, prc_api_child_reserve *reserve,
     uint32_t num_rep_items, prc_ri_set *ri_set, prc_api_part *api_rep)
 {
-    uint32_t k;
-    uint32_t tess_index_ri;
-    int32_t code;
+    prc_api_add_ri_to_ri_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    int32_t result = 0;
 
-    for (k = 0; k < num_rep_items; k++)
+    worklist = (prc_api_add_ri_to_ri_work *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_add_ri_to_ri_work));
+    if (worklist == NULL)
     {
-        if (ri_set->rep_items[k].representation_type == PRC_TYPE_RI_BrepModel ||
-            ri_set->rep_items[k].representation_type == PRC_TYPE_RI_PolyBrepModel)
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_to_ri\n");
+        return PRC_ERROR_MEMORY;
+    }
+    worklist[worklist_size].num_rep_items = num_rep_items;
+    worklist[worklist_size].ri_set = ri_set;
+    worklist[worklist_size].api_rep = api_rep;
+    worklist_size++;
+
+    while (worklist_size > 0)
+    {
+        prc_api_add_ri_to_ri_work item = worklist[--worklist_size];
+        uint32_t k;
+
+        for (k = 0; k < item.num_rep_items; k++)
         {
-            tess_index_ri = ri_set->rep_items[k].item_content.biased_index_tessellation;
-            if (tess_index_ri > 0)
+            if (item.ri_set->rep_items[k].representation_type == PRC_TYPE_RI_BrepModel ||
+                item.ri_set->rep_items[k].representation_type == PRC_TYPE_RI_PolyBrepModel)
             {
-                api_rep[k].tess = &tessellations[tess_index_ri - 1];
-                code = prc_api_set_rep_item_name(ctx, &api_rep[k],
-                    ri_set->rep_items[k].item_content.base.base.name.name.string);
-                if (code < 0)
+                uint32_t tess_index_ri = item.ri_set->rep_items[k].item_content.biased_index_tessellation;
+                if (tess_index_ri > 0)
+                {
+                    int32_t code;
+
+                    item.api_rep[k].tess = &tessellations[tess_index_ri - 1];
+                    code = prc_api_set_rep_item_name(ctx, &item.api_rep[k],
+                        item.ri_set->rep_items[k].item_content.base.base.name.name.string);
+                    if (code < 0)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_items\n");
+                        result = PRC_ERROR_MEMORY;
+                        goto cleanup;
+                    }
+                    /* This one has no children */
+                    item.api_rep[k].num_rep_items = 0;
+                    item.api_rep[k].rep_items = 0;
+                }
+            }
+            else if (item.ri_set->rep_items[k].representation_type == PRC_TYPE_RI_Set)
+            {
+                /* In this case we need to add a rep type to a rep type */
+                item.api_rep[k].num_rep_items = item.ri_set->rep_items[k].ri_set->number_of_items;
+                item.api_rep[k].rep_items = &reserve->parts[reserve->part_index];
+                reserve->part_index += item.api_rep[k].num_rep_items;
+
+                if (prc_api_add_ri_to_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        item.api_rep[k].num_rep_items, item.ri_set->rep_items[k].ri_set,
+                        &item.api_rep[k]) < 0)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_items\n");
-                    return PRC_ERROR_MEMORY;
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
                 }
-                /* This one has no children */
-                api_rep[k].num_rep_items = 0;
-                api_rep[k].rep_items = 0;
-            }
-        }
-        else if (ri_set->rep_items[k].representation_type == PRC_TYPE_RI_Set)
-        {
-            /* In this case we need to add a rep type to a rep type */
-            api_rep[k].num_rep_items = ri_set->rep_items[k].ri_set->number_of_items;
-            api_rep[k].rep_items = &reserve->parts[reserve->part_index];
-            reserve->part_index += api_rep[k].num_rep_items;
-            code = prc_api_helper_add_ri_to_ri(ctx, tessellations, reserve,
-                api_rep[k].num_rep_items, ri_set->rep_items[k].ri_set,
-                &api_rep[k]);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_items\n");
-                return PRC_ERROR_MEMORY;
             }
         }
     }
+
+cleanup:
+    prc_free(ctx, worklist);
+    return result;
+}
+
+typedef struct
+{
+    uint32_t num_rep_items;
+    prc_ri *rep_items;
+    prc_api_part *parent;
+} prc_api_add_ri_items_work;
+
+static int
+prc_api_add_ri_items_push(prc_context *ctx, prc_api_add_ri_items_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint32_t num_rep_items,
+    prc_ri *rep_items, prc_api_part *parent)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_api_add_ri_items_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_add_ri_items_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_add_ri_items_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].num_rep_items = num_rep_items;
+    (*worklist)[*worklist_size].rep_items = rep_items;
+    (*worklist)[*worklist_size].parent = parent;
+    (*worklist_size)++;
     return 0;
 }
 
-/* Add the representative items */
+/* Adds the representative items. Iterative (not recursive): RI_Set nesting
+   follows the file's structure, which is attacker-controlled and could
+   otherwise drive unbounded C-stack recursion. Uses an explicit
+   heap-allocated work list instead. */
 static int32_t
 prc_api_helper_add_ri_items(prc_context *ctx,prc_api_child_reserve *reserve,
     uint32_t num_rep_items, prc_ri *rep_items, prc_api_part *parent)
 {
-    uint32_t k;
-    uint32_t brep_count = 0;
-    uint32_t set_count = 0;
-    uint32_t tess_index_ri;
-    uint32_t rep_index = 0;
-    int32_t code;
+    prc_api_add_ri_items_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    int32_t result = 0;
 
-    parent->rep_items = &reserve->parts[reserve->part_index];
-    parent->num_rep_items = num_rep_items;
-    reserve->part_index += num_rep_items;
-
-    for (k = 0; k < num_rep_items; k++)
+    worklist = (prc_api_add_ri_items_work *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_add_ri_items_work));
+    if (worklist == NULL)
     {
-        if (rep_items[k].representation_type == PRC_TYPE_RI_BrepModel ||
-            rep_items[k].representation_type == PRC_TYPE_RI_PolyBrepModel ||
-            rep_items[k].representation_type == PRC_TYPE_RI_PointSet)
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_items\n");
+        return PRC_ERROR_MEMORY;
+    }
+    worklist[worklist_size].num_rep_items = num_rep_items;
+    worklist[worklist_size].rep_items = rep_items;
+    worklist[worklist_size].parent = parent;
+    worklist_size++;
+
+    while (worklist_size > 0)
+    {
+        prc_api_add_ri_items_work item = worklist[--worklist_size];
+        uint32_t k;
+
+        item.parent->rep_items = &reserve->parts[reserve->part_index];
+        item.parent->num_rep_items = item.num_rep_items;
+        reserve->part_index += item.num_rep_items;
+
+        for (k = 0; k < item.num_rep_items; k++)
         {
-            tess_index_ri = rep_items[k].item_content.biased_index_tessellation;
-            if (tess_index_ri > 0)
+            if (item.rep_items[k].representation_type == PRC_TYPE_RI_BrepModel ||
+                item.rep_items[k].representation_type == PRC_TYPE_RI_PolyBrepModel ||
+                item.rep_items[k].representation_type == PRC_TYPE_RI_PointSet)
             {
-                /* Add a NULL check for 'part->rep_items' before dereferencing it */
-                if (parent->rep_items != NULL)
+                uint32_t tess_index_ri = item.rep_items[k].item_content.biased_index_tessellation;
+                if (tess_index_ri > 0)
                 {
-                    //parent->rep_items[k].tess = &tessellations[tess_index_ri - 1];
+                    int32_t code;
+
+                    /* Add a NULL check for 'part->rep_items' before dereferencing it */
+                    if (item.parent->rep_items == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "rep_items is NULL in prc_api_initialize_node\n");
+                        result = PRC_ERROR_MEMORY;
+                        goto cleanup;
+                    }
+                    code = prc_api_set_rep_item_name(ctx, &item.parent->rep_items[k],
+                        item.rep_items[k].item_content.base.base.name.name.string);
+                    if (code < 0)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_rep_item_name\n");
+                        result = PRC_ERROR_MEMORY;
+                        goto cleanup;
+                    }
+                    /* This one has no children (as it has no sets) */
+                    item.parent->rep_items[k].num_rep_items = 0;
+                    item.parent->rep_items[k].rep_items = NULL;
+                    item.parent->rep_items[k].biased_tess_index = tess_index_ri;
+                    item.parent->rep_items[k].biased_style_index =
+                        item.rep_items[k].item_content.base.graphics_content.biased_index_of_line_style;
                 }
-                else
-                {
-                    prc_error(ctx, PRC_ERROR_MEMORY, "rep_items is NULL in prc_api_initialize_node\n");
-                    return PRC_ERROR_MEMORY;
-                }
-                code = prc_api_set_rep_item_name(ctx, &parent->rep_items[k],
-                    rep_items[k].item_content.base.base.name.name.string);
+            }
+            else if (item.rep_items[k].representation_type == PRC_TYPE_RI_Set)
+            {
+                /* In this case we need to add a rep type to a rep type */
+                prc_ri_set *ri_set = (item.rep_items[k]).ri_set;
+                uint32_t set_num_rep_items = ri_set->number_of_items;
+                prc_ri *set_ri_items = ri_set->rep_items;
+                int32_t code;
+
+                /* First we need to add the name of the RI set */
+                code = prc_api_set_rep_item_name(ctx, &item.parent->rep_items[k],
+                    item.rep_items[k].item_content.base.base.name.name.string);
                 if (code < 0)
                 {
                     prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_rep_item_name\n");
-                    return PRC_ERROR_MEMORY;
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
                 }
-                /* This one has no children (as it has no sets) */
-                parent->rep_items[k].num_rep_items = 0;
-                parent->rep_items[k].rep_items = NULL;
-                parent->rep_items[k].biased_tess_index = tess_index_ri;
-                parent->rep_items[k].biased_style_index = rep_items[k].item_content.base.graphics_content.biased_index_of_line_style;
-            }
-        }
-        else if (rep_items[k].representation_type == PRC_TYPE_RI_Set)
-        {
-            /* In this case we need to add a rep type to a rep type */
-            prc_ri_set *ri_set = (rep_items[k]).ri_set;
-            uint32_t set_num_rep_items = ri_set->number_of_items;
-            prc_ri *set_ri_items = ri_set->rep_items;
-
-            /* First we need to add the name of the RI set */
-            code = prc_api_set_rep_item_name(ctx, &parent->rep_items[k],
-                rep_items[k].item_content.base.base.name.name.string);
-            if (code < 0)
-            {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_set_rep_item_name\n");
-                return PRC_ERROR_MEMORY;
-            }
-            /* Now the recursion */
-            code = prc_api_helper_add_ri_items(ctx, reserve,
-                set_num_rep_items, set_ri_items, &parent->rep_items[k]);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Failed in prc_api_helper_add_ri_items\n");
-                return code;
+                if (prc_api_add_ri_items_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        set_num_rep_items, set_ri_items, &item.parent->rep_items[k]) < 0)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri_items\n");
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
             }
         }
     }
-    return 0;
+
+cleanup:
+    prc_free(ctx, worklist);
+    return result;
  }
 
 /* A recursive method to set the nodes in the product/part tree */
@@ -1183,7 +1336,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
                     prc_free(ctx, product->part->name);
                     product->part->name = NULL;
                 }
-                code = prc_api_set_part_name(ctx, product->part, 
+                code = prc_api_set_part_name(ctx, product->part,
                     prc_part->rep_items[0].item_content.base.base.name.name.string);
                 if (code < 0)
                 {
@@ -1193,7 +1346,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
 
                 /* Also set the tessellation index and the style index */
                 product->part->biased_tess_index = tess_index_ri;
-                product->part->biased_style_index = 
+                product->part->biased_style_index =
                     prc_part->rep_items[0].item_content.base.graphics_content.biased_index_of_line_style;
             }
             else if (all_brep)
@@ -1247,7 +1400,7 @@ prc_api_initialize_node(prc_context *ctx, prc_data *data, prc_api_product *produ
                 {
                     prc_error(ctx, code, "Failed in prc_api_helper_add_ri_items\n");
                     return code;
-                }  
+                }
             }
         }
     }
@@ -1525,71 +1678,140 @@ prc_api_copy_node(prc_context *ctx, prc_api_product *des, prc_api_product *src)
     des->is_model = src->is_model;
 }
 
-/* A recursive search through the RI items to see if we have any tessellations */
-static uint8_t
-prc_api_ri_has_tessellations(prc_context *ctx, prc_api_part *ri)
+/* Work-list entry for the iterative has-tessellations walk below: either a
+   product-tree node or an RI (part) node, tagged so both can share one
+   heap-allocated stack. */
+typedef struct
 {
-    if (ri->tess != NULL)
+    uint8_t is_product; /* 1 = node is prc_api_product*, 0 = node is prc_api_part* */
+    void *node;
+} prc_api_tess_check_item;
+
+static int
+prc_api_tess_check_push(prc_context *ctx, prc_api_tess_check_item **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint8_t is_product, void *node)
+{
+    if (*worklist_size >= *worklist_capacity)
     {
-        return 1;
+        prc_api_tess_check_item *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_tess_check_item *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_tess_check_item));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
     }
-    if (ri->rep_items != NULL)
-    {
-        for (uint32_t k = 0; k < ri->num_rep_items; k++)
-        {
-            if (prc_api_ri_has_tessellations(ctx, &ri->rep_items[k]))
-            {
-                return 1;
-            }
-        }
-    }
+    (*worklist)[*worklist_size].is_product = is_product;
+    (*worklist)[*worklist_size].node = node;
+    (*worklist_size)++;
     return 0;
 }
 
-/* A recursive tree search to see if we have any tessellations */
+/* Searches the product/RI tree for any tessellation. Iterative (not
+   recursive): both the assembly tree and RI (representation item) nesting
+   follow the file's structure, which is attacker-controlled and could
+   otherwise drive unbounded C-stack recursion. Uses an explicit
+   heap-allocated work list instead; short-circuits as soon as one is found,
+   same as the original recursive search. */
 static uint8_t
 prc_api_tree_has_tessellations(prc_context *ctx, prc_api_product *tree)
 {
-    if (tree->part != NULL && tree->part->tess != NULL)
-    {
-        return 1;
-    }
+    prc_api_tess_check_item *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    uint8_t found = 0;
 
-    if (tree->markup != NULL)
+    worklist = (prc_api_tess_check_item *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_tess_check_item));
+    if (worklist == NULL)
+        return 0;
+    worklist[worklist_size].is_product = 1;
+    worklist[worklist_size].node = tree;
+    worklist_size++;
+
+    while (worklist_size > 0 && !found)
     {
-        for (uint32_t k = 0; k < tree->num_markups; k++)
+        prc_api_tess_check_item item = worklist[--worklist_size];
+        uint32_t k;
+
+        if (item.is_product)
         {
-            if (tree->markup[k].tess != NULL)
+            prc_api_product *node = (prc_api_product *)item.node;
+
+            if (node->part != NULL && node->part->tess != NULL)
             {
-                return 1;
+                found = 1;
+                break;
+            }
+
+            if (node->markup != NULL)
+            {
+                for (k = 0; k < node->num_markups; k++)
+                {
+                    if (node->markup[k].tess != NULL)
+                    {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (found)
+                    break;
+            }
+
+            if (node->part != NULL && node->part->rep_items != NULL)
+            {
+                for (k = 0; k < node->part->num_rep_items; k++)
+                {
+                    if (prc_api_tess_check_push(ctx, &worklist, &worklist_size,
+                            &worklist_capacity, 0, &node->part->rep_items[k]) < 0)
+                    {
+                        prc_free(ctx, worklist);
+                        return 0;
+                    }
+                }
+            }
+
+            if (node->num_children > 0)
+            {
+                for (k = 0; k < node->num_children; k++)
+                {
+                    if (prc_api_tess_check_push(ctx, &worklist, &worklist_size,
+                            &worklist_capacity, 1, &node->children[k]) < 0)
+                    {
+                        prc_free(ctx, worklist);
+                        return 0;
+                    }
+                }
+            }
+        }
+        else
+        {
+            prc_api_part *ri = (prc_api_part *)item.node;
+
+            if (ri->tess != NULL)
+            {
+                found = 1;
+                break;
+            }
+
+            if (ri->rep_items != NULL)
+            {
+                for (k = 0; k < ri->num_rep_items; k++)
+                {
+                    if (prc_api_tess_check_push(ctx, &worklist, &worklist_size,
+                            &worklist_capacity, 0, &ri->rep_items[k]) < 0)
+                    {
+                        prc_free(ctx, worklist);
+                        return 0;
+                    }
+                }
             }
         }
     }
 
-    /* Check the RI items */
-    if (tree->part != NULL && tree->part->rep_items != NULL)
-    {
-        for (uint32_t k = 0; k < tree->part->num_rep_items; k++)
-        {
-            if (prc_api_ri_has_tessellations(ctx, &tree->part->rep_items[k]))
-            {
-                return 1;
-            }
-        }
-    }
-
-    /* Check the children */
-    if (tree->num_children > 0)
-    {
-        for (uint32_t k = 0; k < tree->num_children; k++)
-        {
-            if (prc_api_tree_has_tessellations(ctx, &tree->children[k]))
-            {
-                return 1;
-            }
-        }
-    }
-    return 0;
+    prc_free(ctx, worklist);
+    return found;
 }
 
 static void
@@ -1772,7 +1994,7 @@ prc_api_helper_set_inheritance_data(prc_context *ctx,
             parent_inherit->line_pattern.inherited_file_index);
         child_inherit->has_any_inheritance = 1;
     }
-    
+
     if (parent_graphics->behavior_bit_field1 & PRC_GRAPHICS_ChildHeritLineWidth)
     {
         prc_api_helper_set_inheritance_detail(ctx, &child_inherit->line_width,
@@ -1816,163 +2038,272 @@ prc_api_helper_set_inheritance_data(prc_context *ctx,
     }
 }
 
-/* Recursive method to count the item types in the representation items */
-static void
+/* Counts the item types in the representation items. Iterative (not
+   recursive): RI_Set nesting follows the file's structure, which is
+   attacker-controlled and could otherwise drive unbounded C-stack recursion.
+   Uses an explicit heap-allocated work list instead. Returns 0 on success,
+   PRC_ERROR_MEMORY if the work list couldn't grow -- unlike a void return,
+   this lets the caller (which uses the resulting count to size later
+   allocations) abort rather than silently proceed with an undercount. */
+static int
 prc_api_helper_get_ri_items(prc_context *ctx, prc_ri *ri, uint32_t *num_rep_items,
                             uint32_t file_index)
 {
- /*   if (ri->representation_type == PRC_TYPE_RI_BrepModel ||
-        ri->representation_type == PRC_TYPE_RI_PolyBrepModel ||
-        ri->representation_type == PRC_TYPE_RI_PointSet ||
-        ri->representation_type == PRC_TYPE_RI_PolyWire)
-    {
-        *num_rep_items += 1;
-    } */
+    prc_ri **worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
 
-    if (ri->representation_type == PRC_TYPE_RI_Set)
+    worklist = (prc_ri **)prc_malloc(ctx, worklist_capacity * sizeof(prc_ri *));
+    if (worklist == NULL)
     {
-        *num_rep_items += 1;
-        for (uint32_t k = 0; k < ri->ri_set->number_of_items; k++)
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_get_ri_items\n");
+        return PRC_ERROR_MEMORY;
+    }
+    worklist[worklist_size++] = ri;
+
+    while (worklist_size > 0)
+    {
+        prc_ri *curr = worklist[--worklist_size];
+
+        if (curr->representation_type == PRC_TYPE_RI_Set)
         {
-            prc_api_helper_set_inheritance_data(ctx, &ri->item_content.style_inheritance,
-                &ri->item_content.base.graphics_content, &ri->ri_set->rep_items[k].item_content.style_inheritance,
-                file_index);
-            prc_api_helper_get_ri_items(ctx, &ri->ri_set->rep_items[k], num_rep_items, file_index);
+            uint32_t k;
+            *num_rep_items += 1;
+            for (k = 0; k < curr->ri_set->number_of_items; k++)
+            {
+                prc_api_helper_set_inheritance_data(ctx, &curr->item_content.style_inheritance,
+                    &curr->item_content.base.graphics_content,
+                    &curr->ri_set->rep_items[k].item_content.style_inheritance, file_index);
+
+                if (worklist_size >= worklist_capacity)
+                {
+                    prc_ri **new_worklist;
+                    worklist_capacity *= 2;
+                    new_worklist = (prc_ri **)prc_realloc(ctx, worklist,
+                        worklist_capacity * sizeof(prc_ri *));
+                    if (new_worklist == NULL)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_get_ri_items\n");
+                        prc_free(ctx, worklist);
+                        return PRC_ERROR_MEMORY;
+                    }
+                    worklist = new_worklist;
+                }
+                worklist[worklist_size++] = &curr->ri_set->rep_items[k];
+            }
+        }
+        else
+        {
+            *num_rep_items += 1;
         }
     }
-    else
-    {
-        *num_rep_items += 1;
-    }
+
+    prc_free(ctx, worklist);
+    return 0;
 }
 
 /* A recusive method that goes through all the trees and figures out what we
-   need to allocate node wise. It also looks at the bit behavior fields as 
+   need to allocate node wise. It also looks at the bit behavior fields as
    we traverse the tree, looking at the ChildHerit settings to catch cases
    where the RI leaves (children) inherit the style, transparency of a parent.
    The spec is not clear on this. There is also a ParentHerit case which makes
    no sense and would involve going through the tree backwards. We will ignore
    that for now. */
+typedef struct
+{
+    uint32_t file_index;
+    prc_asm_product_occurrence *product;
+} prc_api_count_items_work;
+
+static int
+prc_api_count_items_push(prc_context *ctx, prc_api_count_items_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint32_t file_index,
+    prc_asm_product_occurrence *product)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_api_count_items_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_count_items_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_count_items_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].file_index = file_index;
+    (*worklist)[*worklist_size].product = product;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* A method that goes through all the trees and figures out what we need to
+   allocate node wise. It also looks at the bit behavior fields as we traverse
+   the tree, looking at the ChildHerit settings to catch cases where the RI
+   leaves (children) inherit the style, transparency of a parent. The spec is
+   not clear on this. There is also a ParentHerit case which makes no sense
+   and would involve going through the tree backwards. We will ignore that
+   for now.
+
+   Iterative (not recursive): the product-occurrence tree (prototypes and
+   children) follows the file's assembly structure, which is
+   attacker-controlled and could otherwise drive unbounded C-stack recursion.
+   Uses an explicit heap-allocated work list instead. Traversal order differs
+   from the original strict pre-order recursion (this is a LIFO stack), but
+   every node is still visited exactly once and each style_inheritance write
+   still happens on the parent before the child is ever popped/processed, so
+   the resulting counts and inheritance data are unaffected. */
 static int
 prc_api_helper_count_items(prc_context *ctx, prc_api_data data, uint32_t num_files,
     uint32_t curr_file_index, prc_asm_product_occurrence *product, uint32_t *num_parts,
     uint32_t *num_products, uint32_t *num_markups)
 {
     prc_data *data_in = (prc_data *)data;
-    uint32_t number_of_child_product_occurrences = product->references_product_occurrence.number_of_child_product_occurrences;
-    prc_references_of_product_occurrence *product_refs = &product->references_product_occurrence;
-    prc_unique_id file_id;
-    uint32_t k;
-    prc_asm_product_occurrence *child_product;
-    int code;
-    prc_asm_parts_definition *part;
-    uint32_t biased_file_index;
-    uint32_t file_index = curr_file_index;
-    prc_asm_product_occurrence *prototype_product;
+    prc_api_count_items_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    int result = 0;
 
-    prc_api_helper_init_unique_id(ctx, &file_id);
-
-    /* Include this product */
-    *num_products += 1;
-
-    /* Check if it has any markups */
-    if (product->markups.number_of_markups > 0)
+    worklist = (prc_api_count_items_work *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_count_items_work));
+    if (worklist == NULL)
     {
-        *num_products += 1; /* For the 3D PMI child that contains all the markups */
-        *num_markups += product->markups.number_of_markups;
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_count_items\n");
+        return PRC_ERROR_MEMORY;
     }
+    worklist[worklist_size].file_index = curr_file_index;
+    worklist[worklist_size].product = product;
+    worklist_size++;
 
-    if (product_refs->biased_index_prototype != 0 && product_refs->prototype_in_same_file_structure.flag == 0)
+    while (worklist_size > 0)
     {
-        file_id = product_refs->prototype_in_same_file_structure.unique_id;
-    }
+        prc_api_count_items_work item = worklist[--worklist_size];
+        uint32_t work_curr_file_index = item.file_index;
+        prc_asm_product_occurrence *work_product = item.product;
+        uint32_t number_of_child_product_occurrences =
+            work_product->references_product_occurrence.number_of_child_product_occurrences;
+        prc_references_of_product_occurrence *product_refs =
+            &work_product->references_product_occurrence;
+        prc_unique_id file_id;
+        uint32_t k;
+        prc_asm_product_occurrence *child_product;
+        int code;
+        prc_asm_parts_definition *part;
+        uint32_t biased_file_index;
+        uint32_t file_index = work_curr_file_index;
+        prc_asm_product_occurrence *prototype_product;
 
-    if (product_refs->biased_index_external_data != 0 && product_refs->external_data_in_same_file_structure.flag == 0)
-    {
-        file_id = product_refs->external_data_in_same_file_structure.unique_id;
-    }
+        prc_api_helper_init_unique_id(ctx, &file_id);
 
-    biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data, file_id);
-    if (biased_file_index != 0)
-    {
-        file_index = biased_file_index - 1;
-    }
+        /* Include this product */
+        *num_products += 1;
 
-
-    /* This means that there is a part in this file that we need to add.  It
-        can also have children.  We see that in the carburetor part */
-    if (product_refs->biased_index_part != 0)
-    {
-        part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
-
-        /* Include this part */
-        *num_parts += 1;
-
-        /* Do any inheritence */
-        prc_api_helper_set_inheritance_data(ctx, &product->style_inheritance,
-            &product->base.graphics_content, &part->style_inheritance, file_index);
-
-        /* Now count through all its rep items. These effect the parts count */
-        for (k = 0; k < part->num_rep_items; k++)
+        /* Check if it has any markups */
+        if (work_product->markups.number_of_markups > 0)
         {
-            prc_api_helper_set_inheritance_data(ctx, &part->style_inheritance,
-                &part->base.graphics_content, &part->rep_items[k].item_content.style_inheritance,
-                file_index);
-            prc_api_helper_get_ri_items(ctx, &part->rep_items[k], num_parts, file_index);
+            *num_products += 1; /* For the 3D PMI child that contains all the markups */
+            *num_markups += work_product->markups.number_of_markups;
         }
-    }
 
-    /* These are refs to the product. Continue to drill. Product is added in
-        this call so don't add it here */
-    if (product_refs->biased_index_prototype != 0)
-    {
-        prototype_product = 
-            &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
-        prc_api_helper_set_inheritance_data(ctx, &product->style_inheritance,
-            &prototype_product->base.graphics_content, &prototype_product->style_inheritance,
-            file_index);
-        code = prc_api_helper_count_items(ctx, data, num_files, file_index,
-                                        prototype_product, num_parts,
-                                        num_products, num_markups);
-        if (code < 0)
+        if (product_refs->biased_index_prototype != 0 && product_refs->prototype_in_same_file_structure.flag == 0)
         {
-            prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-            return code;
+            file_id = product_refs->prototype_in_same_file_structure.unique_id;
         }
-    }
 
-    if (number_of_child_product_occurrences > 0)
-    {
-        /* Note that these are in the curr_file_index. It is a little confusing
-           because the parent may be referencing another file. But we treat
-           this parents children as being in the current file. */
-        for (k = 0; k < number_of_child_product_occurrences; k++)
+        if (product_refs->biased_index_external_data != 0 && product_refs->external_data_in_same_file_structure.flag == 0)
         {
-            if (product_refs->index_child_occurrence[k] >= (data_in->file_struct[curr_file_index].tree->product_count - 1))
-            {
-                prc_error(ctx, PRC_API_INDEX, "Child reference index out of range in prc_api_helper_add_items\n");
-                return PRC_API_INDEX;
-            }
-            child_product = &data_in->file_struct[curr_file_index].tree->products[product_refs->index_child_occurrence[k]];
+            file_id = product_refs->external_data_in_same_file_structure.unique_id;
+        }
 
-            /* Check if we need to set any of the inheritance data in the child
-               based upon what is in the parent */
-            prc_api_helper_set_inheritance_data(ctx, &product->style_inheritance,
-                &product->base.graphics_content, &child_product->style_inheritance,
-                file_index);
+        biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data, file_id);
+        if (biased_file_index != 0)
+        {
+            file_index = biased_file_index - 1;
+        }
 
-            /* Product is added in this call, so don't do it here */
-            code = prc_api_helper_count_items(ctx, data, num_files, curr_file_index,
-                                            child_product, num_parts, num_products,
-                                            num_markups);
-            if (code < 0)
+        /* This means that there is a part in this file that we need to add.  It
+            can also have children.  We see that in the carburetor part */
+        if (product_refs->biased_index_part != 0)
+        {
+            part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
+
+            /* Include this part */
+            *num_parts += 1;
+
+            /* Do any inheritence */
+            prc_api_helper_set_inheritance_data(ctx, &work_product->style_inheritance,
+                &work_product->base.graphics_content, &part->style_inheritance, file_index);
+
+            /* Now count through all its rep items. These effect the parts count */
+            for (k = 0; k < part->num_rep_items; k++)
             {
-                prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-                return code;
+                prc_api_helper_set_inheritance_data(ctx, &part->style_inheritance,
+                    &part->base.graphics_content, &part->rep_items[k].item_content.style_inheritance,
+                    file_index);
+                code = prc_api_helper_get_ri_items(ctx, &part->rep_items[k], num_parts, file_index);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_api_helper_get_ri_items\n");
+                    result = code;
+                    goto cleanup;
+                }
             }
         }
+
+        /* These are refs to the product. Continue to drill. Product is added in
+            this call so don't add it here */
+        if (product_refs->biased_index_prototype != 0)
+        {
+            prototype_product =
+                &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
+            prc_api_helper_set_inheritance_data(ctx, &work_product->style_inheritance,
+                &prototype_product->base.graphics_content, &prototype_product->style_inheritance,
+                file_index);
+            if (prc_api_count_items_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                    file_index, prototype_product) < 0)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_count_items\n");
+                result = PRC_ERROR_MEMORY;
+                goto cleanup;
+            }
+        }
+
+        if (number_of_child_product_occurrences > 0)
+        {
+            /* Note that these are in the curr_file_index. It is a little confusing
+               because the parent may be referencing another file. But we treat
+               this parents children as being in the current file. */
+            for (k = 0; k < number_of_child_product_occurrences; k++)
+            {
+                if (product_refs->index_child_occurrence[k] >= (data_in->file_struct[work_curr_file_index].tree->product_count - 1))
+                {
+                    prc_error(ctx, PRC_API_INDEX, "Child reference index out of range in prc_api_helper_add_items\n");
+                    result = PRC_API_INDEX;
+                    goto cleanup;
+                }
+                child_product = &data_in->file_struct[work_curr_file_index].tree->products[product_refs->index_child_occurrence[k]];
+
+                /* Check if we need to set any of the inheritance data in the child
+                   based upon what is in the parent */
+                prc_api_helper_set_inheritance_data(ctx, &work_product->style_inheritance,
+                    &work_product->base.graphics_content, &child_product->style_inheritance,
+                    file_index);
+
+                /* Product is added in this call, so don't do it here */
+                if (prc_api_count_items_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        work_curr_file_index, child_product) < 0)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_count_items\n");
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
+            }
+        }
     }
-    return 0;
+
+cleanup:
+    prc_free(ctx, worklist);
+    return result;
 }
 
 /* Reworked version which starts out with the last product in the last file and
@@ -1988,7 +2319,7 @@ prc_api_prep_model_tree(prc_context *ctx, prc_api_data data, uint32_t *num_parts
     prc_asm_product_occurrence *prc_product;
     int code;
     uint32_t num_files;
-  
+
     num_files = data_in->file_structure_count;
     last_file_index = num_files - 1;
     last_tree = data_in->file_struct[last_file_index].tree;
@@ -2115,9 +2446,52 @@ prc_api_helper_add_part(prc_context *ctx, char *parent_name, int32_t file_index,
 
     return part_style;
 }
-/* Updated prc_api_helper_add_ri signature already in file; keep returning int.
-   It accepts parent_style and passes it down when recursing so RI->RI style
-   parent/child relationships are created. */
+typedef struct
+{
+    uint32_t file_index;
+    prc_api_part *api_part;
+    prc_ri *prc_ri;
+    uint32_t parent_biased_style_index;
+    uint32_t parent_biased_style_file_index;
+    prc_api_object_style *parent_style;
+} prc_api_add_ri_work;
+
+static int
+prc_api_add_ri_push(prc_context *ctx, prc_api_add_ri_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint32_t file_index,
+    prc_api_part *api_part, prc_ri *prc_ri, uint32_t parent_biased_style_index,
+    uint32_t parent_biased_style_file_index, prc_api_object_style *parent_style)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_api_add_ri_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_add_ri_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_add_ri_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].file_index = file_index;
+    (*worklist)[*worklist_size].api_part = api_part;
+    (*worklist)[*worklist_size].prc_ri = prc_ri;
+    (*worklist)[*worklist_size].parent_biased_style_index = parent_biased_style_index;
+    (*worklist)[*worklist_size].parent_biased_style_file_index = parent_biased_style_file_index;
+    (*worklist)[*worklist_size].parent_style = parent_style;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* It accepts parent_style and passes it down when recursing so RI->RI style
+   parent/child relationships are created.
+
+   Iterative (not recursive): RI_Set nesting follows the file's structure,
+   which is attacker-controlled and could otherwise drive unbounded C-stack
+   recursion. Uses an explicit heap-allocated work list instead. Each node's
+   field assignments only depend on its own prc_ri/parent parameters (not on
+   whether its children have been processed yet), so processing order across
+   the tree doesn't affect the result. */
 static int
 prc_api_helper_add_ri(prc_context *ctx, uint32_t file_index, prc_api_part *api_part,
     prc_ri *prc_ri, uint32_t parent_biased_style_index,
@@ -2125,101 +2499,131 @@ prc_api_helper_add_ri(prc_context *ctx, uint32_t file_index, prc_api_part *api_p
     prc_api_child_reserve *reserve,
     prc_api_object_style *parent_style)
 {
-    char node_name[] = "node";
-    char *name;
-    int code;
-    prc_api_object_style *ri_style = NULL;
+    prc_api_add_ri_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    int result = 0;
 
-    if (prc_ri->item_content.base.base.name.name.string == NULL)
-    {
-        name = node_name;
-    }
-    else
-    {
-        name = (char*) prc_ri->item_content.base.base.name.name.string;
-    }
-
-    api_part->name = (char *)prc_calloc(ctx, strlen((const char*) name) + 1, sizeof(char));
-    if (api_part->name == NULL)
+    worklist = (prc_api_add_ri_work *)prc_malloc(ctx, worklist_capacity * sizeof(prc_api_add_ri_work));
+    if (worklist == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri\n");
         return PRC_ERROR_MEMORY;
     }
-    memcpy(api_part->name, name, strlen(name));
-
-    /* Create style node for this RI and attach under parent_style */
-    ri_style = prc_add_style_data(ctx, reserve, prc_ri,
-        PRC_INTERNAL_API_OBJECT_TYPE_RI, file_index, parent_style);
-    if (ri_style == NULL)
+    if (prc_api_add_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity, file_index,
+            api_part, prc_ri, parent_biased_style_index, parent_biased_style_file_index,
+            parent_style) < 0)
     {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate style node for RI in prc_api_helper_add_ri\n");
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri\n");
+        prc_free(ctx, worklist);
         return PRC_ERROR_MEMORY;
     }
 
-    if (prc_ri->representation_type == PRC_TYPE_RI_BrepModel ||
-        prc_ri->representation_type == PRC_TYPE_RI_PolyBrepModel ||
-        prc_ri->representation_type == PRC_TYPE_RI_PointSet)
+    while (worklist_size > 0)
     {
-        api_part->num_rep_items = 0;
-        api_part->rep_items = NULL;
-    }
-    else if (prc_ri->representation_type == PRC_TYPE_RI_Set)
-    {
-        api_part->num_rep_items = prc_ri->ri_set->number_of_items;
-        api_part->rep_items = &reserve->parts[reserve->part_index];
-        reserve->part_index += prc_ri->ri_set->number_of_items;
-        for (uint32_t k = 0; k < prc_ri->ri_set->number_of_items; k++)
+        prc_api_add_ri_work item = worklist[--worklist_size];
+        char node_name[] = "node";
+        char *name;
+        prc_api_object_style *ri_style = NULL;
+
+        if (item.prc_ri->item_content.base.base.name.name.string == NULL)
         {
-            /* Pass ri_style as parent_style so nested RIs become children of this RI style */
-            code = prc_api_helper_add_ri(ctx, file_index, &api_part->rep_items[k],
-                &prc_ri->ri_set->rep_items[k], parent_biased_style_index,
-                parent_biased_style_file_index, reserve, ri_style);
-            if (code < 0)
+            name = node_name;
+        }
+        else
+        {
+            name = (char*) item.prc_ri->item_content.base.base.name.name.string;
+        }
+
+        item.api_part->name = (char *)prc_calloc(ctx, strlen((const char*) name) + 1, sizeof(char));
+        if (item.api_part->name == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri\n");
+            result = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        memcpy(item.api_part->name, name, strlen(name));
+
+        /* Create style node for this RI and attach under parent_style */
+        ri_style = prc_add_style_data(ctx, reserve, item.prc_ri,
+            PRC_INTERNAL_API_OBJECT_TYPE_RI, item.file_index, item.parent_style);
+        if (ri_style == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Failed to allocate style node for RI in prc_api_helper_add_ri\n");
+            result = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+
+        if (item.prc_ri->representation_type == PRC_TYPE_RI_BrepModel ||
+            item.prc_ri->representation_type == PRC_TYPE_RI_PolyBrepModel ||
+            item.prc_ri->representation_type == PRC_TYPE_RI_PointSet)
+        {
+            item.api_part->num_rep_items = 0;
+            item.api_part->rep_items = NULL;
+        }
+        else if (item.prc_ri->representation_type == PRC_TYPE_RI_Set)
+        {
+            uint32_t k;
+
+            item.api_part->num_rep_items = item.prc_ri->ri_set->number_of_items;
+            item.api_part->rep_items = &reserve->parts[reserve->part_index];
+            reserve->part_index += item.prc_ri->ri_set->number_of_items;
+            for (k = 0; k < item.prc_ri->ri_set->number_of_items; k++)
             {
-                prc_error(ctx, code, "Failed in prc_api_helper_add_ri\n");
-                return code;
+                /* Pass ri_style as parent_style so nested RIs become children of this RI style */
+                if (prc_api_add_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        item.file_index, &item.api_part->rep_items[k],
+                        &item.prc_ri->ri_set->rep_items[k], item.parent_biased_style_index,
+                        item.parent_biased_style_file_index, ri_style) < 0)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_ri\n");
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
             }
+        }
+
+        item.api_part->RI_item_style_node = ri_style;
+        item.api_part->biased_local_coordinate_index = item.prc_ri->item_content.biased_index_local_coordinate_system;
+        item.api_part->biased_style_index = item.prc_ri->item_content.base.graphics_content.biased_index_of_line_style;
+        item.api_part->biased_tess_index = item.prc_ri->item_content.biased_index_tessellation;
+        item.api_part->tess_file_index = item.file_index;
+        item.api_part->biased_layer_index = item.prc_ri->item_content.base.graphics_content.biased_layer_index;
+        item.api_part->behavior_bit_field1 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field1;
+        item.api_part->behavior_bit_field2 = item.prc_ri->item_content.base.graphics_content.behavior_bit_field2;
+        item.api_part->has_inherited_style = item.prc_ri->item_content.style_inheritance.has_any_inheritance;
+        item.api_part->color.has_inheritance = item.prc_ri->item_content.style_inheritance.color.has_inheritance;
+        item.api_part->color.inherited_value = item.prc_ri->item_content.style_inheritance.color.inherited_value;
+        item.api_part->color.inherited_file_index = item.prc_ri->item_content.style_inheritance.color.inherited_file_index;
+        item.api_part->transparency.has_inheritance = item.prc_ri->item_content.style_inheritance.transparency.has_inheritance;
+        item.api_part->transparency.inherited_value = item.prc_ri->item_content.style_inheritance.transparency.inherited_value;
+        item.api_part->transparency.inherited_file_index = item.prc_ri->item_content.style_inheritance.transparency.inherited_file_index;
+        item.api_part->tess = NULL; /* This gets set when we do the tessellations */
+        item.api_part->has_entity_ref = item.prc_ri->item_content.base.graphics_content.has_entity_ref;
+        if (item.api_part->has_entity_ref)
+        {
+            item.api_part->entity_ref.behavior_bit_field1 = item.prc_ri->item_content.base.graphics_content.entity_ref.behavior_bit_field1;
+            item.api_part->entity_ref.behavior_bit_field2 = item.prc_ri->item_content.base.graphics_content.entity_ref.behavior_bit_field2;
+            item.api_part->entity_ref.biased_index_of_line_style = item.prc_ri->item_content.base.graphics_content.entity_ref.biased_index_of_line_style;
+            item.api_part->entity_ref.biased_layer_index = item.prc_ri->item_content.base.graphics_content.entity_ref.biased_layer_index;
+            item.api_part->entity_ref.file_index = item.prc_ri->item_content.base.graphics_content.entity_ref.file_index;
+        }
+
+        /* We can have this pseudo inheritance... */
+        if (item.api_part->biased_style_index == 0 && item.api_part->has_inherited_style == 0 &&
+            item.parent_biased_style_index != 0)
+        {
+            item.api_part->has_inherited_style = 1;
+            item.api_part->color.has_inheritance = 1;
+            item.api_part->color.inherited_value = item.parent_biased_style_index;
+            item.api_part->color.inherited_file_index = item.parent_biased_style_file_index;
+            item.api_part->transparency.has_inheritance = 0;
         }
     }
 
-    api_part->RI_item_style_node = ri_style;
-    api_part->biased_local_coordinate_index = prc_ri->item_content.biased_index_local_coordinate_system;
-    api_part->biased_style_index = prc_ri->item_content.base.graphics_content.biased_index_of_line_style;
-    api_part->biased_tess_index = prc_ri->item_content.biased_index_tessellation;
-    api_part->tess_file_index = file_index;
-    api_part->biased_layer_index = prc_ri->item_content.base.graphics_content.biased_layer_index;
-    api_part->behavior_bit_field1 = prc_ri->item_content.base.graphics_content.behavior_bit_field1;
-    api_part->behavior_bit_field2 = prc_ri->item_content.base.graphics_content.behavior_bit_field2;
-    api_part->has_inherited_style = prc_ri->item_content.style_inheritance.has_any_inheritance;
-    api_part->color.has_inheritance = prc_ri->item_content.style_inheritance.color.has_inheritance;
-    api_part->color.inherited_value = prc_ri->item_content.style_inheritance.color.inherited_value;
-    api_part->color.inherited_file_index = prc_ri->item_content.style_inheritance.color.inherited_file_index;
-    api_part->transparency.has_inheritance = prc_ri->item_content.style_inheritance.transparency.has_inheritance;
-    api_part->transparency.inherited_value = prc_ri->item_content.style_inheritance.transparency.inherited_value;
-    api_part->transparency.inherited_file_index = prc_ri->item_content.style_inheritance.transparency.inherited_file_index;
-    api_part->tess = NULL; /* This gets set when we do the tessellations */
-    api_part->has_entity_ref = prc_ri->item_content.base.graphics_content.has_entity_ref;
-    if (api_part->has_entity_ref)
-    {
-        api_part->entity_ref.behavior_bit_field1 = prc_ri->item_content.base.graphics_content.entity_ref.behavior_bit_field1;
-        api_part->entity_ref.behavior_bit_field2 = prc_ri->item_content.base.graphics_content.entity_ref.behavior_bit_field2;
-        api_part->entity_ref.biased_index_of_line_style = prc_ri->item_content.base.graphics_content.entity_ref.biased_index_of_line_style;
-        api_part->entity_ref.biased_layer_index = prc_ri->item_content.base.graphics_content.entity_ref.biased_layer_index;
-        api_part->entity_ref.file_index = prc_ri->item_content.base.graphics_content.entity_ref.file_index;
-    }
-
-    /* We can have this pseudo inheritance... */
-    if (api_part->biased_style_index == 0 && api_part->has_inherited_style == 0 &&
-        parent_biased_style_index != 0)
-    {
-        api_part->has_inherited_style = 1;
-        api_part->color.has_inheritance = 1;
-        api_part->color.inherited_value = parent_biased_style_index;
-        api_part->color.inherited_file_index = parent_biased_style_file_index;
-        api_part->transparency.has_inheritance = 0;
-    }
-
-    return 0;
+cleanup:
+    prc_free(ctx, worklist);
+    return result;
 }
 
 
@@ -2281,7 +2685,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
                         entity_ref_file_index = biased_file_index - 1;
                     }
                     else
-                    { 
+                    {
                         /* Something wrong here. Just get out of it */
                         break;
                     }
@@ -2307,7 +2711,7 @@ prc_api_helper_copy_product_details(prc_context *ctx, prc_api_data data,
 
                         /* Update the style information based upon the reference. */
                         ri_item->base.graphics_content.has_entity_ref = 1;
-                        ri_item->base.graphics_content.entity_ref.biased_index_of_line_style = 
+                        ri_item->base.graphics_content.entity_ref.biased_index_of_line_style =
                             product->entity_reference->content_entity_ref.base.graphics_content.biased_index_of_line_style;
                         ri_item->base.graphics_content.entity_ref.biased_layer_index =
                             product->entity_reference->content_entity_ref.base.graphics_content.biased_layer_index;
@@ -2520,8 +2924,63 @@ prc_add_style_data(prc_context *ctx, prc_api_child_reserve *reserve,
     return node;
 }
 
-/* In prc_api_helper_add_product: capture the part style and pass it as parent
-   to RI creation. Fix variable name (product_style) used for child recursion. */
+typedef struct
+{
+    uint32_t curr_file_index;
+    unsigned char *base_product_name;
+    prc_api_transform incoming_transform;
+    prc_asm_product_occurrence *product;
+    uint32_t parent_biased_style_index;
+    uint32_t parent_biased_style_file_index;
+    prc_api_product *product_tree;
+    prc_api_object_style *parent_style;
+} prc_api_add_product_work;
+
+static int
+prc_api_add_product_push(prc_context *ctx, prc_api_add_product_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity,
+    uint32_t curr_file_index, unsigned char *base_product_name,
+    prc_api_transform incoming_transform, prc_asm_product_occurrence *product,
+    uint32_t parent_biased_style_index, uint32_t parent_biased_style_file_index,
+    prc_api_product *product_tree, prc_api_object_style *parent_style)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_api_add_product_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_api_add_product_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_api_add_product_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].curr_file_index = curr_file_index;
+    (*worklist)[*worklist_size].base_product_name = base_product_name;
+    (*worklist)[*worklist_size].incoming_transform = incoming_transform;
+    (*worklist)[*worklist_size].product = product;
+    (*worklist)[*worklist_size].parent_biased_style_index = parent_biased_style_index;
+    (*worklist)[*worklist_size].parent_biased_style_file_index = parent_biased_style_file_index;
+    (*worklist)[*worklist_size].product_tree = product_tree;
+    (*worklist)[*worklist_size].parent_style = parent_style;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* Capture the part style and pass it as parent to RI creation.
+
+   Iterative (not recursive): the product-occurrence tree (prototype chains
+   and child occurrences) follows the file's assembly structure, which is
+   attacker-controlled and could otherwise drive unbounded C-stack recursion.
+   Uses an explicit heap-allocated work list instead.
+
+   Two recursion shapes existed in the original: (1) a pure prototype-chain
+   "tail" case (product has a prototype and no children of its own) that just
+   delegated entirely to the prototype, writing into the SAME product_tree
+   node -- converted to a plain inner loop that reassigns its working state
+   instead of recursing; (2) genuine branching over child product
+   occurrences, each getting its own product_tree node -- converted to
+   pushing onto the outer work list. */
 static int
 prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_files,
     uint32_t curr_file_index, unsigned char *base_product_name,
@@ -2533,228 +2992,265 @@ prc_api_helper_add_product(prc_context *ctx, prc_api_data data, uint32_t num_fil
     prc_api_object_style *parent_style)
 {
     prc_data *data_in = (prc_data *)data;
-    uint32_t number_of_child_product_occurrences = product->references_product_occurrence.number_of_child_product_occurrences;
-    prc_references_of_product_occurrence *product_refs = &product->references_product_occurrence;
-    prc_unique_id file_id;
-    uint32_t k;
-    prc_asm_product_occurrence *child_product;
-    int code;
-    prc_asm_parts_definition *part;
-    uint32_t biased_file_index;
-    uint32_t file_index = curr_file_index;
-    prc_asm_product_occurrence *prototype_product;
-    prc_api_transform new_transform;
-    char *base_name;
-    prc_api_object_style *product_style;
+    prc_api_add_product_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
+    int result = 0;
 
-    if (base_product_name != NULL)
+    worklist = (prc_api_add_product_work *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_api_add_product_work));
+    if (worklist == NULL)
     {
-        base_name = (char *)base_product_name;
-    }
-    else
-    {
-        base_name = (char *)product->base.base.name.name.string;
-    }
-
-    prc_api_helper_init_unique_id(ctx, &file_id);
-
-    if (product_refs->biased_index_prototype != 0 && product_refs->prototype_in_same_file_structure.flag == 0)
-    {
-        file_id = product_refs->prototype_in_same_file_structure.unique_id;
-    }
-
-    if (product_refs->biased_index_external_data != 0 && product_refs->external_data_in_same_file_structure.flag == 0)
-    {
-        file_id = product_refs->external_data_in_same_file_structure.unique_id;
-    }
-
-    biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data, file_id);
-    if (biased_file_index != 0)
-    {
-        file_index = biased_file_index - 1;
-    }
-
-    /* create style node for this product and keep pointer for children to use */
-    product_style = prc_add_style_data(ctx, reserve, product,
-        PRC_INTERNAL_API_OBJECT_TYPE_PRODUCT, file_index, parent_style);
-    if (product_style == NULL)
-    {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_add_style_data\n");
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_product\n");
         return PRC_ERROR_MEMORY;
     }
-    /* Useful debug */
-#if 0
-    if (product->base.base.name.name.string != NULL)
+    if (prc_api_add_product_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+            curr_file_index, base_product_name, incoming_transform, product,
+            parent_biased_style_index, parent_biased_style_file_index,
+            product_tree, parent_style) < 0)
     {
-        if (strncmp((const char *)product->base.base.name.name.string, "FDA-58600.iam", 13) == 0)
-        {
-            int debug = 1;
-        }
-    }
-#endif 
-    /* There is a prototypes to this product. Continue to drill but concatenate
-       any transform as we go. */
-    if (product->has_transform)
-    {
-        code = prc_api_set_transform(ctx, &new_transform, &product->location);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-            return code;
-        }
-        prc_api_update_transform(ctx, &incoming_transform, &new_transform);
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_product\n");
+        prc_free(ctx, worklist);
+        return PRC_ERROR_MEMORY;
     }
 
-    if (product_refs->biased_index_prototype != 0 &&
-        product_refs->number_of_child_product_occurrences == 0)
+    while (worklist_size > 0)
     {
-        /* IMPORTANT: pass product_style as the parent for the prototype recursion so
-           prototype chain builds as a single-child lineage under this node. */
+        prc_api_add_product_work item = worklist[--worklist_size];
+        uint32_t work_curr_file_index = item.curr_file_index;
+        unsigned char *work_base_product_name = item.base_product_name;
+        prc_api_transform work_incoming_transform = item.incoming_transform;
+        prc_asm_product_occurrence *work_product = item.product;
+        uint32_t work_parent_biased_style_index = item.parent_biased_style_index;
+        uint32_t work_parent_biased_style_file_index = item.parent_biased_style_file_index;
+        prc_api_product *work_product_tree = item.product_tree;
+        prc_api_object_style *work_parent_style = item.parent_style;
 
-        prototype_product =
-            &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
-        prc_api_helper_update_parent_style(ctx, prototype_product, file_index,
-            &parent_biased_style_index, &parent_biased_style_file_index);
-        code = prc_api_helper_add_product(ctx, data, num_files, file_index,
-            (unsigned char*) base_name, incoming_transform,
-            prototype_product, parent_biased_style_index,
-            parent_biased_style_file_index, product_tree, reserve, product_style);
-        if (code < 0)
+        for (;;)
         {
-            prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-            return code;
-        }
-        return 0;
-    }
-    else
-    {
-        /* At last prototype. Copy over the product details */
-        prc_api_helper_update_parent_style(ctx, product, file_index,
-            &parent_biased_style_index, &parent_biased_style_file_index);
-        code = prc_api_helper_copy_product_details(ctx, data, file_index,
-            base_name, incoming_transform, product, product_tree);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed in prc_api_helper_add_product_details\n");
-            return code;
-        }
-    }
+            uint32_t number_of_child_product_occurrences =
+                work_product->references_product_occurrence.number_of_child_product_occurrences;
+            prc_references_of_product_occurrence *product_refs =
+                &work_product->references_product_occurrence;
+            prc_unique_id file_id;
+            uint32_t k;
+            prc_asm_product_occurrence *child_product;
+            int code;
+            prc_asm_parts_definition *part;
+            uint32_t biased_file_index;
+            uint32_t file_index = work_curr_file_index;
+            prc_asm_product_occurrence *prototype_product;
+            prc_api_transform new_transform;
+            char *base_name;
+            prc_api_object_style *product_style;
 
-    /* We should be at the last prototype. At this point work on the child
-       product occurrences AND add the part if there is one. The carburetor
-       for example has a tree that has this occur (which is a part and
-       child product occurrences) */
-    if (product_refs->biased_index_part != 0)
-    {
-        uint32_t num_rep_items = 0;
-
-        part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
-        product_tree->part = &reserve->parts[reserve->part_index];
-
-        /* We may want to avoid adding this part if its name is null.
-           Capture the created part style so we can pass it to RIs. */
-        prc_api_object_style *part_style = prc_api_helper_add_part(ctx, product_tree->name, file_index,
-            product_tree->part, part, parent_biased_style_index,
-            parent_biased_style_file_index, reserve, product_style);
-        if (part_style == NULL)
-        {
-            prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_api_helper_add_part\n");
-            return PRC_ERROR_MEMORY;
-        }
-        reserve->part_index += 1;
-
-        /* Now add the rep items as children of the part.
-            These effect the parts count */
-        if (part->num_rep_items > 0)
-        {
-            product_tree->part->rep_items = &reserve->parts[reserve->part_index];
-            reserve->part_index += part->num_rep_items;
-
-            for (k = 0; k < part->num_rep_items; k++)
+            if (work_base_product_name != NULL)
             {
-                code = prc_api_helper_add_ri(ctx, file_index, &product_tree->part->rep_items[k],
-                    &part->rep_items[k], parent_biased_style_index,
-                    parent_biased_style_file_index, reserve, part_style);
+                base_name = (char *)work_base_product_name;
+            }
+            else
+            {
+                base_name = (char *)work_product->base.base.name.name.string;
+            }
+
+            prc_api_helper_init_unique_id(ctx, &file_id);
+
+            if (product_refs->biased_index_prototype != 0 && product_refs->prototype_in_same_file_structure.flag == 0)
+            {
+                file_id = product_refs->prototype_in_same_file_structure.unique_id;
+            }
+
+            if (product_refs->biased_index_external_data != 0 && product_refs->external_data_in_same_file_structure.flag == 0)
+            {
+                file_id = product_refs->external_data_in_same_file_structure.unique_id;
+            }
+
+            biased_file_index = prc_api_helper_get_biased_file_index_from_unique_id(ctx, data, file_id);
+            if (biased_file_index != 0)
+            {
+                file_index = biased_file_index - 1;
+            }
+
+            /* create style node for this product and keep pointer for children to use */
+            product_style = prc_add_style_data(ctx, reserve, work_product,
+                PRC_INTERNAL_API_OBJECT_TYPE_PRODUCT, file_index, work_parent_style);
+            if (product_style == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_add_style_data\n");
+                result = PRC_ERROR_MEMORY;
+                goto cleanup;
+            }
+
+            /* There is a prototypes to this product. Continue to drill but concatenate
+               any transform as we go. */
+            if (work_product->has_transform)
+            {
+                code = prc_api_set_transform(ctx, &new_transform, &work_product->location);
                 if (code < 0)
                 {
-                    prc_error(ctx, code, "Failed in prc_api_helper_add_part\n");
-                    return code;
+                    prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
+                    result = code;
+                    goto cleanup;
+                }
+                prc_api_update_transform(ctx, &work_incoming_transform, &new_transform);
+            }
+
+            if (product_refs->biased_index_prototype != 0 &&
+                product_refs->number_of_child_product_occurrences == 0)
+            {
+                /* IMPORTANT: pass product_style as the parent for the prototype
+                   chain so it builds as a single-child lineage under this node. */
+                prototype_product =
+                    &data_in->file_struct[file_index].tree->products[product_refs->biased_index_prototype - 1];
+                prc_api_helper_update_parent_style(ctx, prototype_product, file_index,
+                    &work_parent_biased_style_index, &work_parent_biased_style_file_index);
+
+                /* Tail case: same product_tree, follow the prototype chain
+                   in place instead of recursing. */
+                work_curr_file_index = file_index;
+                work_base_product_name = (unsigned char *)base_name;
+                work_product = prototype_product;
+                work_parent_style = product_style;
+                continue;
+            }
+            else
+            {
+                /* At last prototype. Copy over the product details */
+                prc_api_helper_update_parent_style(ctx, work_product, file_index,
+                    &work_parent_biased_style_index, &work_parent_biased_style_file_index);
+                code = prc_api_helper_copy_product_details(ctx, data, file_index,
+                    base_name, work_incoming_transform, work_product, work_product_tree);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_api_helper_add_product_details\n");
+                    result = code;
+                    goto cleanup;
                 }
             }
-        }
-        else
-        {
-            product_tree->part->rep_items = NULL;
-            product_tree->part->num_rep_items = 0;
+
+            /* We should be at the last prototype. At this point work on the child
+               product occurrences AND add the part if there is one. The carburetor
+               for example has a tree that has this occur (which is a part and
+               child product occurrences) */
+            if (product_refs->biased_index_part != 0)
+            {
+                part = &data_in->file_struct[file_index].tree->parts[product_refs->biased_index_part - 1];
+                work_product_tree->part = &reserve->parts[reserve->part_index];
+
+                /* We may want to avoid adding this part if its name is null.
+                   Capture the created part style so we can pass it to RIs. */
+                prc_api_object_style *part_style = prc_api_helper_add_part(ctx, work_product_tree->name, file_index,
+                    work_product_tree->part, part, work_parent_biased_style_index,
+                    work_parent_biased_style_file_index, reserve, product_style);
+                if (part_style == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_api_helper_add_part\n");
+                    result = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
+                reserve->part_index += 1;
+
+                /* Now add the rep items as children of the part.
+                    These effect the parts count */
+                if (part->num_rep_items > 0)
+                {
+                    work_product_tree->part->rep_items = &reserve->parts[reserve->part_index];
+                    reserve->part_index += part->num_rep_items;
+
+                    for (k = 0; k < part->num_rep_items; k++)
+                    {
+                        code = prc_api_helper_add_ri(ctx, file_index, &work_product_tree->part->rep_items[k],
+                            &part->rep_items[k], work_parent_biased_style_index,
+                            work_parent_biased_style_file_index, reserve, part_style);
+                        if (code < 0)
+                        {
+                            prc_error(ctx, code, "Failed in prc_api_helper_add_part\n");
+                            result = code;
+                            goto cleanup;
+                        }
+                    }
+                }
+                else
+                {
+                    work_product_tree->part->rep_items = NULL;
+                    work_product_tree->part->num_rep_items = 0;
+                }
+            }
+
+            /* If we have any children deal with those now */
+            if (number_of_child_product_occurrences > 0)
+            {
+                /* Grab number_of_child_product_occurrences from the reserve. Also,
+                   update the children count if we have any markups */
+                uint8_t has_markups = work_product->markups.number_of_markups > 0 ? 1 : 0;
+                work_product_tree->num_children = number_of_child_product_occurrences + has_markups;
+                work_product_tree->children = &reserve->products[reserve->product_index];
+                reserve->product_index += number_of_child_product_occurrences + has_markups;
+
+                for (k = 0; k < number_of_child_product_occurrences; k++)
+                {
+                    if (product_refs->index_child_occurrence[k] >= (data_in->file_struct[work_curr_file_index].tree->product_count - 1))
+                    {
+                        prc_error(ctx, PRC_API_INDEX, "Child reference index out of range in prc_api_helper_add_items\n");
+                        result = PRC_API_INDEX;
+                        goto cleanup;
+                    }
+                    child_product = &data_in->file_struct[work_curr_file_index].tree->products[product_refs->index_child_occurrence[k]];
+
+                    /* Process the product child but with the identity transform */
+                    code = prc_api_set_transform_to_identity(ctx, &new_transform);
+                    if (code < 0)
+                    {
+                        prc_error(ctx, code, "Failed in prc_api_set_transform_to_identity\n");
+                        result = code;
+                        goto cleanup;
+                    }
+                    prc_api_helper_update_parent_style(ctx, child_product, file_index,
+                        &work_parent_biased_style_index, &work_parent_biased_style_file_index);
+                    /* pass product_style so child style nodes attach under this product's style */
+                    if (prc_api_add_product_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                            work_curr_file_index, NULL, new_transform, child_product,
+                            work_parent_biased_style_index, work_parent_biased_style_file_index,
+                            &work_product_tree->children[k], product_style) < 0)
+                    {
+                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper_add_product\n");
+                        result = PRC_ERROR_MEMORY;
+                        goto cleanup;
+                    }
+                }
+            }
+
+            /* Add the markups */
+            if (work_product->markups.number_of_markups > 0)
+            {
+                if (number_of_child_product_occurrences == 0)
+                {
+                    /* We didn't have any child product occurrences but we have markups.
+                       So we need to add a child for the 3D PMI and then add the markups
+                       under that. */
+                    work_product_tree->num_children = 1;
+                    work_product_tree->children = &reserve->products[reserve->product_index];
+                    reserve->product_index += 1;
+                }
+
+                /* Add the base 3D PMI product and then the markups. We already grabbed
+                   an extra node for the 3D PMI entry. It goes as the end */
+                code = prc_api_helper_add_markups(ctx, data, num_files, work_curr_file_index,
+                    work_product, reserve, work_product_tree);
+                if (code < 0)
+                {
+                    prc_error(ctx, code, "Failed in prc_api_helper_add_markups\n");
+                    result = code;
+                    goto cleanup;
+                }
+            }
+            break;
         }
     }
 
-    /* If we have any children deal with those now */
-    if (number_of_child_product_occurrences > 0)
-    {
-        /* Grab number_of_child_product_occurrences from the reserve. Also,
-           update the children count if we have any markups */
-        uint8_t has_markups = product->markups.number_of_markups > 0 ? 1 : 0;
-        product_tree->num_children = number_of_child_product_occurrences + has_markups;
-        product_tree->children = &reserve->products[reserve->product_index];
-        reserve->product_index += number_of_child_product_occurrences + has_markups;
-
-        for (k = 0; k < number_of_child_product_occurrences; k++)
-        {
-            if (product_refs->index_child_occurrence[k] >= (data_in->file_struct[curr_file_index].tree->product_count - 1))
-            {
-                prc_error(ctx, PRC_API_INDEX, "Child reference index out of range in prc_api_helper_add_items\n");
-                return PRC_API_INDEX;
-            }
-            child_product = &data_in->file_struct[curr_file_index].tree->products[product_refs->index_child_occurrence[k]];
-
-            /* Process the product child but with the identity transform */
-            code = prc_api_set_transform_to_identity(ctx, &new_transform);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Failed in prc_api_set_transform_to_identity\n");
-                return code;
-            }
-            prc_api_helper_update_parent_style(ctx, child_product, file_index,
-                &parent_biased_style_index, &parent_biased_style_file_index);
-            /* pass product_style so child style nodes attach under this product's style */
-            code = prc_api_helper_add_product(ctx, data, num_files, curr_file_index,
-                NULL, new_transform, child_product,
-                parent_biased_style_index,
-                parent_biased_style_file_index,
-                &product_tree->children[k], reserve, product_style);
-            if (code < 0)
-            {
-                prc_error(ctx, code, "Failed in prc_api_helper_add_items\n");
-                return code;
-            }
-        }
-    }
-
-    /* Add the markups */
-    if (product->markups.number_of_markups > 0)
-    {
-        if (number_of_child_product_occurrences == 0)
-        {
-            /* We didn't have any child product occurrences but we have markups.
-               So we need to add a child for the 3D PMI and then add the markups
-               under that. */
-            product_tree->num_children = 1;
-            product_tree->children = &reserve->products[reserve->product_index];
-            reserve->product_index += 1;
-        }
-
-        /* Add the base 3D PMI product and then the markups. We already grabbed
-           an extra node for the 3D PMI entry. It goes as the end */
-        code = prc_api_helper_add_markups(ctx, data, num_files, curr_file_index,
-            product, reserve, product_tree);
-        if (code < 0)
-        {
-            prc_error(ctx, code, "Failed in prc_api_helper_add_markups\n");
-            return code;
-        }
-    }
-    return 0;
+cleanup:
+    prc_free(ctx, worklist);
+    return result;
 }
 
 /* A special handling of the first node prior to the recursion */
@@ -3228,7 +3724,7 @@ prc_api_helper_get_tess_and_file_index(prc_context *ctx, prc_api_data data_in,
         }
         *file_index_out = markup_details[tess_index].tess_file_index;
         *tess_index_out = markup_details[tess_index].tessellation_index;
-    } 
+    }
     else
     {
         /* This is a part tessellation */
@@ -3273,7 +3769,7 @@ prc_api_initialize_tessellation(prc_context *ctx, prc_api_data data_in,
 
     if (tess_index >= data->unique_part_count)
     {
-        /* This means this is a markup tessellation. We need to adjust the 
+        /* This means this is a markup tessellation. We need to adjust the
            index to look in the markup details and not the part details */
         tess_index = tess_index - data->unique_part_count;
         if (tess_index >= data->unique_markup_count)
@@ -3443,7 +3939,7 @@ prc_api_get_number_faces(prc_context *ctx, prc_api_data data_in,
         if (tessellation->tess_3d_compressed->line_attribute_array != NULL ||
             (tessellation->tess_3d_compressed->decoded_point_color_array != NULL))
         {
-            /* We may need to look at the content of the line_attribute array 
+            /* We may need to look at the content of the line_attribute array
                and see that they are all the same */
 			return 1;
 		}
@@ -3502,7 +3998,7 @@ prc_api_face_is_material(prc_context *ctx, const prc_api_tess *api_tess,
     {
         if (api_tess->type == PRC_API_TESS_3D_Compressed)
         {
-            if (api_tess->tess_faces[face_index].face_has_single_style && 
+            if (api_tess->tess_faces[face_index].face_has_single_style &&
                 api_tess->is_material)
             {
                 return 1;
@@ -3537,18 +4033,18 @@ prc_api_face_is_material(prc_context *ctx, const prc_api_tess *api_tess,
     return 0;
 }
 
-PRC_EXPORT void 
+PRC_EXPORT void
 prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess,
     prc_api_material *material, uint32_t face_index)
 {
     if (api_tess->type == PRC_API_TESS_3D)
-    {    
+    {
         if (api_tess->num_faces == 0)
         {
             return;
         }
 
-        prc_internal_api_face *face_reserved = 
+        prc_internal_api_face *face_reserved =
             (prc_internal_api_face *) api_tess->tess_faces[face_index].reserved;
         if (face_reserved == NULL)
         {

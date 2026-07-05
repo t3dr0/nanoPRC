@@ -48,7 +48,7 @@ prc_vec_cross(prc_vec3 vec1, prc_vec3 vec2, prc_vec3 *output)
     output->x = (vec1.y * vec2.z) - (vec1.z * vec2.y);
 }
 
-/* Return the length of the vector using the 
+/* Return the length of the vector using the
    ieee754_float definition from the ISO spec */
 double
 prc_vec_length(prc_vec3 vec)
@@ -70,7 +70,7 @@ prc_vec_length(prc_vec3 vec)
     while (count != 100)
     {
         dx_i = (dx_0 + dsquared / dx_0) / 2;
-        if ((double) dx_i == (double) dx_0) 
+        if ((double) dx_i == (double) dx_0)
             break;
         dx_0 = dx_i;
         count++;
@@ -95,7 +95,7 @@ prc_vec_dist_between_two_points(prc_vec3 pt1, prc_vec3 pt2)
     prc_vec3 diff;
     prc_vec_sub(pt1, pt2, &diff);
     return prc_vec_length(diff);
-}   
+}
 
 void
 prc_vec_compute_find_normal_from_sides(prc_vec3 vec0, prc_vec3 vec1, prc_vec3 vec2, prc_vec3 *normal)
@@ -105,7 +105,7 @@ prc_vec_compute_find_normal_from_sides(prc_vec3 vec0, prc_vec3 vec1, prc_vec3 ve
     prc_vec_sub(vec1, vec0, &diff1);
     prc_vec_sub(vec2, vec0, &diff2);
 
-    /* If the v0 is on the right and v0 v1 is the base then 
+    /* If the v0 is on the right and v0 v1 is the base then
        a positive normal will mean right is right and left is left */
     prc_vec_cross(diff2, diff1, normal);
     prc_vec_normalize(normal);
@@ -390,7 +390,7 @@ prc_vec_compute_normal_vector(prc_vec3 v0, prc_vec3 v1, prc_vec3 v2, double thet
             prc_vec_cross(v2_norm, v3_norm, &z_norm);
         }
     }
-    
+
     prc_vec_copy(z_norm, &z_norm2, 0);
     prc_vec_normalize(&z_norm2);
     prc_vec_cross(z_norm2, x_norm, &y_norm);
@@ -398,7 +398,7 @@ prc_vec_compute_normal_vector(prc_vec3 v0, prc_vec3 v1, prc_vec3 v2, double thet
     prc_vec_scale(cos(phi) * cos(theta), &x_norm);
     prc_vec_scale(sin(theta) * cos(phi), &y_norm);
     prc_vec_scale(sin(phi), &z_norm);
-    
+
     prc_vec_add(x_norm, y_norm, normal);
     prc_vec_add(*normal, z_norm, normal);
 
@@ -465,7 +465,7 @@ prc_vec_make_orth_basis_normals(prc_basis *basis)
 
     prc_vec_set(&basis->Y, 0, 1, 0);
     prc_vec_cross(basis->X, basis->Y, &basis->Z);
-    
+
     if (prc_vec_normalize(&basis->Z) < 0)
     {
         prc_vec_set(&basis->Y, 0, 0, 1);
@@ -481,9 +481,9 @@ prc_vec_make_orth_basis_normals(prc_basis *basis)
     return 0;
 }
 
-/* This is the MakeOrthoRep method from the spec. 
+/* This is the MakeOrthoRep method from the spec.
    Note that in that bit of code the * operator is defined
-   to be the cross product for the PrcPt objects 
+   to be the cross product for the PrcPt objects
    The X basis vector is assumed to already be set but it may or may not
    already be normalize. Set a input flag to indicate if this code should
    normalize it (we want to avoid double normalization). */

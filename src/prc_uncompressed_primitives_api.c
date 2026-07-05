@@ -93,7 +93,7 @@ prc_internal_api_calculate_normals_triangles(prc_context *ctx, uint32_t num_tria
 static uint32_t*
 prc_internal_api_get_normal_texture_position_index(uint32_t *index, int32_t *normal_index,
                                                    uint32_t *texture_indices,
-                                                   uint32_t *position_index, 
+                                                   uint32_t *position_index,
                                                    uint32_t number_of_texture_indices,
                                                    uint8_t must_calc_normals,
                                                    prc_multi_single_norm_type_t multi_single_norm_type)
@@ -447,7 +447,7 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
                 /* All the color vertices have a color assigned, so we can't use this for matching */
                 got_color_hit = false;
             }
-            
+
             if (got_normal_hit && got_texture_hit && got_color_hit)
             {
                 /* Found a match - reuse existing vertex */
@@ -583,7 +583,7 @@ prc_internal_api_get_vertex_index(prc_context *ctx, size_t *vertex_index,
    tessellation data for a face and maps it into a new list of vertices and
    indices.  This is operating on one point, updating the position and normal
    vectors as well as the indice value. If we are in a single norm situation,
-   then we pass a flag and that initial norm index that was returned the 
+   then we pass a flag and that initial norm index that was returned the
    first time the function was called.  The flag lets us know what the situation
    is (e.g MULTI_NORM, SINGLE_NORM_INITIAL, SINGLE_NORM_SUBSEQUENT) */
 static int
@@ -699,7 +699,7 @@ prc_internal_api_remap_indices(prc_context *ctx,
             uncompressed_data->face_normal_indices[indice_count] = normal_indice_pos;
         }
     }
-  
+
     /* It is possible that we have texture indices but no texture! The
        auto engine has examples like this. In this case we skip the texture */
     if (uncompressed_data->is_texture && has_texture_indices)
@@ -707,6 +707,16 @@ prc_internal_api_remap_indices(prc_context *ctx,
         /* There may be an issue here if we have multiple texture coordinates
            Waiting to find a file with this. For now, we are just using the first coordinate */
         uint32_t texture_index = texture_indices[0] / 2;
+        uint32_t num_texture_coords_prc = uncompressed_data->tess->tess_3d->number_of_texture_coordinates / 2;
+
+        /* Sanity check for malicious file data. prc_texture_indice_to_api_texture_indice
+           and texture_coordinates are both sized off number_of_texture_coordinates/2, but
+           texture_index comes straight from the file's index stream with no relation to
+           that count, so validate it here (mirrors the position_index/normal_index checks
+           above). */
+        if (texture_index >= num_texture_coords_prc)
+            return PRC_API_ERROR_PARSER;
+
         if (prc_texture_indice_to_api_texture_indice[texture_index] == UINT32_MAX)
         {
             prc_texture_indice_to_api_texture_indice[texture_index] = *texture_count;
@@ -715,7 +725,7 @@ prc_internal_api_remap_indices(prc_context *ctx,
             /* Add the new texture coordinate that we have not had before */
             for (k = 0; k < 2; k++)
             {
-                face_initial_texture_coords[texture_indice_pos * 2 + k] = 
+                face_initial_texture_coords[texture_indice_pos * 2 + k] =
                     uncompressed_data->tess->tess_3d->texture_coordinates[texture_index * 2 + k];
             }
             *texture_count = *texture_count + 1;
@@ -742,11 +752,11 @@ prc_internal_api_vertex_triangle_multinorm(prc_context *ctx, size_t num_triangle
     size_t vertex_index;
     uint32_t num_text_coord = uncompressed_data->face_out_reserved->num_texture_coords;
     uint32_t *vertex_indices = uncompressed_data->face_out_reserved->vertex_indices;
-    
+
     if (num_triangles == 0)
         return 0;
 
-    /* First go through all our positions and normals and remap them to 
+    /* First go through all our positions and normals and remap them to
        a new set that are specific for this face */
     for (k = 0; k < num_triangles; k++)
     {

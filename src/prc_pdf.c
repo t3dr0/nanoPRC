@@ -272,6 +272,16 @@ pdf_get_stream_info(prc_context *ctx, uint8_t *ptr_in, uint8_t *boundary,
                 prc_error(ctx, PRC_ERROR_PARSE, "Did not read stream length in PDF object\n");
                 return PRC_ERROR_PARSE;
             }
+
+            /* The /Length value is attacker-controlled. Validate it against the
+               bytes actually remaining after the stream start in this buffer
+               before any caller uses it to allocate/copy, otherwise a crafted
+               /Length larger than the real stream causes an out-of-bounds read. */
+            if (ptr_stream > boundary || (size_t)*stream_length > (size_t)(boundary - ptr_stream))
+            {
+                prc_error(ctx, PRC_ERROR_PARSE, "PDF stream /Length exceeds available data\n");
+                return PRC_ERROR_PARSE;
+            }
             break;
         }
 
@@ -300,8 +310,9 @@ pdf_get_ptr_to_obj(prc_context *ctx, uint32_t object_num_in, uint8_t *ptr_in,
     {
         if (strncmp((const char *)ptr, PDF_OBJECT_NAME, PDF_OBJECT_NAME_LEN) == 0)
         {
-            /* Make sure we are not at an endobj */
-            if (strncmp((const char *)(ptr - 3), PDF_ENDOBJ_NAME,
+            /* Make sure we are not at an endobj. Only look 3 bytes back if
+               there actually are 3 bytes before ptr in this buffer. */
+            if (ptr - ptr_in >= 3 && strncmp((const char *)(ptr - 3), PDF_ENDOBJ_NAME,
                 PDF_ENDOBJ_NAME_LEN) == 0)
             {
                 ptr += 3;
@@ -446,7 +457,7 @@ pdf_parse_text_prc(prc_context *ctx, uint32_t length, uint8_t *ptr_in,
     }
     count = count + 2;
 
-    /* Read the characters into a string until we get to ) 
+    /* Read the characters into a string until we get to )
        But this is only the case if we dont know the length */
     while (!(*ptr_temp == ')' || (length != 0 && count == length)))
     {
@@ -2670,7 +2681,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         goto fail;
     }
 
-    code = pdf_get_file_id(ctx, pdf_buff_in, size_in, decrypt_params.file_id, 
+    code = pdf_get_file_id(ctx, pdf_buff_in, size_in, decrypt_params.file_id,
                            &decrypt_params.file_id_length);
     if (code < 0)
     {
@@ -2885,7 +2896,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
         }
     }
 
-    /* Now we have the offset to the PRC object, we need to get the buffer from 
+    /* Now we have the offset to the PRC object, we need to get the buffer from
        stream to endstream */
     ptr = pdf_buff_in + prc_offset;
     code = pdf_get_stream_info(ctx, ptr, file_end, &ptr_stream, &stream_length,
@@ -2899,7 +2910,7 @@ pdf_extract_prc_internal(prc_context *ctx, uint8_t *pdf_buff_in, uint32_t size_i
     /* This is an interesting one. I have seen cases there the PRC stream
        is encrypted and cases where it is not. Why bother encrypting the
        thing as already crazy. In any event look for the PRC header in the
-       stream code. If present, assume it is not encrypted even if the 
+       stream code. If present, assume it is not encrypted even if the
        streams are supposedly encrypted. */
     if (stream_length > PDF_PRC_STREAM_HEADER_LEN &&
         strncmp((const char *)ptr_stream, PDF_PRC_STREAM_HEADER, PDF_PRC_STREAM_HEADER_LEN) == 0)

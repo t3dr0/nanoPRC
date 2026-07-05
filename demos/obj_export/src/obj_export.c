@@ -18,7 +18,7 @@
 @file obj_export.c
 @brief Optimized utility program to extract 3D polygon tessellations and textures from PRC files,
 exporting to Wavefront OBJ + MTL + PNG maps with automatic texture deduplication.
- 
+
 The obj_export program is a high-performance, cross-platform command-line utility designed to extract 3D polygon tessellations,
 material definitions, and embedded surface textures from Product Representation Compact (PRC) files or PDF containers,
 converting them into industry-standard Wavefront OBJ asset bundles.
@@ -31,7 +31,7 @@ a geometry file (.obj), a material library file (.mtl), and a collection of extr
 extracts the uncompressed raw pixel streams, and saves them locally as portable PNG images.
 
 - Smart Asset Linking: Dynamically generates localized, distinct material identifiers within the .mtl library,
-binding surface color coefficients (ambient, diffuse, specular, emissive, and transparency) 
+binding surface color coefficients (ambient, diffuse, specular, emissive, and transparency)
 and linking extracted texture maps via the standard map_Kd syntax.
 
 - Full Vertex Attributes Export: Formats and writes absolute geometric coordinates, including spatial positions (v),
@@ -77,7 +77,7 @@ to ensure cross-platform compatibility and lossless fidelity. Alternative image 
 - Local Workspace Permissions: Because the utility isolates filename stems to dump companion
 texture maps alongside the .obj file, it requires active write permissions within the targeted destination
 folder or execution will fail during asset serialization. Existing files are overwritten without warning.
- 
+
  */
 
 #include <prc_api.h>
@@ -92,7 +92,7 @@ folder or execution will fail during asset serialization. Existing files are ove
 #include "stb_image_write.h"
 
 /**
- * @brief Structure to track unique texture assets to optimize disk operations 
+ * @brief Structure to track unique texture assets to optimize disk operations
  * and avoid writing duplicate image files.
  */
 typedef struct {
@@ -117,7 +117,7 @@ typedef struct {
     } while (0)
 
 /**
- * @brief Helper to write a material entry into the companion .mtl file descriptor, 
+ * @brief Helper to write a material entry into the companion .mtl file descriptor,
  * supporting optional diffuse texture maps via map_Kd.
  */
 static void write_mtl_material(FILE *mtl_out, const char *mat_name, const prc_api_material *mat, const char *texture_filename)
@@ -129,7 +129,7 @@ static void write_mtl_material(FILE *mtl_out, const char *mat_name, const prc_ap
     fprintf(mtl_out, "  Ke %f %f %f\n", mat->emissive[0], mat->emissive[1], mat->emissive[2]);
     fprintf(mtl_out, "  Ns %f\n", mat->shininess);
     fprintf(mtl_out, "  d %f\n", mat->diffuse_alpha);
-    
+
     if (texture_filename && strlen(texture_filename) > 0)
     {
         fprintf(mtl_out, "  map_Kd %s\n", texture_filename);
@@ -222,7 +222,7 @@ static void extract_stem_properties(const char *obj_path, char *out_stem_path, c
 {
     strncpy(out_stem_path, obj_path, max_len - 1);
     out_stem_path[max_len - 1] = '\0';
-    
+
     char *dot = strrchr(out_stem_path, '.');
     if (dot && strcmp(dot, ".obj") == 0)
     {
@@ -269,7 +269,7 @@ int main(int argc, char *argv[])
 
     uint32_t num_parts = 0, num_products = 0, num_markups = 0;
     uint32_t total_tessellations = 0, total_line_tessellations = 0;
-  
+
     uint32_t global_v_counter = 1;
     uint32_t global_vt_counter = 1;
     uint32_t global_vn_counter = 1;
@@ -321,7 +321,7 @@ int main(int argc, char *argv[])
     {
         prc_api_tess *tess = &tesses[k];
         uint32_t num_faces = prc_api_get_number_faces(ctx, data, k);
-        
+
         tess->num_faces = num_faces;
         tess->tess_faces = calloc(num_faces, sizeof(prc_api_face));
         if (!tess->tess_faces)
@@ -423,11 +423,11 @@ int main(int argc, char *argv[])
                     sprintf(texture_full_path, "%s_tex_%u_%zu.png", stem_path, i, f);
                     sprintf(texture_local_name, "%s_tex_%u_%zu.png", stem_filename, i, f);
 
-                    int write_ok = stbi_write_png(texture_full_path, 
-                                                 (int)face->texture.width, 
-                                                 (int)face->texture.height, 
-                                                 (int)face->texture.num_channels, 
-                                                 face->texture.data, 
+                    int write_ok = stbi_write_png(texture_full_path,
+                                                 (int)face->texture.width,
+                                                 (int)face->texture.height,
+                                                 (int)face->texture.num_channels,
+                                                 face->texture.data,
                                                  (int)(face->texture.width * face->texture.num_channels));
                     if (write_ok)
                     {
@@ -443,7 +443,7 @@ int main(int argc, char *argv[])
                             }
                             tracked_textures = new_arr;
                         }
-                        
+
                         /* Store metadata for subsequent comparison checks */
                         tracked_textures[tracked_count].data = face->texture.data;
                         tracked_textures[tracked_count].width = face->texture.width;
@@ -571,7 +571,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("OBJ export completed successfully. Unique textures written: %zu. Total vertices: %u\n", 
+    printf("OBJ export completed successfully. Unique textures written: %zu. Total vertices: %u\n",
            tracked_count, global_v_counter - 1);
 
 cleanup:

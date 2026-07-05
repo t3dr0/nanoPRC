@@ -62,7 +62,7 @@ public:
     inline void setProjection(const Matrix4 &projection) { _shader.setMatrix4(uProjection, projection); }
 
     inline void setViewPos(const Vector3 &viewPos)
-    { 
+    {
         _viewPos = viewPos;  // Cache it
         _shader.setVector3(uViewPos, viewPos);
     }

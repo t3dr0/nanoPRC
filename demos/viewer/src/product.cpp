@@ -504,7 +504,7 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
 
     /* A change here to simplify things when dealing with multiple faces
        in the compressed code.  The vertex splitting was getting
-       overly complex. In the noncompressed case, we 
+       overly complex. In the noncompressed case, we
        can have multiple faces and those faces each have their own
        vertices. We will squash them back together here though */
     std::vector<unsigned int> indices;
@@ -652,7 +652,7 @@ void Product::attach(prc_context *ctx, prc_api_data data, const prc_api_tess *te
         } // End graphics primitives
 
         /* For the indices offset in the multi-face case */
-        vertex_offset += face_vertex_count; 
+        vertex_offset += face_vertex_count;
     } // End faces (and materials)
 
     if (combined_vertices.size() > 0 && indices.size() > 0)

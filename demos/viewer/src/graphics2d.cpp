@@ -115,7 +115,7 @@ void Graphics2D::DrawRect(float x0, float y0, float x1, float y1)
 		dl = NewDrawList();
 	else
 		dl = _draw_lists + _draw_list_count - 1;
-	
+
 	x0 += _transform.x;
 	y0 += _transform.y;
 	x1 += _transform.x;
@@ -315,7 +315,7 @@ void Graphics2D::Render(const Vector2 &dim)
 	glBindVertexArray(_vao);
 	glBindBuffer(GL_ARRAY_BUFFER, _vbo);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _ebo);
-	
+
 	CheckGLErrors();
 
 	for (size_t i = 0; i < _draw_list_count; ++i)

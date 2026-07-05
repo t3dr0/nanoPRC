@@ -100,7 +100,7 @@ prc_release_base_with_graphics(prc_context *ctx, prc_base_with_graphics *data)
 static void
 prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
 {
-    size_t k;
+    size_t k, j;
 
     if (base == NULL)
         return;
@@ -110,10 +110,17 @@ prc_release_content_base(prc_context *ctx, prc_content_prc_base *base)
 
     for (k = 0; k < attribute_data.attribute_count; k++)
     {
-        prc_release_string(ctx, &attribute_data.attributes[k].attribute_title.string_title);
+        prc_release_attribute_title(ctx, &attribute_data.attributes[k].attribute_title);
+        if (attribute_data.attributes[k].attributes != NULL)
+        {
+            for (j = 0; j < attribute_data.attributes[k].number_attributes; j++)
+            {
+                prc_release_attribute_key_value(ctx, &attribute_data.attributes[k].attributes[j]);
+            }
+        }
         prc_free(ctx, (attribute_data.attributes[k].attributes));
-        prc_free(ctx, &attribute_data.attributes[k]);
     }
+    prc_free(ctx, (attribute_data.attributes));
 }
 
 static void
@@ -517,60 +524,148 @@ prc_release_internal_global_data(prc_context *ctx, prc_type_asm_file_struct_inte
 }
 
 
+/* Work-list entry for the iterative release walk below: either a prc_ri node
+   to release, or a deferred "free this rep_items array" marker. The marker is
+   needed because rep_items is one contiguous allocation that individual
+   elements point into -- it must not be freed until every element pushed
+   from it has actually been popped and released, so it's pushed *before*
+   its elements (LIFO: whatever is pushed last is popped first, so the
+   elements all get processed before the marker is). */
+typedef struct
+{
+    uint8_t is_cleanup;
+    prc_ri *ri;
+    prc_ri *array_to_free;
+} prc_release_ri_work;
+
+static int
+prc_release_ri_push(prc_context *ctx, prc_release_ri_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint8_t is_cleanup,
+    prc_ri *ri, prc_ri *array_to_free)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_release_ri_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_release_ri_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_release_ri_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].is_cleanup = is_cleanup;
+    (*worklist)[*worklist_size].ri = ri;
+    (*worklist)[*worklist_size].array_to_free = array_to_free;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* Iterative (not recursive): RI_Set nesting (and RepresentationalItem
+   wrapping) follows the file's structure, which is attacker-controlled and
+   could otherwise drive unbounded C-stack recursion. Uses an explicit
+   heap-allocated work list instead. On an out-of-memory failure growing the
+   work list, this stops early (leaking the remainder) rather than crashing --
+   matching this release path's existing best-effort-cleanup convention. */
 static void
 prc_release_representation_item(prc_context *ctx, prc_ri *data)
 {
-    uint32_t k;
+    prc_release_ri_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
 
-    prc_release_base_with_graphics(ctx, &data->item_content.base);
-
-    switch (data->representation_type)
+    worklist = (prc_release_ri_work *)prc_malloc(ctx, worklist_capacity * sizeof(prc_release_ri_work));
+    if (worklist == NULL)
+        return;
+    if (prc_release_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity, 0, data, NULL) < 0)
     {
-    case PRC_TYPE_RI_RepresentationalItem:
-        prc_release_representation_item(ctx, data->ri_rep_item);
-        break;
-    case PRC_TYPE_RI_BrepModel:
-        prc_free(ctx, data->ri_brep_model);
-        break;
-    case PRC_TYPE_RI_Curve:
-        prc_free(ctx, data->ri_curve);
-        break;
-    case PRC_TYPE_RI_Direction:
-        prc_free(ctx, data->ri_direction);
-        break;
-    case PRC_TYPE_RI_Plane:
-        prc_free(ctx, data->ri_plane);
-        break;
-    case PRC_TYPE_RI_PointSet:
-        if (data->ri_point_set->points != NULL)
-        {
-            prc_free(ctx, data->ri_point_set->points);
-        }
-        prc_free(ctx, data->ri_point_set);
-        break;
-    case PRC_TYPE_RI_PolyBrepModel:
-        prc_free(ctx, data->ri_poly_brep_model);
-        break;
-    case PRC_TYPE_RI_PolyWire:
-        prc_free(ctx, data->ri_poly_wire);
-        break;
-    case PRC_TYPE_RI_Set:
-        if (data->ri_set->rep_items != NULL)
-        {
-            for (k = 0; k < data->ri_set->number_of_items; k++)
-            {
-                prc_release_representation_item(ctx, &data->ri_set->rep_items[k]);
-            }
-            prc_free(ctx, data->ri_set->rep_items);
-        }
-        prc_free(ctx, data->ri_set);
-        break;
-    case PRC_TYPE_RI_CoordinateSystem:
-        prc_free(ctx, data->ri_coordinate_system);
-        break;
-    default:
-        prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_release_representation_item\n");
+        prc_free(ctx, worklist);
+        return;
     }
+
+    while (worklist_size > 0)
+    {
+        prc_release_ri_work item = worklist[--worklist_size];
+        prc_ri *curr;
+        uint32_t k;
+
+        if (item.is_cleanup)
+        {
+            prc_free(ctx, item.array_to_free);
+            continue;
+        }
+
+        curr = item.ri;
+        prc_release_base_with_graphics(ctx, &curr->item_content.base);
+
+        switch (curr->representation_type)
+        {
+        case PRC_TYPE_RI_RepresentationalItem:
+            if (prc_release_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                    0, curr->ri_rep_item, NULL) < 0)
+            {
+                prc_free(ctx, worklist);
+                return;
+            }
+            break;
+        case PRC_TYPE_RI_BrepModel:
+            prc_free(ctx, curr->ri_brep_model);
+            break;
+        case PRC_TYPE_RI_Curve:
+            prc_free(ctx, curr->ri_curve);
+            break;
+        case PRC_TYPE_RI_Direction:
+            prc_free(ctx, curr->ri_direction);
+            break;
+        case PRC_TYPE_RI_Plane:
+            prc_free(ctx, curr->ri_plane);
+            break;
+        case PRC_TYPE_RI_PointSet:
+            if (curr->ri_point_set->points != NULL)
+            {
+                prc_free(ctx, curr->ri_point_set->points);
+            }
+            prc_free(ctx, curr->ri_point_set);
+            break;
+        case PRC_TYPE_RI_PolyBrepModel:
+            prc_free(ctx, curr->ri_poly_brep_model);
+            break;
+        case PRC_TYPE_RI_PolyWire:
+            prc_free(ctx, curr->ri_poly_wire);
+            break;
+        case PRC_TYPE_RI_Set:
+            if (curr->ri_set->rep_items != NULL)
+            {
+                /* Push the cleanup marker first so it ends up at the bottom
+                   of this batch and is popped only after all the elements
+                   pushed after it. */
+                if (prc_release_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        1, NULL, curr->ri_set->rep_items) < 0)
+                {
+                    prc_free(ctx, worklist);
+                    return;
+                }
+                for (k = 0; k < curr->ri_set->number_of_items; k++)
+                {
+                    if (prc_release_ri_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                            0, &curr->ri_set->rep_items[k], NULL) < 0)
+                    {
+                        prc_free(ctx, worklist);
+                        return;
+                    }
+                }
+            }
+            prc_free(ctx, curr->ri_set);
+            break;
+        case PRC_TYPE_RI_CoordinateSystem:
+            prc_free(ctx, curr->ri_coordinate_system);
+            break;
+        default:
+            prc_error(ctx, PRC_ERROR_PARSE, "Parsing error in prc_release_representation_item\n");
+        }
+    }
+
+    prc_free(ctx, worklist);
 }
 
 static void
@@ -641,35 +736,114 @@ prc_release_leader(prc_context *ctx, prc_mkp_leader *data)
     prc_release_base_with_graphics(ctx, &data->base);
 }
 
+/* Work-list entry for the iterative release walk below: either a
+   prc_annotation_entity node to release, or a deferred "free this
+   annotations array" marker -- needed for the same reason as
+   prc_release_ri_work above (annotations is one contiguous allocation that
+   individual elements point into, so it must outlive all of them). */
+typedef struct
+{
+    uint8_t is_cleanup;
+    prc_annotation_entity *entity;
+    prc_annotation_entity *array_to_free;
+} prc_release_annotation_work;
+
+static int
+prc_release_annotation_push(prc_context *ctx, prc_release_annotation_work **worklist,
+    uint32_t *worklist_size, uint32_t *worklist_capacity, uint8_t is_cleanup,
+    prc_annotation_entity *entity, prc_annotation_entity *array_to_free)
+{
+    if (*worklist_size >= *worklist_capacity)
+    {
+        prc_release_annotation_work *new_worklist;
+        uint32_t new_capacity = (*worklist_capacity) * 2;
+        new_worklist = (prc_release_annotation_work *)prc_realloc(ctx, *worklist,
+            new_capacity * sizeof(prc_release_annotation_work));
+        if (new_worklist == NULL)
+            return -1;
+        *worklist = new_worklist;
+        *worklist_capacity = new_capacity;
+    }
+    (*worklist)[*worklist_size].is_cleanup = is_cleanup;
+    (*worklist)[*worklist_size].entity = entity;
+    (*worklist)[*worklist_size].array_to_free = array_to_free;
+    (*worklist_size)++;
+    return 0;
+}
+
+/* Iterative (not recursive): nested annotation sets follow the file's
+   structure, which is attacker-controlled and could otherwise drive
+   unbounded C-stack recursion. Uses an explicit heap-allocated work list
+   instead. */
 static void
 prc_release_annotation_entities(prc_context *ctx, prc_annotation_entity *data)
 {
-    size_t k;
+    prc_release_annotation_work *worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
 
-    switch (data->tag)
+    worklist = (prc_release_annotation_work *)prc_malloc(ctx,
+        worklist_capacity * sizeof(prc_release_annotation_work));
+    if (worklist == NULL)
+        return;
+    if (prc_release_annotation_push(ctx, &worklist, &worklist_size, &worklist_capacity, 0, data, NULL) < 0)
     {
-    case PRC_TYPE_MKP_AnnotationItem:
-        prc_release_base_with_graphics(ctx, &data->item.base);
-        break;
-    case PRC_TYPE_MKP_AnnotationSet:
-        prc_release_base_with_graphics(ctx, &data->set.base);
-        if (data->set.annotations != NULL)
-        {
-            for (k = 0; k < data->set.number_of_annotations; k++)
-            {
-                prc_release_annotation_entities(ctx, &data->set.annotations[k]);
-            }
-            prc_free(ctx, data->set.annotations);
-        }
-        break;
-    case PRC_TYPE_MKP_AnnotationReference:
-        prc_release_base_with_graphics(ctx, &data->ref.base);
-        if (data->ref.linked_items != NULL)
-        {
-            prc_free(ctx, data->ref.linked_items);
-        }
-        break;
+        prc_free(ctx, worklist);
+        return;
     }
+
+    while (worklist_size > 0)
+    {
+        prc_release_annotation_work item = worklist[--worklist_size];
+        prc_annotation_entity *curr;
+        size_t k;
+
+        if (item.is_cleanup)
+        {
+            prc_free(ctx, item.array_to_free);
+            continue;
+        }
+
+        curr = item.entity;
+        switch (curr->tag)
+        {
+        case PRC_TYPE_MKP_AnnotationItem:
+            prc_release_base_with_graphics(ctx, &curr->item.base);
+            break;
+        case PRC_TYPE_MKP_AnnotationSet:
+            prc_release_base_with_graphics(ctx, &curr->set.base);
+            if (curr->set.annotations != NULL)
+            {
+                /* Push the cleanup marker first so it is popped only after
+                   all the elements pushed after it. */
+                if (prc_release_annotation_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                        1, NULL, curr->set.annotations) < 0)
+                {
+                    prc_free(ctx, worklist);
+                    return;
+                }
+                for (k = 0; k < curr->set.number_of_annotations; k++)
+                {
+                    if (prc_release_annotation_push(ctx, &worklist, &worklist_size, &worklist_capacity,
+                            0, &curr->set.annotations[k], NULL) < 0)
+                    {
+                        prc_free(ctx, worklist);
+                        return;
+                    }
+                }
+            }
+            break;
+        case PRC_TYPE_MKP_AnnotationReference:
+            prc_release_base_with_graphics(ctx, &curr->ref.base);
+            if (curr->ref.linked_items != NULL)
+            {
+                prc_free(ctx, curr->ref.linked_items);
+            }
+            break;
+        }
+    }
+
+    prc_free(ctx, worklist);
 }
 
 static void
@@ -1253,48 +1427,87 @@ prc_release_tess(prc_context *ctx, prc_tess *data)
 
 void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
 
+/* Iterative (not recursive): composite curves nesting sub-curves follows the
+   file's structure, which is attacker-controlled and could otherwise drive
+   unbounded C-stack recursion. Uses an explicit heap-allocated work list
+   instead. Unlike prc_release_representation_item/prc_release_annotation_entities,
+   no cleanup-marker ordering is needed here: each curves[k].compressed_curve
+   is its own independent allocation (not an element of a shared array that
+   pointers are taken into), so freeing hcg_composite_curve.curves right after
+   queuing its elements is safe. */
 void
 prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data)
 {
-    uint32_t k;
+    prc_compressed_curve **worklist;
+    uint32_t worklist_size = 0;
+    uint32_t worklist_capacity = 64;
 
     if (data == NULL)
         return;
 
-    switch (data->curve_type)
+    worklist = (prc_compressed_curve **)prc_malloc(ctx, worklist_capacity * sizeof(prc_compressed_curve *));
+    if (worklist == NULL)
+        return;
+    worklist[worklist_size++] = data;
+
+    while (worklist_size > 0)
     {
-    case PRC_HCG_Line:
-    case PRC_HCG_Circle:
-        break;
+        prc_compressed_curve *curr = worklist[--worklist_size];
+        uint32_t k;
 
-    case  PRC_HCG_BsplineHermiteCurve:
-        if (data->hcg_bspline_hermite_curve.points != NULL)
-            prc_free(ctx, data->hcg_bspline_hermite_curve.points);
-        if (data->hcg_bspline_hermite_curve.tangents != NULL)
-            prc_free(ctx, data->hcg_bspline_hermite_curve.tangents);
-        if (data->hcg_bspline_hermite_curve.compressed_points != NULL)
-            prc_free(ctx, data->hcg_bspline_hermite_curve.compressed_points);
-        if (data->hcg_bspline_hermite_curve.compressed_tangents != NULL)
-            prc_free(ctx, data->hcg_bspline_hermite_curve.compressed_tangents);
-        break;
+        if (curr == NULL)
+            continue;
 
-    case PRC_HCG_CompositeCurve:
-        if (data->hcg_composite_curve.curves != NULL)
+        switch (curr->curve_type)
         {
-            for (k = 0; k < data->hcg_composite_curve.number_of_curves; k++)
-            {
-                if (data->hcg_composite_curve.curves[k].compressed_curve != NULL)
-                {
-                    prc_release_compressed_curve(ctx, data->hcg_composite_curve.curves[k].compressed_curve);
-                }
-            }
-            prc_free(ctx, data->hcg_composite_curve.curves);
-        }
-        break;
+        case PRC_HCG_Line:
+        case PRC_HCG_Circle:
+            break;
 
-    default:
-        break;
+        case  PRC_HCG_BsplineHermiteCurve:
+            if (curr->hcg_bspline_hermite_curve.points != NULL)
+                prc_free(ctx, curr->hcg_bspline_hermite_curve.points);
+            if (curr->hcg_bspline_hermite_curve.tangents != NULL)
+                prc_free(ctx, curr->hcg_bspline_hermite_curve.tangents);
+            if (curr->hcg_bspline_hermite_curve.compressed_points != NULL)
+                prc_free(ctx, curr->hcg_bspline_hermite_curve.compressed_points);
+            if (curr->hcg_bspline_hermite_curve.compressed_tangents != NULL)
+                prc_free(ctx, curr->hcg_bspline_hermite_curve.compressed_tangents);
+            break;
+
+        case PRC_HCG_CompositeCurve:
+            if (curr->hcg_composite_curve.curves != NULL)
+            {
+                for (k = 0; k < curr->hcg_composite_curve.number_of_curves; k++)
+                {
+                    if (curr->hcg_composite_curve.curves[k].compressed_curve != NULL)
+                    {
+                        if (worklist_size >= worklist_capacity)
+                        {
+                            prc_compressed_curve **new_worklist;
+                            worklist_capacity *= 2;
+                            new_worklist = (prc_compressed_curve **)prc_realloc(ctx, worklist,
+                                worklist_capacity * sizeof(prc_compressed_curve *));
+                            if (new_worklist == NULL)
+                            {
+                                prc_free(ctx, worklist);
+                                return;
+                            }
+                            worklist = new_worklist;
+                        }
+                        worklist[worklist_size++] = curr->hcg_composite_curve.curves[k].compressed_curve;
+                    }
+                }
+                prc_free(ctx, curr->hcg_composite_curve.curves);
+            }
+            break;
+
+        default:
+            break;
+        }
     }
+
+    prc_free(ctx, worklist);
 }
 
 static void
@@ -1567,7 +1780,13 @@ prc_release_nano_brep_data(prc_context *ctx, prc_nano_brep_compressed_data *data
     }
 }
 
-static void prc_release_topo(prc_context *ctx, prc_topo *body);
+/* PRC_TYPE_TOPO_Body self-nests to a depth that mirrors prc_parse_topo's
+   parsing (which caps at PRC_TOPO_BODY_RECURSION_MAX = 256), so this is
+   already transitively bounded for structures this codebase parsed itself --
+   the cap here is defense-in-depth so this release function isn't the only
+   thing relying on that cross-file invariant staying true. */
+#define PRC_RELEASE_TOPO_BODY_RECURSION_MAX 256
+static void prc_release_topo(prc_context *ctx, prc_topo *body, int depth);
 static void prc_release_ptr_curve(prc_context *ctx, prc_ptr_curve *data);
 static void prc_release_ptr_surface(prc_context *ctx, prc_ptr_surface *data);
 
@@ -2119,7 +2338,7 @@ prc_release_ptr_topology(prc_context *ctx, prc_ptr_topology *data)
 
     if (!data->is_stored && data->topo != NULL)
     {
-        prc_release_topo(ctx, data->topo);
+        prc_release_topo(ctx, data->topo, 0);
         prc_free(ctx, data->topo);
         data->topo = NULL;
     }
@@ -2301,9 +2520,12 @@ prc_release_topo_brep_data(prc_context *ctx, prc_topo_brep_data *data)
 }
 
 static void
-prc_release_topo(prc_context *ctx, prc_topo *body)
+prc_release_topo(prc_context *ctx, prc_topo *body, int depth)
 {
     if (body == NULL)
+        return;
+
+    if (depth > PRC_RELEASE_TOPO_BODY_RECURSION_MAX)
         return;
 
     switch (body->tag)
@@ -2383,7 +2605,7 @@ prc_release_topo(prc_context *ctx, prc_topo *body)
     case PRC_TYPE_TOPO_Body:
         if (body->topo_body != NULL)
         {
-            prc_release_topo(ctx, body->topo_body);
+            prc_release_topo(ctx, body->topo_body, depth + 1);
             prc_free(ctx, body->topo_body);
             body->topo_body = NULL;
         }
@@ -2447,7 +2669,7 @@ prc_release_topo_contexts(prc_context *ctx, prc_topo_context *topo_context)
     {
         for (k = 0; k < topo_context->number_of_bodies; k++)
         {
-            prc_release_topo(ctx, &topo_context->bodies[k]);
+            prc_release_topo(ctx, &topo_context->bodies[k], 0);
         }
         prc_free(ctx, topo_context->bodies);
         topo_context->bodies = NULL;

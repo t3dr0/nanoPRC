@@ -24,6 +24,10 @@
 #define CURVES_PERLOOP_INITIAL_SIZE 10
 #define BREP_VERTEX_INITIAL_SIZE 1000
 #define BREP_EDGE_INITIAL_SIZE 1000
+/* Generous upper bound on a NURBS surface's control-point grid (u*v). No
+   legitimate CAD model approaches this; it exists to reject file-supplied
+   counts before their product is used for allocation sizing/loop bounds. */
+#define PRC_MAX_NURBS_CONTROL_POINTS 16000000ULL
 
 /* Forward declarations due to circular dependencies */
 static int prc_parse_ptr_surface(prc_context *ctx, prc_bit_state *bit_state,
@@ -36,8 +40,9 @@ static int prc_parse_base_topology(prc_context *ctx, prc_bit_state *bit_state,
     prc_base_topology *data);
 static int prc_parse_content_body(prc_context *ctx, prc_bit_state *bit_state,
     prc_content_body *data);
+#define PRC_TOPO_BODY_RECURSION_MAX 256
 static int prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state,
-    prc_topo *data);
+    prc_topo *data, int depth);
 static int prc_parse_surf(prc_context *ctx, prc_bit_state *bit_state,
     prc_type_surf *data);
 void prc_release_compressed_curve(prc_context *ctx, prc_compressed_curve *data);
@@ -132,7 +137,7 @@ prc_parse_compressed_point(prc_context *ctx, prc_bit_state *bit_state,
 #endif
         /* Spec seems to be wrong about this. At least if we are coming from
            isonurbs and the uNbBits is 31 we just do 3 double reads it seems */
-        
+
         if (data->uNbBits == 31)
         {
             data->point.x = prc_bitread_double(ctx, bit_state);
@@ -222,7 +227,7 @@ prc_parse_particular_circle(prc_context *ctx, prc_bit_state *bit_state,
     int code;
 
     data->full_circle = prc_bitread_bit(ctx, bit_state);
-    
+
     if (!compressed_data->compressed_iso_spline)
     {
         code = prc_parse_start_end_data(ctx, bit_state, compressed_data,
@@ -964,7 +969,7 @@ prc_parse_content_compressed_face(prc_context *ctx, prc_bit_state *bit_state,
 
     data->orientation_surface_with_shell = prc_bitread_bit(ctx, bit_state);
     data->is_an_iso_face = is_an_iso_face;
- 
+
     if (data->is_an_iso_face)
     {
         code = prc_parse_content_compressed_iso_face(ctx, bit_state,
@@ -1031,7 +1036,7 @@ prc_parse_hcg_iso_cylinder(prc_context *ctx, prc_bit_state *bit_state,
 
 /* Table 206 PRC_HCG_IsoTorus */
 static int
-prc_parse_hcg_iso_torus(prc_context *ctx, prc_bit_state *bit_state, 
+prc_parse_hcg_iso_torus(prc_context *ctx, prc_bit_state *bit_state,
     prc_nano_brep_compressed_data *compressed_data, prc_hcg_iso_torus *data)
 {
     int code;
@@ -1195,7 +1200,7 @@ prc_parse_compressed_knots(prc_context *ctx, prc_bit_state *bit_state,
         prc_error(ctx, PRC_ERROR_MEMORY, "Memory allocation failed in prc_parse_compressed_knots\n");
         return PRC_ERROR_MEMORY;
     }
-    
+
     for (i = 0; i < num_knots; i++)
     {
         if (data->number_bit_parameter > 30)
@@ -1311,6 +1316,22 @@ prc_parse_compressed_control_points(prc_context *ctx, prc_bit_state *bit_state,
     uint32_t num_bits_for_rest, uint32_t num_control_points_u,
     uint32_t num_control_points_v, prc_compressed_control_points *data)
 {
+    /* num_control_points_u/v are derived from file-controlled knot
+       multiplicities and can be 0 (making num_control_points_u - 1 wrap to
+       UINT32_MAX) or large enough that (num_control_points_u - 1) *
+       (num_control_points_v - 1), computed in 32-bit arithmetic, overflows
+       and wraps to a small value before ever reaching prc_calloc -- which
+       would then allocate a small buffer while the nested loop below still
+       writes the full, un-wrapped number of interior points (heap OOB
+       write). Reject invalid counts and do the multiplication in 64-bit. */
+    if (num_control_points_u == 0 || num_control_points_v == 0 ||
+        (uint64_t)(num_control_points_u - 1) * (uint64_t)(num_control_points_v - 1) >
+            PRC_MAX_NURBS_CONTROL_POINTS)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "Invalid NURBS control point counts\n");
+        return PRC_ERROR_PARSE;
+    }
+
     /* Here is p[0][0] */
     data->p00 = prc_parse_3d_vector(ctx, bit_state);
 
@@ -1854,7 +1875,7 @@ prc_parse_compressed_face(prc_context *ctx, prc_bit_state *bit_state,
             prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
                 "PRC_HCG_NewLoop not implemented yet\n");
         break;
-        
+
         case PRC_HCG_EndLoop:
             //code = prc_parse_hcg_endloop(ctx, bit_state, &data->)
             prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
@@ -2081,7 +2102,7 @@ prc_parse_ptr_topology(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_topol
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_ptr_topology\n");
             return PRC_ERROR_MEMORY;
         }
-        code = prc_parse_topo(ctx, bit_state, data->topo);
+        code = prc_parse_topo(ctx, bit_state, data->topo, 0);
         if (code < 0)
         {
             prc_error(ctx, code, "Failed in prc_parse_topo\n");
@@ -2324,7 +2345,7 @@ prc_parse_crv_circle(prc_context *ctx, prc_bit_state *bit_state,
         }
     }
     else
-    {         
+    {
         data->tag = PRC_TYPE_CRV_Circle;
     }
     code = prc_parse_content_curve(ctx, bit_state, &data->curve_data);
@@ -2847,8 +2868,8 @@ prc_parse_ptr_curve(prc_context *ctx, prc_bit_state *bit_state, prc_ptr_curve *d
         switch (data->curve_type)
         {
         case PRC_TYPE_ROOT:
-            /* PRC_TYPE_ROOT (0) is used to indicate that the entity corresponds 
-               to a NULL pointer and no additional data is saved. Otherwise, the 
+            /* PRC_TYPE_ROOT (0) is used to indicate that the entity corresponds
+               to a NULL pointer and no additional data is saved. Otherwise, the
                integer shall be one of the subtypes of curve, surface, or topology.*/
             break;
         case PRC_TYPE_CRV_Blend02Boundary:
@@ -3109,14 +3130,14 @@ prc_parse_content_wire_edge(prc_context *ctx, prc_bit_state *bit_state, prc_cont
     if (data->is_trimmed)
     {
         data->trim_interval = prc_parse_interval(ctx, bit_state);
-    }   
+    }
 
     return 0;
 }
 
 /* Table 183 � PRC_TYPE_TOPO_WireEdge */
 static int
-prc_parse_topo_wire_edge(prc_context *ctx, prc_bit_state *bit_state, 
+prc_parse_topo_wire_edge(prc_context *ctx, prc_bit_state *bit_state,
     prc_topo_wire_edge *data, uint8_t read_tag)
 {
     int code;
@@ -5153,7 +5174,7 @@ prc_parse_face(prc_context *ctx, prc_bit_state *bit_state,
     {
         data->tolerance = prc_bitread_double(ctx, bit_state);
     }
-    
+
     data->number_of_loops = prc_bitread_uint32(ctx, bit_state);
 
     /* This should be set to -1 if it is not defined */
@@ -5254,9 +5275,18 @@ prc_parse_shell(prc_context *ctx, prc_bit_state *bit_state,
 
 /* Abstract type */
 static int
-prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data)
+prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data, int depth)
 {
     int code = 0;
+
+    /* PRC_TYPE_TOPO_Body self-recurses with a tag pair supplied entirely by the
+       file (a few bytes per level), so an attacker can drive recursion depth
+       proportional to file size. Cap it to avoid stack exhaustion. */
+    if (depth > PRC_TOPO_BODY_RECURSION_MAX)
+    {
+        prc_error(ctx, PRC_ERROR_PARSE, "prc_parse_topo recursion depth exceeded\n");
+        return PRC_ERROR_PARSE;
+    }
 
     data->tag = prc_bitread_uint32(ctx, bit_state);
 
@@ -5363,7 +5393,7 @@ prc_parse_topo(prc_context *ctx, prc_bit_state *bit_state, prc_topo *data)
             return PRC_ERROR_MEMORY;
         }
         /* Note the recursion */
-        code = prc_parse_topo(ctx, bit_state, data->topo_body);
+        code = prc_parse_topo(ctx, bit_state, data->topo_body, depth + 1);
         break;
 
     case PRC_TYPE_TOPO_SingleWireBody:
@@ -5488,7 +5518,7 @@ prc_parse_topo_contexts(prc_context *ctx, prc_bit_state *bit_state,
 
         for (k = 0; k < data->number_of_bodies; k++)
         {
-            code = prc_parse_topo(ctx, bit_state, &data->bodies[k]);
+            code = prc_parse_topo(ctx, bit_state, &data->bodies[k], 0);
             if (code < 0)
             {
                 prc_error(ctx, code, "Failed in prc_parse_topo\n");
