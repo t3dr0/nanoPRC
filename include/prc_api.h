@@ -632,6 +632,65 @@ PRC_EXPORT int prc_api_prep_model_tree(prc_context *ctx, prc_api_data data, uint
  * @return 0 on success, negative PRC_API_ERROR_* code on failure.
  */
 PRC_EXPORT int prc_api_create_model_tree(prc_context *ctx, prc_api_data data, prc_api_product **parent, uint32_t num_parts, uint32_t num_products, uint32_t num_markups);
+
+/* ------------------------------------------------------------------ */
+/* Write facility: public types.                                       */
+/* Reserved for the PRC encoder; prc_api_write_* entry points will be  */
+/* declared here as the write facility lands.                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief Tolerance parameter mode for encoder quantization thresholds.
+ */
+typedef enum
+{
+    /** Value is an absolute distance in millimetres, independent of model scale. */
+    PRC_WRITE_TOL_ABSOLUTE = 0,
+    /** Value is a dimensionless fraction of the model bounding-box diagonal. */
+    PRC_WRITE_TOL_RELATIVE = 1
+} prc_write_tol_mode_t;
+
+/**
+ * @brief Encoder tolerance: controls quantization grid size and weld distance.
+ *
+ * Construct via the inline helpers below rather than direct struct init.
+ */
+typedef struct prc_write_tolerance_s
+{
+    prc_write_tol_mode_t mode;
+    double               value; /* mm when ABSOLUTE; fraction when RELATIVE */
+} prc_write_tolerance;
+
+/** Construct an absolute tolerance of @p mm millimetres. */
+static PRC_INLINE prc_write_tolerance prc_write_tol_absolute(double mm)
+{
+    prc_write_tolerance t;
+    t.mode  = PRC_WRITE_TOL_ABSOLUTE;
+    t.value = mm;
+    return t;
+}
+
+/** Construct a relative tolerance of @p fraction x bbox_diagonal. */
+static PRC_INLINE prc_write_tolerance prc_write_tol_relative(double fraction)
+{
+    prc_write_tolerance t;
+    t.mode  = PRC_WRITE_TOL_RELATIVE;
+    t.value = fraction;
+    return t;
+}
+
+/**
+ * @brief Resolve a prc_write_tolerance to a concrete millimetre scalar.
+ *
+ * @param ctx           Active context (receives an error-stack entry if a
+ *                      RELATIVE tolerance is paired with a non-positive
+ *                      bounding-box diagonal).
+ * @param tol           Caller-supplied tolerance specification.
+ * @param bbox_diagonal Bounding-box diagonal of the geometry being encoded (mm).
+ * @return Resolved tolerance in mm, clamped to a 1e-7 mm (0.1 nm) practical floor.
+ */
+PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_diagonal);
+
 #ifdef __cplusplus
 }
 #endif
