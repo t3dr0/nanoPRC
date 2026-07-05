@@ -76,4 +76,37 @@ uint32_t prc_bitread_number_of_bits_then_unsigned_int(prc_context* ctx, prc_bit_
 int prc_bitread_compressed_entity_type(prc_context *ctx, prc_bit_state *state, uint8_t *is_curve, uint32_t *entity_type);
 double prc_bitread_double_with_variable_bit_number(prc_context *ctx, prc_bit_state *state, unsigned int number_of_bits, double tolerance);
 
+/* ---- Write path (prc_write_bit.c). Additive only: none of the prc_bit_state /
+   prc_bitread_* declarations above are touched. Each prc_bitwrite_X function
+   produces exactly the bit pattern its prc_bitread_X counterpart consumes;
+   see prc_write_bit.c for the read/write pairing of each one. */
+
+typedef struct prc_bit_write_state_s prc_bit_write_state;
+struct prc_bit_write_state_s
+{
+    uint8_t  *buf;
+    size_t    capacity;
+    size_t    byte_pos;
+    uint8_t   bit_accum;
+    uint8_t   bit_fill;
+    int       error;     /* sticky: non-zero means unrecoverable failure */
+};
+
+int prc_bitwrite_init(prc_context *ctx, prc_bit_write_state *state, size_t initial_capacity);
+void prc_bitwrite_release(prc_context *ctx, prc_bit_write_state *state);
+int prc_bitwrite_flush(prc_context *ctx, prc_bit_write_state *state);
+int prc_bitwrite_bit(prc_context *ctx, prc_bit_write_state *state, uint8_t bit);
+int prc_bitwrite_uint8(prc_context *ctx, prc_bit_write_state *state, uint8_t val);
+int prc_bitwrite_uint32(prc_context *ctx, prc_bit_write_state *state, uint32_t val);
+int prc_bitwrite_int32(prc_context *ctx, prc_bit_write_state *state, int32_t val);
+int prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val);
+int prc_bitwrite_float(prc_context *ctx, prc_bit_write_state *state, float val);
+int prc_bitwrite_string(prc_context *ctx, prc_bit_write_state *state, const prc_string *string);
+int prc_bitwrite_uint_variable_bit(prc_context *ctx, prc_bit_write_state *state, uint32_t value, uint32_t bit_length);
+int prc_bitwrite_int_variable_bit(prc_context *ctx, prc_bit_write_state *state, int32_t value, uint32_t bit_length);
+int prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *state, const int32_t *data, uint32_t data_size);
+int prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state, const uint8_t *data, uint32_t data_size, uint8_t num_bits, uint8_t has_comp_bit, uint32_t num_known);
+int prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state, const int32_t *data, uint32_t data_size, uint8_t has_comp_bit, uint8_t number_of_bits);
+int prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *state, const int32_t *data, uint32_t data_size, uint8_t has_comp_bit, uint32_t num_known);
+
 #endif

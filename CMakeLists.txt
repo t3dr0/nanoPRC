@@ -48,6 +48,7 @@ add_library(nano_prc SHARED
 	"src/prc_tri_primitives_helper_api.c"
 	"src/prc_uncompressed_primitives_api.c"
 	"src/prc_bit.c"
+	"src/prc_write_bit.c"
 	"src/prc_context.c"
 	"src/prc_double.c"
 	"src/prc_error.c"
