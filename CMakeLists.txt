@@ -31,6 +31,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 option(PRC_ENABLE_DEBUG_MEMORY "Enable PRC debug memory tracking" OFF)
 option(PRC_ENABLE_UNZIPPED_FUZZ "Enable deterministic fuzzing of unzipped PRC sections" OFF)
+option(NANOPRC_ENABLE_BREP "Enable B-Rep write facility (Phase 2)" OFF)
 
 add_subdirectory(thirdparty) # thirdparty libraries
 # demos are added after the library target so demo executables can link
@@ -92,6 +93,9 @@ target_compile_definitions(nano_prc PRIVATE PRC_VERSION_STRING="${PRC_VERSION_ST
 target_compile_definitions(nano_prc PUBLIC PRC_DEBUG_MEMORY=$<BOOL:${PRC_ENABLE_DEBUG_MEMORY}>)
 target_compile_definitions(nano_prc PUBLIC PRC_ENABLE_UNZIPPED_FUZZ=$<BOOL:${PRC_ENABLE_UNZIPPED_FUZZ}>)
 add_subdirectory(demos)
+
+enable_testing()
+include(tests/CMakeLists.txt)
 
 # Install what we built
 install(TARGETS nano_prc)
