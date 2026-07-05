@@ -41,6 +41,7 @@ add_definitions(-DPRC_LITTLE_ENDIAN -DPRC_BUILD_SHARED)
 # Our source files
 add_library(nano_prc SHARED
 	"src/prc_api.c"
+	"src/prc_api_debug.c"
 	"src/prc_style_api.c"
 	"src/prc_tri_primitives_api.c"
 	"src/prc_tri_primitives_helper_api.c"
