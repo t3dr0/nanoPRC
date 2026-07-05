@@ -974,23 +974,35 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
     if (state->error)
         return -1;
 
+    /* matches: if (has_comp_bit) compressed = prc_bitread_bit(ctx, state);
+       (prc_bit.c 911-912) -- when has_comp_bit is false, the reader instead
+       derives `compressed` further down from num_known (prc_bit.c 922-934):
+       false when num_known <= 3, true (mandatory Huffman) otherwise. Since a
+       real Huffman encoder exists, this writer takes the compressed path
+       whenever it's free to choose (has_comp_bit), not just when forced. */
     compressed = has_comp_bit ? 1 : ((num_known > 3) ? 1 : 0);
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;
 
-    /* array_size is written exactly once: directly here for the
-       uncompressed case (where it IS data_size), or by
-       prc_bitwrite_huffman_block below for the compressed case (where it
-       means huffman_array_size instead -- prc_bit.c 914-945 reads a single
-       shared field either way). data_size == 0 has no payload regardless
-       of `compressed` (see prc_bitread_character_array's early return once
-       array_size == 0, prc_bit.c 916-920), so it's handled uniformly here. */
+    /* matches: array_size = prc_bitread_uint32(ctx, state); (prc_bit.c 915)
+       -- read unconditionally, before has_comp_bit/num_known is consulted
+       again, so exactly one array_size field is written here regardless of
+       branch. Its MEANING differs by branch (data_size vs huffman_array_size,
+       prc_bit.c 922-934/936-945): the uncompressed branch below writes it
+       directly as data_size; the compressed branch instead leaves it to
+       prc_bitwrite_huffman_block, which writes the same field position but
+       with the value huffman_array_size (unknown until the sub-stream is
+       built). matches: if (array_size == 0) { *data_size = 0; return NULL; }
+       (prc_bit.c 916-920) -- zero-size has no payload in EITHER branch, so
+       it's handled uniformly here before any branch-specific write. */
     if (data_size == 0)
         return prc_bitwrite_uint32(ctx, state, 0);
 
     if (!compressed)
     {
+        /* matches: data = malloc(*data_size); for (k = 0; k < *data_size;
+           k++) data[k] = prc_bitread_uint8(ctx, state); (prc_bit.c 1237-1248) */
         if (prc_bitwrite_uint32(ctx, state, data_size) != 0)
             return -1;
         for (k = 0; k < data_size; k++)
@@ -1000,6 +1012,13 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
     }
 
     {
+        /* matches: the compressed branch (prc_bit.c 947-1227), which reads
+           huffman_array_size raw words + bits_last_integer, then the
+           leaf table + per-value codes from the embedded huff sub-stream --
+           all produced by prc_bitwrite_huffman_block. Values are widened to
+           uint32_t here purely because that helper's signature is shared
+           with prc_bitwrite_short_array (whose element type is int32_t, not
+           uint8_t); the widening has no effect on the bits written. */
         uint32_t *widened;
         int result;
 
@@ -1039,16 +1058,30 @@ prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state,
     if (state->error)
         return -1;
 
+    /* matches: if (has_comp_bit) compressed = prc_bitread_bit(ctx, state);
+       else compressed = false; (prc_bit.c 1466-1470). Unlike
+       character_array, there's no num_known-driven "Huffman is mandatory"
+       case here -- has_comp_bit == false always means plain output on the
+       read side, so that's the only thing this branch can produce then. */
     compressed = has_comp_bit ? 1 : 0;
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;
 
+    /* matches: size = prc_bitread_uint32(ctx, state); if (size == 0) return
+       NULL; (prc_bit.c 1473-1475) -- one shared size field regardless of
+       branch, as with character_array above. */
     if (data_size == 0)
         return prc_bitwrite_uint32(ctx, state, 0);
 
     if (!compressed)
     {
+        /* matches: output = malloc(size); for (j = 0; j < size; j++) {
+           temp1 = prc_bitread_uint8(ctx, state); temp2 =
+           prc_bitread_uint8(ctx, state); output[j] = temp1 + (temp2 << 8);
+           } (prc_bit.c 1504-1521) -- reconstructs only a 16-bit unsigned
+           value per element, so only the low 16 bits of data[k] survive;
+           low byte first, matching temp1 (bits 0-7) before temp2 (bits 8-15). */
         if (prc_bitwrite_uint32(ctx, state, data_size) != 0)
             return -1;
         for (k = 0; k < data_size; k++)
@@ -1060,6 +1093,12 @@ prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state,
     }
 
     {
+        /* matches: data = prc_huffman_data_decoder(ctx, state, number_of_bits,
+           size, data_size); ... memcpy(output, data, sizeof(int32_t) *
+           (*data_size)); (prc_bit.c 1480-1500) -- the decoder's leaf values
+           are bit-reinterpreted (via memcpy) straight into the int32_t
+           output, so widening data[k] to uint32_t via memcpy here (rather
+           than a value-converting cast) is the correct mirror. */
         uint32_t *widened;
         int result;
 
@@ -1097,9 +1136,19 @@ prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *sta
 
     if (state->error)
         return -1;
+    /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,
+       6, true, 0); (prc_bit.c 1435) called with has_comp_bit=true, num_known=0
+       regardless of data_size, so the empty case still writes a character
+       array (of size 0) rather than nothing. */
     if (data_size == 0)
         return prc_bitwrite_character_array(ctx, state, NULL, 0, 6, 1, 0);
 
+    /* matches: bit_lengths[k] is later fed straight into
+       prc_bitread_int_variable_bit(ctx, state, bit_lengths[k]) per element
+       (prc_bit.c 1447) with no delta/accumulation -- so each entry here is
+       simply the absolute bit length (sign bit + magnitude bits) data[k]
+       itself needs, computed up front so it can be written as the
+       character array below before any data value is written. */
     bit_lengths = (uint8_t *)prc_malloc(ctx, sizeof(uint8_t) * data_size);
     if (bit_lengths == NULL)
     {
@@ -1110,9 +1159,17 @@ prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *sta
     for (k = 0; k < data_size; k++)
         bit_lengths[k] = (uint8_t)prc_int32_bit_width_signed(data[k]);
 
+    /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,
+       6, true, 0); (prc_bit.c 1435) -- the bit-length table itself, written
+       (and possibly Huffman-compressed) before any of the values it
+       describes. */
     result = prc_bitwrite_character_array(ctx, state, bit_lengths, data_size, 6, 1, 0);
     if (result == 0)
     {
+        /* matches: for (k = 0; k < size; k++) data[k] =
+           prc_bitread_int_variable_bit(ctx, state, bit_lengths[k]);
+           (prc_bit.c 1445-1450) -- each value written with exactly the bit
+           length its own (already-written) table entry specifies. */
         for (k = 0; k < data_size; k++)
         {
             if (prc_bitwrite_int_variable_bit(ctx, state, data[k], bit_lengths[k]) != 0)
@@ -1145,6 +1202,12 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
 
     if (state->error)
         return -1;
+    /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,
+       6, has_comp_bit, num_known); *data_size = size; if (bit_lengths ==
+       NULL || size == 0) return NULL; (prc_bit.c 1543-1547) -- has_comp_bit
+       / num_known are forwarded as given (unlike compressed_integer_array,
+       which always hard-codes true/0), since the reader lets the caller
+       control compression here too. */
     if (data_size == 0)
         return prc_bitwrite_character_array(ctx, state, NULL, 0, 6, has_comp_bit, num_known);
 
@@ -1159,6 +1222,12 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
         return -1;
     }
 
+    /* matches: bit_count = bit_lengths[0]; data[0] =
+       prc_bitread_int_variable_bit(ctx, state, bit_count); (prc_bit.c
+       1568-1570) -- bit_lengths[0] is read back as-is (no >=32
+       reinterpretation makes sense for an absolute, always-non-negative
+       length), so it must stay within 0-31 to round-trip through the
+       reader's 6-bit character-array element unambiguously. */
     needed[0] = prc_int32_bit_width_signed(data[0]);
     if (needed[0] >= 32)
     {
@@ -1170,6 +1239,15 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
     }
     bit_lengths[0] = (uint8_t)needed[0];
 
+    /* matches: for (k = 0; k < size; k++) if (bit_lengths[k] >= 32)
+       bit_lengths[k] |= 0xc0; ... for (k = 1; k < size; k++) { bit_count +=
+       (int)bit_lengths[k]; temp = prc_bitread_int_variable_bit(ctx, state,
+       (uint8_t)bit_count); data[k] = temp + data[k-1]; } (prc_bit.c
+       1559-1581) -- bit_lengths[k] (k>=1) is a delta against the running
+       bit_count, not an absolute length; values in [-32,-1] are stored as
+       the 6-bit two's-complement patterns 32-63 (i.e. `delta & 0x3F` below
+       is exactly the inverse of the reader's `| 0xc0` sign-extension), so
+       delta must stay within [-32, 31] to be unambiguous both ways. */
     for (k = 1; k < data_size; k++)
     {
         int64_t diff = (int64_t)data[k] - (int64_t)data[k - 1];
@@ -1189,12 +1267,23 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
         bit_lengths[k] = (uint8_t)(delta & 0x3F);
     }
 
+    /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,
+       6, has_comp_bit, num_known); (prc_bit.c 1543) -- the (possibly
+       Huffman-compressed) delta table, written before any index value. */
     result = prc_bitwrite_character_array(ctx, state, bit_lengths, data_size, 6, has_comp_bit, num_known);
 
+    /* matches: data[0] = prc_bitread_int_variable_bit(ctx, state, bit_count);
+       (prc_bit.c 1570), bit_count == bit_lengths[0] == needed[0] here. */
     if (result == 0)
         if (prc_bitwrite_int_variable_bit(ctx, state, data[0], needed[0]) != 0)
             result = -1;
 
+    /* matches: temp = prc_bitread_int_variable_bit(ctx, state,
+       (uint8_t)bit_count); data[k] = temp + data[k-1]; (prc_bit.c 1578-1579)
+       -- writes the DIFFERENCE (not data[k] itself) using needed[k]-1
+       magnitude bits, mirroring prc_bitwrite_int_variable_bit's sign-then-
+       magnitude layout directly (rather than going through that function)
+       so a diff that doesn't fit in int32_t is never truncated. */
     for (k = 1; k < data_size && result == 0; k++)
     {
         int64_t diff = (int64_t)data[k] - (int64_t)data[k - 1];
