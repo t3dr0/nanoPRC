@@ -76,7 +76,7 @@
  * ------------------------------------------------------------------- */
 
 /** Human-readable name for a tessellation type, for the "type" field. */
-static const char *tess_type_name(prc_api_test_type_t type)
+static const char *tess_type_name(prc_api_tess_type_t type)
 {
     switch (type)
     {

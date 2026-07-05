@@ -4726,7 +4726,7 @@ PRC_EXPORT uint32_t
 prc_api_number_of_materials(prc_context *ctx, prc_api_data data_in, const prc_api_tess *tess)
 {
     uint32_t num_faces = tess->num_faces;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     tess_type = tess->type;
 
@@ -4749,7 +4749,7 @@ prc_api_get_num_graphics_primitives(prc_context *ctx, prc_api_data data_in,
     uint32_t num_faces = tess->num_faces;
     uint32_t k;
     size_t num_objects = 0;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     /* If this is a compressed tessellation we only have one object which is
        triangles */
@@ -4794,7 +4794,7 @@ PRC_EXPORT int
 prc_api_get_face_vertices(prc_context *ctx, const prc_api_tess *tess,
     uint32_t face_index, uint32_t *vertex_count, prc_api_vertex **vertices)
 {
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     tess_type = tess->type;
 
@@ -4830,7 +4830,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
     prc_internal_api_face *face;
     size_t k;
     prc_internal_api_tess_entities *entity;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     /* If this is a compressed tessellation we only have one object which is triangles */
     tess_type = tess->type;

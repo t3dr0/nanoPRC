@@ -18,6 +18,10 @@
 #define PRC_API_H
 
 #include "../include/prc_context.h"
+#include "../src/prc_fwd.h" /* PRC_DEPRECATED; explicit relative path since "src" is
+                                not a registered CMake include directory (see prc_data.h
+                                and other src/ headers, which reach this file via the
+                                registered "include" directory instead) */
 
 /**
  * @file prc_api.h
@@ -57,7 +61,15 @@ typedef enum
     PRC_API_TESS_3D_Wire,
     PRC_API_TESS_3D_Wire_Extra,
     PRC_API_TESS_MarkUp
-} prc_api_test_type_t;
+} prc_api_tess_type_t;
+
+/* prc_api_test_type_t was a typo for prc_api_tess_type_t. Kept as an alias so
+   any existing caller code still compiles, with a warning steering it to the
+   corrected name. Both PRC_DEPRECATED_PREFIX and PRC_DEPRECATED are used
+   because GCC/Clang and MSVC require the annotation in different positions
+   on a typedef; see prc_fwd.h. */
+typedef PRC_DEPRECATED_PREFIX("use prc_api_tess_type_t") prc_api_tess_type_t prc_api_test_type_t
+    PRC_DEPRECATED("use prc_api_tess_type_t");
 
 typedef enum
 {
@@ -179,7 +191,7 @@ typedef struct prc_api_text_primitive_s
    have different realizations of the same tessellation with different styles */
 typedef struct prc_api_tess_s
 {
-    prc_api_test_type_t type;
+    prc_api_tess_type_t type;
     uint8_t has_transparency;
     size_t num_faces;
     size_t num_line_primitives;
