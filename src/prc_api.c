@@ -234,7 +234,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
             {
                 if (line_tess[k].tess_faces[j].face_vertices.vertices != NULL)
                     prc_free(ctx, line_tess[k].tess_faces[j].face_vertices.vertices);
-                prc_internal_api_wire *wire = line_tess[k].tess_faces[j].reserved;
+                prc_internal_api_wire *wire = prc_face_internal_wire(&line_tess[k].tess_faces[j]);
                 if (wire != NULL)
                 {
                     uint32_t num_graphic_primitives = line_tess[k].tess_faces[j].num_graphic_primitives;
@@ -262,7 +262,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                     if (tess_in[k].tess_faces[j].reserved != NULL)
                     {
                         prc_internal_api_face *face_out_reserved =
-                            (prc_internal_api_face *)(tess_in[k].tess_faces[j].reserved);
+                            prc_face_internal_face(&tess_in[k].tess_faces[j]);
                         if (face_out_reserved->vertex_indices != NULL)
                             prc_free(ctx, face_out_reserved->vertex_indices);
                         if (face_out_reserved->single_norm.fan_offsets != NULL)
@@ -318,7 +318,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
 
         if (tess_in[k].type == PRC_API_TESS_3D_Wire)
         {
-            prc_internal_api_wire *wire = tess_in[k].reserved;
+            prc_internal_api_wire *wire = prc_tess_internal_wire(&tess_in[k]);
 
             if (wire != NULL)
             {
@@ -334,7 +334,7 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
         }
         if (tess_in[k].type == PRC_API_TESS_MarkUp)
         {
-            prc_internal_api_wire *markup = tess_in[k].reserved;
+            prc_internal_api_wire *markup = prc_tess_internal_wire(&tess_in[k]);
             if (markup != NULL)
             {
                 for (j = 0; j < tess_in[k].num_line_primitives; j++)
@@ -4045,7 +4045,7 @@ prc_api_get_face_material(prc_context *ctx, const prc_api_tess *api_tess,
         }
 
         prc_internal_api_face *face_reserved =
-            (prc_internal_api_face *) api_tess->tess_faces[face_index].reserved;
+            prc_face_internal_face(&api_tess->tess_faces[face_index]);
         if (face_reserved == NULL)
         {
             return;

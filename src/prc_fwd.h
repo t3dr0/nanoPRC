@@ -43,4 +43,11 @@ typedef struct prc_misc_entity_reference_s prc_misc_entity_reference;
 #define PRC_DEPRECATED(msg)
 #endif
 
+/* C99 "inline" is used bare (paired with an explicit leading "static" at each
+   call site, e.g. "static PRC_INLINE T *f(...)") rather than baked into this
+   macro as "static inline", since MSVC 2015+ and GCC/Clang both accept plain
+   C99 "inline" when compiling as C, and folding "static" in here would
+   double it up at every use site. */
+#define PRC_INLINE inline
+
 #endif

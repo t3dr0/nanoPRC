@@ -283,4 +283,44 @@ struct prc_api_object_style_s
     uint32_t num_children;
 };
 
+/* Internal accessors for prc_api_tess::reserved and prc_api_face::reserved.
+   Both fields are void* in the public API but always hold one of two
+   internal types at runtime, never both:
+     - prc_internal_api_face * for a face-bearing tessellation/face
+     - prc_internal_api_wire * for a wire/line/markup tessellation, or for
+       a face slot repurposed to carry line-primitive (wire) data
+   These replace the bare (prc_internal_api_face *)/(prc_internal_api_wire *)
+   casts -- and equivalent uncast void*-to-typed-pointer assignments -- that
+   were scattered across prc_api.c and prc_tri_primitives_api.c, so the
+   release logic in prc_api_release_data can be audited by reading which
+   helper is called rather than by re-deriving the cast's intent each time.
+   The caller is still responsible for knowing which interpretation applies
+   at a given call site (usually via the tessellation/face type); these are
+   plain accessors, not a tagged union. prc_api_tess::reserved2 is a
+   separate, unrelated field (currently holding prc_internal_graph_style*,
+   always NULL in the current codebase) and is out of scope here. */
+static PRC_INLINE prc_internal_api_face *
+prc_tess_internal_face(const prc_api_tess *t)
+{
+    return (prc_internal_api_face *)t->reserved;
+}
+
+static PRC_INLINE prc_internal_api_wire *
+prc_tess_internal_wire(const prc_api_tess *t)
+{
+    return (prc_internal_api_wire *)t->reserved;
+}
+
+static PRC_INLINE prc_internal_api_face *
+prc_face_internal_face(const prc_api_face *f)
+{
+    return (prc_internal_api_face *)f->reserved;
+}
+
+static PRC_INLINE prc_internal_api_wire *
+prc_face_internal_wire(const prc_api_face *f)
+{
+    return (prc_internal_api_wire *)f->reserved;
+}
+
 #endif

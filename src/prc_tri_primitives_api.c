@@ -2799,7 +2799,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         face_out->reserved = (void *)prc_calloc(ctx, 1, sizeof(prc_internal_api_face));
         if (face_out->reserved == NULL)
             return PRC_API_ERROR_MEMORY;
-        face_out_reserved = (prc_internal_api_face *)face_out->reserved;
+        face_out_reserved = prc_face_internal_face(face_out);
 
         if (tess_type == PRC_TYPE_TESS_3D)
         {
@@ -4837,7 +4837,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     if (tess_type == PRC_API_TESS_3D_Compressed)
     {
-        face = (prc_internal_api_face *)tess->tess_faces[face_index].reserved;
+        face = prc_face_internal_face(&tess->tess_faces[face_index]);
 
         graphics_object->type = PRC_API_TRIANGLES;
         graphics_object->num_indices = face->num_indices;
@@ -4847,7 +4847,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp)
     {
-        prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->reserved;
+        prc_internal_api_wire *wire = prc_tess_internal_wire(tess);
         if (graphics_index > tess->num_line_primitives - 1)
             return PRC_API_ERROR_PARAMETER;
         graphics_object->type = wire[graphics_index].type;
@@ -4858,7 +4858,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     if (tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
-        prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->tess_faces[face_index].reserved;
+        prc_internal_api_wire *wire = prc_face_internal_wire(&tess->tess_faces[face_index]);
         if (graphics_index > tess->num_line_primitives - 1)
             return PRC_API_ERROR_PARAMETER;
         graphics_object->type = wire[graphics_index].type;
@@ -4870,7 +4870,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
     if (graphics_index > tess->tess_faces[face_index].num_graphic_primitives - 1)
         return PRC_API_ERROR_PARAMETER;
 
-    face = (prc_internal_api_face *)tess->tess_faces[face_index].reserved;
+    face = prc_face_internal_face(&tess->tess_faces[face_index]);
 
     /* Run through each of the entity types */
     for (k = 0; k < PRC_INTERNAL_API_MAX; k++)
