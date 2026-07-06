@@ -53,6 +53,7 @@ set(PRC_CORE_SOURCES
 	"src/prc_write_compress_tess.c"
 	"src/prc_write_tess_3d.c"
 	"src/prc_write_wire_tess.c"
+	"src/prc_write_global.c"
 	"src/prc_context.c"
 	"src/prc_double.c"
 	"src/prc_error.c"

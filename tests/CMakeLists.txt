@@ -38,3 +38,8 @@ add_executable(test_wire_tess tests/unit/test_wire_tess.c)
 target_link_libraries(test_wire_tess prc_static)
 target_include_directories(test_wire_tess PRIVATE tests)
 add_test(NAME test_wire_tess COMMAND test_wire_tess)
+
+add_executable(test_globals tests/unit/test_globals.c)
+target_link_libraries(test_globals prc_static)
+target_include_directories(test_globals PRIVATE tests)
+add_test(NAME test_globals COMMAND test_globals)
