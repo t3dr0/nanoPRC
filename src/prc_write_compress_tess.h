@@ -76,9 +76,24 @@ typedef struct prc_encode_traversal_result_s
     uint32_t  num_decoded_points;
 } prc_encode_traversal_result;
 
+/* Optional per-decoder-point diagnostics captured during traversal, one entry
+   per emitted point (num_decoded_points). reconstructed_position is a stub
+   for the upcoming reconstruction/analysis phase and is always zeroed. */
+typedef struct prc_vertex_analysis_s
+{
+    float original_position[3];
+    float reconstructed_position[3];  /* stub: always {0,0,0} this phase */
+    uint32_t chain_index;
+    uint32_t chain_offset;
+} prc_vertex_analysis;
+
+/* analysis_out may be NULL to skip analysis capture entirely; when non-NULL
+   it receives a caller-owned (prc_free) array of *analysis_count_out
+   (== out->num_decoded_points) entries. */
 int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
-    prc_encode_traversal_result *out);
+    prc_encode_traversal_result *out,
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out);
 
 void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
 

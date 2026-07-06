@@ -420,8 +420,34 @@ typedef struct
     uint32_t stack_size;
     uint32_t stack_capacity;
     uint32_t chain_len;
+    uint32_t current_chain;   /* 0-based id of the chain being grown */
+    uint32_t chain_offset;    /* points created so far within the current chain */
+    prc_vertex_analysis *analysis; /* NULL unless the caller requested capture */
     prc_encode_traversal_result *out;
 } prc_encode_state;
+
+/* Chain bookkeeping only this phase: reconstructed_position stays zeroed
+   until the reconstruction pass lands. Must run before n_points advances
+   (the entry index is the point being created). */
+static void
+prc_encode_record_analysis(prc_encode_state *st, uint32_t mesh_vtx)
+{
+    if (st->analysis != NULL)
+    {
+        prc_vertex_analysis *a = &st->analysis[st->n_points];
+        const double *p = st->mesh->positions + (size_t)mesh_vtx * 3;
+
+        a->original_position[0] = (float)p[0];
+        a->original_position[1] = (float)p[1];
+        a->original_position[2] = (float)p[2];
+        a->reconstructed_position[0] = 0.0f;
+        a->reconstructed_position[1] = 0.0f;
+        a->reconstructed_position[2] = 0.0f;
+        a->chain_index = st->current_chain;
+        a->chain_offset = st->chain_offset;
+    }
+    st->chain_offset++;
+}
 
 static int
 prc_encode_quantize(prc_context *ctx, double v, double tol, int32_t *dv)
@@ -471,6 +497,7 @@ prc_encode_emit_axis_point(prc_encode_state *st, uint32_t mesh_vtx, prc_vec3 bas
     st->decoded_pos[st->n_points] = rec;
     st->vtx_map[mesh_vtx] = (int32_t)st->n_points;
     *out_index = (int32_t)st->n_points;
+    prc_encode_record_analysis(st, mesh_vtx);
     st->n_points++;
     return 0;
 }
@@ -524,6 +551,7 @@ prc_encode_emit_basis_point(prc_encode_state *st, uint32_t mesh_vtx,
     st->decoded_pos[st->n_points] = rec;
     st->vtx_map[mesh_vtx] = (int32_t)st->n_points;
     *out_index = (int32_t)st->n_points;
+    prc_encode_record_analysis(st, mesh_vtx);
     st->n_points++;
     return 0;
 }
@@ -907,7 +935,8 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
 int
 prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
-    prc_encode_traversal_result *out)
+    prc_encode_traversal_result *out,
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out)
 {
     prc_encode_state st;
     uint32_t i, num_tris, num_pos;
@@ -923,6 +952,11 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     }
     memset(out, 0, sizeof(*out));
     memset(&st, 0, sizeof(st));
+
+    if (analysis_out != NULL)
+        *analysis_out = NULL;
+    if (analysis_count_out != NULL)
+        *analysis_count_out = 0;
 
     if (mesh == NULL || !(tolerance_mm > 0.0))
     {
@@ -977,6 +1011,19 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_traversal\n");
         ret = PRC_ERROR_MEMORY;
         goto fail;
+    }
+    if (analysis_out != NULL)
+    {
+        /* Same num_pos upper bound as decoded_pos: one entry per point the
+           decoder will actually emit, shrunk to n_points on success. */
+        st.analysis = (prc_vertex_analysis *)prc_malloc(ctx,
+            (size_t)num_pos * sizeof(prc_vertex_analysis));
+        if (st.analysis == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_traversal analysis\n");
+            ret = PRC_ERROR_MEMORY;
+            goto fail;
+        }
     }
 
     for (i = 0; i < num_tris * 3; i++)
@@ -1041,6 +1088,11 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
                 goto fail;
             }
             cur = scan_pos;
+            /* Both the first chain and every restart pass through here;
+               emitted == 0 distinguishes the first so chain ids start at 0. */
+            if (emitted > 0)
+                st.current_chain++;
+            st.chain_offset = 0;
             code = prc_encode_chain_start(&st, cur, idx, mv);
             if (code < 0)
             {
@@ -1125,6 +1177,21 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
         }
     }
 
+    if (analysis_out != NULL)
+    {
+        if (st.n_points > 0 && st.n_points < num_pos)
+        {
+            prc_vertex_analysis *shrunk = (prc_vertex_analysis *)prc_realloc(ctx,
+                st.analysis, (size_t)st.n_points * sizeof(prc_vertex_analysis));
+            if (shrunk != NULL)
+                st.analysis = shrunk;
+        }
+        *analysis_out = st.analysis;
+        st.analysis = NULL;
+        if (analysis_count_out != NULL)
+            *analysis_count_out = out->num_decoded_points;
+    }
+
     ret = 0;
     goto cleanup;
 
@@ -1132,6 +1199,8 @@ fail:
     prc_encode_traversal_free(ctx, out);
 
 cleanup:
+    if (st.analysis != NULL)
+        prc_free(ctx, st.analysis);
     if (st.visited != NULL)
         prc_free(ctx, st.visited);
     if (st.pending != NULL)
