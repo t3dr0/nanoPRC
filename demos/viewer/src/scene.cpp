@@ -77,15 +77,45 @@ static void setCompanionVisibilityRecursive(Product *product, bool enabled)
     }
 }
 
-
 void Scene::setCameraInitialPosition(Camera *camera)
 {
-    Vector3 max = Vector3(_bbox_max[0], _bbox_max[1], _bbox_max[2]);
-    Vector3 min = Vector3(_bbox_min[0], _bbox_min[1], _bbox_min[2]);
-    float diagonal = (max - min).length();
-    Vector3 center = Vector3((_bbox_max[0] + _bbox_min[0]) * 0.5f,
-        (_bbox_max[1] + _bbox_min[1]) * 0.5f,
-        (_bbox_max[2] + _bbox_min[2]) * 0.5f);
+    const float kFallbackDiagonal = 100.0f;
+    const float kFallbackNear = 0.1f;
+    const float kFallbackFar = 1000.0f;
+
+    bool bboxFinite =
+        std::isfinite(_bbox_min[0]) && std::isfinite(_bbox_min[1]) && std::isfinite(_bbox_min[2]) &&
+        std::isfinite(_bbox_max[0]) && std::isfinite(_bbox_max[1]) && std::isfinite(_bbox_max[2]);
+    bool bboxOrdered =
+        (_bbox_max[0] >= _bbox_min[0]) &&
+        (_bbox_max[1] >= _bbox_min[1]) &&
+        (_bbox_max[2] >= _bbox_min[2]);
+    bool bboxValid = bboxFinite && bboxOrdered;
+
+    if (!bboxValid)
+    {
+        printf("Warning: invalid scene bounding box (min=[%g,%g,%g], max=[%g,%g,%g]); using camera fallback values.\n",
+            _bbox_min[0], _bbox_min[1], _bbox_min[2],
+            _bbox_max[0], _bbox_max[1], _bbox_max[2]);
+    }
+
+    Vector3 center = Vector3(0.0f, 0.0f, 0.0f);
+    float diagonal = kFallbackDiagonal;
+
+    if (bboxValid)
+    {
+        Vector3 max = Vector3(_bbox_max[0], _bbox_max[1], _bbox_max[2]);
+        Vector3 min = Vector3(_bbox_min[0], _bbox_min[1], _bbox_min[2]);
+        center = Vector3((_bbox_max[0] + _bbox_min[0]) * 0.5f,
+            (_bbox_max[1] + _bbox_min[1]) * 0.5f,
+            (_bbox_max[2] + _bbox_min[2]) * 0.5f);
+
+        diagonal = (max - min).length();
+        if (!std::isfinite(diagonal) || diagonal <= 1e-4f)
+        {
+            diagonal = kFallbackDiagonal;
+        }
+    }
 
     if (camera->getNumViews() > 0)
     {
@@ -101,11 +131,19 @@ void Scene::setCameraInitialPosition(Camera *camera)
 
     camera->setFov(45.0f);
 
-    // Near plane: 1% of diagonal (or minimum 0.1)
-    float nearPlane = std::max(0.1f, diagonal * 0.01f);
+    // Near plane: 1% of diagonal (or minimum fallback near)
+    float nearPlane = std::max(kFallbackNear, diagonal * 0.01f);
 
-    // Far plane: 10x diagonal (enough to see the whole model from any angle)
-    float farPlane = diagonal * 10.0f;
+    // Far plane: 10x diagonal, but always keep a healthy ratio to near.
+    float farPlane = std::max(diagonal * 10.0f, nearPlane * 100.0f);
+
+    if (!std::isfinite(nearPlane) || !std::isfinite(farPlane) || farPlane <= nearPlane)
+    {
+        printf("Warning: invalid camera clip planes computed (near=%g, far=%g); using defaults.\n",
+            nearPlane, farPlane);
+        nearPlane = kFallbackNear;
+        farPlane = kFallbackFar;
+    }
 
     //printf("BBox diagonal=%.2f, near=%.2f, far=%.2f, ratio=%.1f:1\n",
     //    diagonal, nearPlane, farPlane, farPlane / nearPlane);
@@ -379,6 +417,10 @@ void Scene::addRepItems(prc_context *ctx, prc_api_data data, prc_api_part *api_p
         app_child->setName(api_part->rep_items[k].name);
         app_child->setModel(Matrix4(1.0f));
         app_child->setBoundingBox(Vector4(0.0f), Vector4(0.0f));
+        if (api_part->rep_items[k].attributes.num_base_attributes > 0)
+        {
+            app_child->setAttributes(&api_part->rep_items[k].attributes);
+        }
 
         /* Get the tessellation for this model (part) */
         tess = prc_api_get_ri_tessellation(ctx, api_part, k);
@@ -451,6 +493,11 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
     {
         app_product->setModel(Matrix4(1.0f));
     }
+
+    if (api_product->attributes.num_base_attributes > 0)
+    {
+        app_product->setAttributes(&api_product->attributes);
+    }
     *product_count += 1;
 
     /* Special yoga pose if we have a part */
@@ -469,6 +516,11 @@ void Scene::convertTree(prc_context *ctx, prc_api_data data, prc_api_product *ap
             app_child->setParent(app_product);
             app_child->setName(api_product->part->name);
             app_child->setModel(Matrix4(1.0f));
+
+            if (api_product->part->attributes.num_base_attributes > 0)
+            {
+                app_child->setAttributes(&api_product->part->attributes);
+            }
             *product_count += 1;
 
             /* Add the RI items as children of the part child Product (app_child) */

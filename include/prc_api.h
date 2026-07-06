@@ -73,6 +73,15 @@ typedef PRC_DEPRECATED_PREFIX("use prc_api_tess_type_t") prc_api_tess_type_t prc
 
 typedef enum
 {
+    PRC_API_INTEGER_ATTRIBUTE = 1,
+    PRC_API_DOUBLE_ATTRIBUTE,
+    PRC_API_VALUE_SECS_INTEGER_ATTRIBUTE,
+    PRC_API_STRING_ATTRIBUTE,
+    PRC_API_VALUE_TIME_ATTRIBUTE
+} prc_api_attribute_type_t;
+
+typedef enum
+{
     PRC_API_NODE_UNKNOWN = 0,
     PRC_API_NODE_PRODUCT,
     PRC_API_NODE_PART,
@@ -229,6 +238,37 @@ typedef struct prc_api_entity_ref_s
     uint32_t file_index;
 } prc_api_entity_ref;
 
+typedef struct prc_api_attribute_entry_s prc_api_attribute_entry;
+struct prc_api_attribute_entry_s
+{
+    char *entry_title; /* Have not seen this set to anything other than NULL. This would be if the base_attribute had multiple entries */
+    prc_api_attribute_type_t type;
+
+    union
+    {
+        int value_integer;
+        double value_double;
+        uint32_t value_secs_integer;
+        char *value_string;
+        uint64_t value_time;
+    };
+};
+
+typedef struct prc_api_attribute_base_s prc_api_attribute_base;
+struct prc_api_attribute_base_s
+{
+    char *attribute_base_title;
+    size_t num_attributes; /* This is almost always 1. */
+    prc_api_attribute_entry *attributes;
+};
+
+typedef struct prc_api_attributes_s prc_api_attributes;
+struct prc_api_attributes_s
+{
+    uint32_t num_base_attributes;
+    prc_api_attribute_base *base_attributes;
+};
+
 /* A rep item can have a rep item. For example, an RI SET type has rep items.
    We will just treat all of these as a type of part as it simplifies the code
    */
@@ -256,6 +296,7 @@ struct prc_api_part_s
     uint8_t has_entity_ref;
     prc_api_entity_ref entity_ref;
     prc_api_object_style *RI_item_style_node; /* This is a pointer to the RI style tree leaf. We can traverse this backwards to get everything */
+    prc_api_attributes attributes;
 };
 
 typedef struct prc_api_markup_s
@@ -281,6 +322,7 @@ struct prc_api_product_s
     uint32_t num_markups;
     prc_api_markup *markup;
     int32_t file_index;
+    prc_api_attributes attributes;
     void *reserved;
 };
 
