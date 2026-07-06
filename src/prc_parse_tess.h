@@ -22,5 +22,6 @@
 
 int prc_parse_tess(prc_context *ctx, prc_bit_state *bit_state, prc_tess *data, uint8_t debug_tess);
 int prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_compressed **data_in, uint8_t debug_tess);
+int prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data_in);
 
 #endif

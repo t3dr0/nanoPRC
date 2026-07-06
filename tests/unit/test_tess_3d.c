@@ -1,0 +1,280 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nanoPRC is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nanoPRC is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/* Phase 1c, session 1 gate test: prc_write_tess_3d (the uncompressed
+   tessellation encoder) round-tripped through the real, unmodified
+   prc_parse_tess_3d. No quantization in this format, so positions and
+   normals must come back bit-for-bit exact. */
+
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include "prc_test.h"
+#include "prc_context.h"
+#include "prc_data.h"
+#include "prc_write_tess_3d.h"
+#include "prc_parse_tess.h"
+
+/* Mirrors the (static, so not reusable directly) prc_release_tess_3d /
+   prc_release_tess_face in prc_release.c -- frees exactly the fields this
+   simple Triangle/TriangleOneNormal-only, no-texture, no-wire, no-vertex-
+   color encoding ever populates. */
+static void
+free_parsed_tess_3d(prc_context *ctx, prc_tess_3d *d)
+{
+    uint32_t k;
+
+    if (d == NULL)
+        return;
+    if (d->tessellation_coordinates.coordinates != NULL)
+        prc_free(ctx, d->tessellation_coordinates.coordinates);
+    if (d->normal_coordinates != NULL)
+        prc_free(ctx, d->normal_coordinates);
+    if (d->wire_indices != NULL)
+        prc_free(ctx, d->wire_indices);
+    if (d->triangulated_index_array != NULL)
+        prc_free(ctx, d->triangulated_index_array);
+    if (d->texture_coordinates != NULL)
+        prc_free(ctx, d->texture_coordinates);
+    if (d->face_tessellation_data != NULL)
+    {
+        for (k = 0; k < d->number_of_face_tessellation; k++)
+            if (d->face_tessellation_data[k].triangulateddata != NULL)
+                prc_free(ctx, d->face_tessellation_data[k].triangulateddata);
+        prc_free(ctx, d->face_tessellation_data);
+    }
+    prc_free(ctx, d);
+}
+
+/* Flat quad, 2 triangles sharing a diagonal, 1 face, per-vertex normals
+   supplied (PRC_FACETESSDATA_Triangle path). No quantization in this
+   format, so positions and normals must come back exact. */
+static void
+test_flat_quad_exact(prc_context *ctx)
+{
+    double positions[4 * 3] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 1.0, 0.0,
+        0.0, 1.0, 0.0
+    };
+    double normals[4 * 3] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0
+    };
+    uint32_t tris[2 * 3] = { 0, 1, 2, 0, 2, 3 };
+    uint32_t norm_idx[2 * 3] = { 0, 1, 2, 0, 2, 3 };
+    uint32_t face_tri_counts[1] = { 2 };
+    prc_bit_write_state w;
+    prc_bit_state r;
+    prc_tess_3d *parsed = NULL;
+    uint32_t i, k;
+    int code;
+
+    printf("  sub-case: flat quad, exact positions and normals\n");
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 256), 0);
+    PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 4, normals, 4,
+        tris, norm_idx, 2, face_tri_counts, 1), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    code = prc_parse_tess_3d(ctx, &r, &parsed);
+    if (code < 0)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_EQ(code, 0);
+    PRC_ASSERT_NOT_NULL(parsed);
+
+    PRC_ASSERT_EQ(parsed->tessellation_coordinates.number_of_coordinates, 12);
+    PRC_ASSERT_NOT_NULL(parsed->tessellation_coordinates.coordinates);
+    for (i = 0; i < 12; i++)
+        PRC_ASSERT(parsed->tessellation_coordinates.coordinates[i] == positions[i]);
+
+    PRC_ASSERT_EQ(parsed->number_of_normal_coordinates, 12);
+    PRC_ASSERT_NOT_NULL(parsed->normal_coordinates);
+    for (i = 0; i < 12; i++)
+        PRC_ASSERT(parsed->normal_coordinates[i] == normals[i]);
+
+    PRC_ASSERT_EQ(parsed->number_of_face_tessellation, 1);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].used_entities_flag, PRC_FACETESSDATA_Triangle);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].size_of_triangulateddata, 1);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].triangulateddata[0], 2);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].start_triangulated, 0);
+
+    /* Walk the global index array exactly as prc_internal_api_get_normal_position_index
+       does for PRC_FACETESSDATA_Triangle (multi-norm, no texture, normals
+       present): 2 raw values per vertex, [normal_index*3, position_index*3]. */
+    PRC_ASSERT_EQ(parsed->number_of_triangulated_indicies, 12);
+    for (k = 0; k < 2; k++)
+    {
+        for (i = 0; i < 3; i++)
+        {
+            uint32_t base = parsed->face_tessellation_data[0].start_triangulated + (k * 3 + i) * 2;
+            uint32_t decoded_norm = parsed->triangulated_index_array[base] / 3;
+            uint32_t decoded_pos = parsed->triangulated_index_array[base + 1] / 3;
+
+            PRC_ASSERT_EQ(decoded_norm, norm_idx[k * 3 + i]);
+            PRC_ASSERT_EQ(decoded_pos, tris[k * 3 + i]);
+        }
+    }
+
+    free_parsed_tess_3d(ctx, parsed);
+    prc_bitwrite_release(ctx, &w);
+}
+
+/* Three faces of 2 triangles each: verify face_tri_counts is recovered
+   correctly from the decoded face structure (each face's own
+   triangulateddata[0], and start_triangulated advancing by exactly this
+   face's contribution to the shared global index array). */
+static void
+test_multi_face_counts(prc_context *ctx)
+{
+    /* 6 independent triangles (18 distinct vertices), grouped 2+2+2 into 3 faces */
+    double positions[18 * 3];
+    double normals[18 * 3];
+    uint32_t tris[6 * 3];
+    uint32_t norm_idx[6 * 3];
+    uint32_t face_tri_counts[3] = { 2, 2, 2 };
+    prc_bit_write_state w;
+    prc_bit_state r;
+    prc_tess_3d *parsed = NULL;
+    uint32_t t, v, f;
+    int code;
+
+    printf("  sub-case: multi-face, face_tri_counts recovered\n");
+
+    for (t = 0; t < 6; t++)
+    {
+        for (v = 0; v < 3; v++)
+        {
+            uint32_t idx = t * 3 + v;
+
+            positions[idx * 3 + 0] = (double)t;
+            positions[idx * 3 + 1] = (double)v;
+            positions[idx * 3 + 2] = 0.0;
+            normals[idx * 3 + 0] = 0.0;
+            normals[idx * 3 + 1] = 0.0;
+            normals[idx * 3 + 2] = 1.0;
+            tris[idx] = idx;
+            norm_idx[idx] = idx;
+        }
+    }
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 512), 0);
+    PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 18, normals, 18,
+        tris, norm_idx, 6, face_tri_counts, 3), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    code = prc_parse_tess_3d(ctx, &r, &parsed);
+    if (code < 0)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_EQ(code, 0);
+    PRC_ASSERT_NOT_NULL(parsed);
+    PRC_ASSERT_EQ(parsed->number_of_face_tessellation, 3);
+
+    for (f = 0; f < 3; f++)
+    {
+        PRC_ASSERT_EQ(parsed->face_tessellation_data[f].used_entities_flag, PRC_FACETESSDATA_Triangle);
+        PRC_ASSERT_EQ(parsed->face_tessellation_data[f].size_of_triangulateddata, 1);
+        PRC_ASSERT_EQ(parsed->face_tessellation_data[f].triangulateddata[0], face_tri_counts[f]);
+        /* each face's 2 triangles * 3 vertices * 2 raw values = 12 words */
+        PRC_ASSERT_EQ(parsed->face_tessellation_data[f].start_triangulated, f * 12);
+    }
+    PRC_ASSERT_EQ(parsed->number_of_triangulated_indicies, 36);
+
+    free_parsed_tess_3d(ctx, parsed);
+    prc_bitwrite_release(ctx, &w);
+}
+
+/* No normals supplied (norm_indices == NULL): verify the
+   PRC_FACETESSDATA_TriangleOneNormal path is used, and that the single
+   written normal is the correct outward-facing cross product of the
+   face's first triangle. */
+static void
+test_no_normals_one_normal_path(prc_context *ctx)
+{
+    /* Right triangle in the XY plane, CCW when viewed from +Z: cross(e1,e2)
+       for e1=(1,0,0), e2=(0,1,0) is (0,0,1). */
+    double positions[3 * 3] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0
+    };
+    uint32_t tris[3] = { 0, 1, 2 };
+    uint32_t face_tri_counts[1] = { 1 };
+    prc_bit_write_state w;
+    prc_bit_state r;
+    prc_tess_3d *parsed = NULL;
+    uint32_t base;
+    int code;
+
+    printf("  sub-case: no normals supplied, TriangleOneNormal path\n");
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
+    PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 3, NULL, 0,
+        tris, NULL, 1, face_tri_counts, 1), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    code = prc_parse_tess_3d(ctx, &r, &parsed);
+    if (code < 0)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_EQ(code, 0);
+    PRC_ASSERT_NOT_NULL(parsed);
+
+    PRC_ASSERT_EQ(parsed->number_of_face_tessellation, 1);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].used_entities_flag, PRC_FACETESSDATA_TriangleOneNormal);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].triangulateddata[0], 1);
+
+    /* Exactly one face normal was computed and written */
+    PRC_ASSERT_EQ(parsed->number_of_normal_coordinates, 3);
+    PRC_ASSERT(fabs(parsed->normal_coordinates[0] - 0.0) < 1e-12);
+    PRC_ASSERT(fabs(parsed->normal_coordinates[1] - 0.0) < 1e-12);
+    PRC_ASSERT(fabs(parsed->normal_coordinates[2] - 1.0) < 1e-12);
+
+    /* TriangleOneNormal layout: [normal_index*3, pos0*3, pos1*3, pos2*3] */
+    base = parsed->face_tessellation_data[0].start_triangulated;
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[base] / 3, 0);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[base + 1] / 3, tris[0]);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[base + 2] / 3, tris[1]);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[base + 3] / 3, tris[2]);
+
+    free_parsed_tess_3d(ctx, parsed);
+    prc_bitwrite_release(ctx, &w);
+}
+
+int
+main(void)
+{
+    prc_context *ctx;
+
+    PRC_TEST_BEGIN("tess_3d uncompressed encoder round trip");
+
+    ctx = prc_new_context(NULL);
+    PRC_ASSERT_NOT_NULL(ctx);
+
+    test_flat_quad_exact(ctx);
+    test_multi_face_counts(ctx);
+    test_no_normals_one_normal_path(ctx);
+
+    prc_release_context(ctx);
+
+    PRC_TEST_END;
+}

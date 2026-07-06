@@ -28,3 +28,8 @@ add_executable(test_normals tests/unit/test_normals.c)
 target_link_libraries(test_normals prc_static)
 target_include_directories(test_normals PRIVATE tests)
 add_test(NAME test_normals COMMAND test_normals)
+
+add_executable(test_tess_3d tests/unit/test_tess_3d.c)
+target_link_libraries(test_tess_3d prc_static)
+target_include_directories(test_tess_3d PRIVATE tests)
+add_test(NAME test_tess_3d COMMAND test_tess_3d)

@@ -483,7 +483,7 @@ prc_adjust_offsets(prc_context *ctx, prc_tess_3d *data)
 }
 
 /* Table 138 PRC_TYPE_TESS_3D */
-static int
+int
 prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data_in)
 {
     prc_tess_3d *data;
