@@ -621,7 +621,7 @@ prc_parse_tess_3d(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d **data
 }
 
 /* Table 142 PRC_TYPE_TESS_3D_Wire */
-static int
+int
 prc_parse_tess_3d_wire(prc_context *ctx, prc_bit_state *bit_state, prc_tess_3d_wire **data_in)
 {
     uint32_t vertex_color_count = 0;

@@ -33,3 +33,8 @@ add_executable(test_tess_3d tests/unit/test_tess_3d.c)
 target_link_libraries(test_tess_3d prc_static)
 target_include_directories(test_tess_3d PRIVATE tests)
 add_test(NAME test_tess_3d COMMAND test_tess_3d)
+
+add_executable(test_wire_tess tests/unit/test_wire_tess.c)
+target_link_libraries(test_wire_tess prc_static)
+target_include_directories(test_wire_tess PRIVATE tests)
+add_test(NAME test_wire_tess COMMAND test_wire_tess)
