@@ -19,6 +19,8 @@
 
 #include <stdint.h>
 #include "prc_write_common.h"
+#include "prc_data.h"
+#include "prc_bit.h"
 
 typedef struct prc_encode_edge_s
 {
@@ -61,6 +63,17 @@ typedef struct prc_encode_traversal_result_s
     int32_t  *point_reference_array;     /* existing-vertex index per reference slot consumed */
     uint32_t  point_reference_array_size;
     double    origin[3];                 /* the one global chain origin (decoder's origin_array) */
+    int32_t  *triangle_point_indices;    /* 3 per triangle, TRAVERSAL order, in the decoder's
+                                            treated order: the vertices_out[] slot each corner
+                                            of the triangle decodes into */
+    uint32_t *triangle_mesh_order;       /* 1 per triangle, TRAVERSAL order: index of the input
+                                            mesh triangle emitted at that traversal position */
+    int32_t  *point_mesh_vertex;         /* decoder point index -> deduplicated mesh vertex
+                                            (index into mesh->positions) */
+    double   *decoded_positions;         /* 3 per decoder point: the decoder-exact reconstructed
+                                            position, so normal bases derived from these match
+                                            the decoder's own basis construction */
+    uint32_t  num_decoded_points;
 } prc_encode_traversal_result;
 
 int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
@@ -68,5 +81,38 @@ int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     prc_encode_traversal_result *out);
 
 void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
+
+/* Step C1: per-triangle normal reversal bits for the must_recalculate_normals
+   path. input_normals is 3 doubles per DEDUPLICATED mesh position
+   (mesh->num_positions entries) -- the caller must have already reduced any
+   per-original-vertex normals down to one per deduplicated position -- or NULL
+   to request all-zero reversal bits. The returned array (traversal order,
+   trav->edge_status_array_size entries) is owned by the caller (prc_free). */
+int prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *input_normals,
+    uint8_t **normal_is_reversed_out);
+
+/* Step C2: supplied-normals encoding. corner_normals is 9 doubles per input
+   mesh triangle (3 per corner, aligned with mesh->tri_indices order), so the
+   same position can carry different normals on different triangles. Outputs
+   the quantized normal_angle_array (2 entries per decode event) and the
+   per-vertex-state normal_binary_data bit array (one 0/1 byte per bit) the
+   decoder's non-planar path consumes; both are owned by the caller. */
+int prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *corner_normals,
+    int32_t **normal_angle_array_out, uint32_t *normal_angle_count_out,
+    uint8_t **normal_binary_data_out, uint32_t *normal_binary_data_size_out);
+
+/* Step E: emit the complete PRC_TYPE_TESS_3D_Compressed bitstream (without
+   the type tag, which the caller-side dispatcher owns) into an initialized
+   prc_bit_write_state. Exactly one of the two normal-data sets applies:
+   must_recalculate_normals != 0 selects the C1 fields, 0 selects the C2
+   fields. */
+int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_traversal_result *trav, double tolerance_mm,
+    const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
+    const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
+    const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
+    uint8_t must_recalculate_normals);
 
 #endif

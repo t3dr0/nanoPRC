@@ -18,6 +18,9 @@
 #include <math.h>
 #include "prc_write_compress_tess.h"
 #include "prc_vector_util.h"
+#include "prc_parse_common.h"
+#include "prc_decode_compressed_tess.h"
+#include "prc_huff.h"
 
 typedef struct
 {
@@ -954,6 +957,10 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     out->triangle_face_array = (int32_t *)prc_malloc(ctx, (size_t)num_tris * sizeof(int32_t));
     out->points_is_reference_array = (uint8_t *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(uint8_t));
     out->point_reference_array = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(int32_t));
+    out->triangle_point_indices = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(int32_t));
+    out->triangle_mesh_order = (uint32_t *)prc_malloc(ctx, (size_t)num_tris * sizeof(uint32_t));
+    out->point_mesh_vertex = (int32_t *)prc_malloc(ctx, (size_t)num_pos * sizeof(int32_t));
+    out->decoded_positions = (double *)prc_malloc(ctx, (size_t)num_pos * 3 * sizeof(double));
     st.visited = (uint8_t *)prc_calloc(ctx, num_tris, sizeof(uint8_t));
     st.pending = (uint8_t *)prc_calloc(ctx, num_tris, sizeof(uint8_t));
     st.neighbor = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(int32_t));
@@ -961,7 +968,9 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     st.decoded_pos = (prc_vec3 *)prc_malloc(ctx, (size_t)num_pos * sizeof(prc_vec3));
     if (out->point_array == NULL || out->edge_status_array == NULL ||
         out->triangle_face_array == NULL || out->points_is_reference_array == NULL ||
-        out->point_reference_array == NULL || st.visited == NULL ||
+        out->point_reference_array == NULL || out->triangle_point_indices == NULL ||
+        out->triangle_mesh_order == NULL || out->point_mesh_vertex == NULL ||
+        out->decoded_positions == NULL || st.visited == NULL ||
         st.pending == NULL || st.neighbor == NULL || st.vtx_map == NULL ||
         st.decoded_pos == NULL)
     {
@@ -1046,6 +1055,11 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
            without caller-provided ids every triangle maps to face 0. */
         out->triangle_face_array[emitted] = face_indices != NULL ? (int32_t)face_indices[cur] : 0;
 
+        out->triangle_point_indices[(size_t)emitted * 3 + 0] = idx[0];
+        out->triangle_point_indices[(size_t)emitted * 3 + 1] = idx[1];
+        out->triangle_point_indices[(size_t)emitted * 3 + 2] = idx[2];
+        out->triangle_mesh_order[emitted] = cur;
+
         code = prc_encode_edge_status(&st, cur, idx, mv, &out->edge_status_array[emitted]);
         if (code < 0)
         {
@@ -1057,6 +1071,21 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
 
     out->edge_status_array_size = num_tris;
     out->triangle_face_array_size = num_tris;
+
+    out->num_decoded_points = st.n_points;
+    for (i = 0; i < num_pos; i++)
+        out->point_mesh_vertex[i] = -1;
+    for (i = 0; i < num_pos; i++)
+    {
+        if (st.vtx_map[i] >= 0)
+            out->point_mesh_vertex[st.vtx_map[i]] = (int32_t)i;
+    }
+    for (i = 0; i < st.n_points; i++)
+    {
+        out->decoded_positions[(size_t)i * 3 + 0] = st.decoded_pos[i].x;
+        out->decoded_positions[(size_t)i * 3 + 1] = st.decoded_pos[i].y;
+        out->decoded_positions[(size_t)i * 3 + 2] = st.decoded_pos[i].z;
+    }
 
     if (out->point_array_size < num_pos * 3)
     {
@@ -1133,7 +1162,816 @@ prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out)
         prc_free(ctx, out->points_is_reference_array);
     if (out->point_reference_array != NULL)
         prc_free(ctx, out->point_reference_array);
+    if (out->triangle_point_indices != NULL)
+        prc_free(ctx, out->triangle_point_indices);
+    if (out->triangle_mesh_order != NULL)
+        prc_free(ctx, out->triangle_mesh_order);
+    if (out->point_mesh_vertex != NULL)
+        prc_free(ctx, out->point_mesh_vertex);
+    if (out->decoded_positions != NULL)
+        prc_free(ctx, out->decoded_positions);
     memset(out, 0, sizeof(*out));
+}
+
+/* ---- Step C: normal encoding ------------------------------------------ */
+
+#define PRC_ENCODE_NORMAL_ANGLE_BITS 10
+#define PRC_ENCODE_NORMAL_ANGLE_MAX ((1 << PRC_ENCODE_NORMAL_ANGLE_BITS) - 1)
+
+typedef struct
+{
+    int32_t theta_q;
+    int32_t phi_q;
+    uint8_t tri_reversed;
+    uint8_t x_reversed;
+    uint8_t y_reversed;
+} prc_encode_normal_tuple;
+
+typedef struct
+{
+    uint8_t state;            /* prc_vertex_norm_case_t values */
+    uint8_t all_same;
+    uint8_t has_first;
+    prc_vec3 first_normal;
+    prc_vec3 single_decoded;
+    uint32_t num_stored;
+    uint32_t cap;
+    prc_vec3 *slot_input;     /* input normal that created each stored slot */
+    prc_vec3 *slot_decoded;   /* decoder-visible vector each slot resolves to */
+} prc_encode_point_norm;
+
+static prc_vec3
+prc_encode_decoded_vec(const prc_encode_traversal_result *trav, int32_t point_index)
+{
+    prc_vec3 v;
+
+    v.x = trav->decoded_positions[(size_t)point_index * 3 + 0];
+    v.y = trav->decoded_positions[(size_t)point_index * 3 + 1];
+    v.z = trav->decoded_positions[(size_t)point_index * 3 + 2];
+    return v;
+}
+
+static int
+prc_encode_check_trav_arrays(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav)
+{
+    uint32_t k, num_tris;
+
+    if (mesh == NULL || trav == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "normal encoding: NULL mesh/traversal\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    num_tris = trav->edge_status_array_size;
+    if (num_tris == 0)
+        return 0;
+    if (trav->triangle_point_indices == NULL || trav->triangle_mesh_order == NULL ||
+        trav->point_mesh_vertex == NULL || trav->decoded_positions == NULL ||
+        trav->edge_status_array == NULL || trav->num_decoded_points == 0)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "normal encoding: incomplete traversal result\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    /* edge_status_array_size / num_decoded_points / mesh counts are
+       independently supplied; validate every cross-index before any of the
+       encoding passes below dereferences through them. */
+    for (k = 0; k < num_tris * 3; k++)
+    {
+        int32_t pt = trav->triangle_point_indices[k];
+        int32_t mv;
+
+        if (pt < 0 || (uint32_t)pt >= trav->num_decoded_points)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "normal encoding: point index out of range\n");
+            return PRC_ERROR_INTERNAL;
+        }
+        mv = trav->point_mesh_vertex[pt];
+        if (mv < 0 || (uint32_t)mv >= mesh->num_positions)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "normal encoding: mesh vertex out of range\n");
+            return PRC_ERROR_INTERNAL;
+        }
+    }
+    for (k = 0; k < num_tris; k++)
+    {
+        if (trav->triangle_mesh_order[k] >= mesh->num_triangles)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "normal encoding: mesh triangle out of range\n");
+            return PRC_ERROR_INTERNAL;
+        }
+    }
+    return 0;
+}
+
+int
+prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *input_normals,
+    uint8_t **normal_is_reversed_out)
+{
+    uint8_t *rev;
+    uint32_t k, num_tris;
+    int code;
+
+    if (normal_is_reversed_out == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c1: NULL output\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    *normal_is_reversed_out = NULL;
+    code = prc_encode_check_trav_arrays(ctx, mesh, trav);
+    if (code < 0)
+        return code;
+    num_tris = trav->edge_status_array_size;
+    if (num_tris == 0)
+        return 0;
+
+    rev = (uint8_t *)prc_calloc(ctx, num_tris, sizeof(uint8_t));
+    if (rev == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c1\n");
+        return PRC_ERROR_MEMORY;
+    }
+
+    if (input_normals != NULL)
+    {
+        for (k = 0; k < num_tris; k++)
+        {
+            const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
+            prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
+            prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
+            prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
+            prc_vec3 e1, e2, raw_cross, avg;
+            uint32_t c;
+            double dot_val;
+
+            prc_vec_sub(P1, P0, &e1);
+            prc_vec_sub(P2, P0, &e2);
+            prc_vec_cross(e1, e2, &raw_cross);
+
+            avg.x = avg.y = avg.z = 0.0;
+            for (c = 0; c < 3; c++)
+            {
+                const double *n = &input_normals[(size_t)trav->point_mesh_vertex[idx[c]] * 3];
+
+                avg.x += n[0] / 3.0;
+                avg.y += n[1] / 3.0;
+                avg.z += n[2] / 3.0;
+            }
+            dot_val = prc_vec_dot_product(avg, raw_cross);
+            /* prc_derive_normal negates its cross product when the stored bit
+               is 0, so bit = 1 selects the un-negated (+cross) direction.
+               Empirically verified against the real decoder by the
+               single-triangle round-trip cases in test_compress_tess.c. */
+            rev[k] = (uint8_t)(dot_val > 0.0);
+            /* A set bit makes the decoder swap its left/right edge handling
+               for this triangle's grow pushes, which the already-emitted
+               traversal arrays assumed never happens; refuse to build a
+               stream the decoder would walk differently. */
+            if (rev[k] && trav->edge_status_array[k] != 0)
+            {
+                prc_free(ctx, rev);
+                prc_error(ctx, PRC_ERROR_INTERNAL,
+                    "prc_encode_normals_c1: normals reverse a growing triangle (unsupported)\n");
+                return PRC_ERROR_INTERNAL;
+            }
+        }
+    }
+    *normal_is_reversed_out = rev;
+    return 0;
+}
+
+/* Mirror of the basis phase of the decoder's prc_compute_vertex_normal,
+   BEFORE any reversal bit is applied: the decoder negates Z first and only
+   then derives Y = normalize(cross(Z, X)), and normalize(-v) == -normalize(v)
+   exactly, so the reversed variants differ from this raw basis only by signs
+   the tuple's tri/x/y bits reproduce. Same helpers, same operation order,
+   including the prc_vec_make_orth_basis_normals fallback. */
+static int
+prc_encode_vertex_normal_basis(prc_vec3 V1, prc_vec3 V2, prc_vec3 V3,
+    prc_vec3 *x_out, prc_vec3 *y_out, prc_vec3 *z_out)
+{
+    prc_vec3 V1_norm, V2_norm, V3_norm, temp1, temp2;
+    prc_vec3 X_norm, Y_norm, Z_norm;
+    double theta1 = 0, theta2 = 0, theta3 = 0;
+    int code;
+
+    prc_vec_sub(V2, V1, &V1_norm);
+    code = prc_vec_normalize(&V1_norm);
+    if (code < 0)
+        return code;
+    prc_vec_sub(V3, V1, &V2_norm);
+    code = prc_vec_normalize(&V2_norm);
+    if (code < 0)
+        return code;
+    prc_vec_sub(V3, V2, &V3_norm);
+    code = prc_vec_normalize(&V3_norm);
+    if (code < 0)
+        return code;
+
+    code = prc_vec_angle_between_vectors_normal(V1_norm, V2_norm, &theta1);
+    if (code < 0)
+        return code;
+    prc_vec_copy(V1_norm, &temp1, 1);
+    code = prc_vec_angle_between_vectors_normal(V3_norm, temp1, &theta2);
+    if (code < 0)
+        return code;
+    prc_vec_copy(V2_norm, &temp1, 1);
+    prc_vec_copy(V3_norm, &temp2, 1);
+    code = prc_vec_angle_between_vectors_normal(temp1, temp2, &theta3);
+    if (code < 0)
+        return code;
+
+    if ((theta1 < theta2) && (theta1 < theta3))
+    {
+        prc_vec_copy(V1_norm, &X_norm, 0);
+        prc_vec_cross(V1_norm, V2_norm, &Z_norm);
+    }
+    else if (theta2 < theta3)
+    {
+        prc_vec_copy(V3_norm, &X_norm, 0);
+        prc_vec_copy(V3_norm, &temp1, 1);
+        prc_vec_cross(temp1, V1_norm, &Z_norm);
+    }
+    else
+    {
+        prc_vec_copy(V2_norm, &X_norm, 1);
+        prc_vec_cross(V2_norm, V3_norm, &Z_norm);
+    }
+
+    code = prc_vec_normalize(&Z_norm);
+    if (code < 0)
+    {
+        prc_basis basis;
+
+        basis.X = X_norm;
+        code = prc_vec_make_orth_basis_normals(&basis);
+        if (code < 0)
+            return code;
+        Z_norm = basis.Z;
+    }
+
+    prc_vec_cross(Z_norm, X_norm, &Y_norm);
+    code = prc_vec_normalize(&Y_norm);
+    if (code < 0)
+        return code;
+
+    *x_out = X_norm;
+    *y_out = Y_norm;
+    *z_out = Z_norm;
+    return 0;
+}
+
+static int32_t
+prc_encode_quantize_angle(double angle)
+{
+    long long q = llround(angle * (double)PRC_ENCODE_NORMAL_ANGLE_MAX / PRC_HALF_PI);
+
+    if (q < 0)
+        q = 0;
+    if (q > PRC_ENCODE_NORMAL_ANGLE_MAX)
+        q = PRC_ENCODE_NORMAL_ANGLE_MAX;
+    return (int32_t)q;
+}
+
+/* Invert the decoder's reconstruction
+     n = cos(theta)cos(phi)*Xf + sin(theta)cos(phi)*Yf + sin(phi)*Zf
+   where Zf = +-Z (tri bit), Yf = +-cross(Zf, X) (y bit), Xf = +-X (x bit) and
+   theta, phi are stored unsigned in [0, PI/2]: project N onto the raw basis
+   and fold every sign into the three bits. */
+static void
+prc_encode_project_normal(prc_vec3 N, prc_vec3 X, prc_vec3 Y, prc_vec3 Z,
+    prc_encode_normal_tuple *t)
+{
+    double nx = prc_vec_dot_product(N, X);
+    double ny = prc_vec_dot_product(N, Y);
+    double nz = prc_vec_dot_product(N, Z);
+    double az = fabs(nz);
+
+    t->x_reversed = (uint8_t)(nx < 0.0);
+    t->tri_reversed = (uint8_t)(nz < 0.0);
+    t->y_reversed = (uint8_t)((ny < 0.0) != (nz < 0.0));
+    if (az > 1.0)
+        az = 1.0;
+    t->theta_q = prc_encode_quantize_angle(atan2(fabs(ny), fabs(nx)));
+    t->phi_q = prc_encode_quantize_angle(asin(az));
+}
+
+/* The vector the decoder will actually store for this tuple, needed both to
+   predict its normal_was_reversed decision and to know what a back-reference
+   would resolve to. */
+static void
+prc_encode_simulate_decoded_normal(prc_vec3 X, prc_vec3 Y, prc_vec3 Z,
+    const prc_encode_normal_tuple *t, prc_vec3 *out)
+{
+    double scale = PRC_HALF_PI / (double)PRC_ENCODE_NORMAL_ANGLE_MAX;
+    double theta = (double)t->theta_q * scale;
+    double phi = (double)t->phi_q * scale;
+    double f1 = cos(theta) * cos(phi);
+    double f2 = sin(theta) * cos(phi);
+    double f3 = sin(phi);
+
+    if (t->tri_reversed)
+    {
+        prc_vec_negate(&Z);
+        prc_vec_negate(&Y);
+    }
+    if (t->x_reversed)
+        prc_vec_negate(&X);
+    if (t->y_reversed)
+        prc_vec_negate(&Y);
+
+    out->x = f1 * X.x + f2 * Y.x + f3 * Z.x;
+    out->y = f1 * X.y + f2 * Y.y + f3 * Z.y;
+    out->z = f1 * X.z + f2 * Y.z + f3 * Z.z;
+    (void)prc_vec_normalize(out);
+}
+
+static int
+prc_encode_point_norm_append(prc_context *ctx, prc_encode_point_norm *p,
+    prc_vec3 input_n, prc_vec3 decoded_n)
+{
+    if (p->num_stored == p->cap)
+    {
+        uint32_t new_cap = p->cap ? p->cap * 2 : 4;
+        prc_vec3 *grown;
+
+        grown = (prc_vec3 *)prc_realloc(ctx, p->slot_input, (size_t)new_cap * sizeof(prc_vec3));
+        if (grown == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_point_norm_append\n");
+            return PRC_ERROR_MEMORY;
+        }
+        p->slot_input = grown;
+        grown = (prc_vec3 *)prc_realloc(ctx, p->slot_decoded, (size_t)new_cap * sizeof(prc_vec3));
+        if (grown == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_point_norm_append\n");
+            return PRC_ERROR_MEMORY;
+        }
+        p->slot_decoded = grown;
+        p->cap = new_cap;
+    }
+    p->slot_input[p->num_stored] = input_n;
+    p->slot_decoded[p->num_stored] = decoded_n;
+    p->num_stored++;
+    return 0;
+}
+
+int
+prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *corner_normals,
+    int32_t **normal_angle_array_out, uint32_t *normal_angle_count_out,
+    uint8_t **normal_binary_data_out, uint32_t *normal_binary_data_size_out)
+{
+    uint32_t num_tris, npts, k, c, v;
+    prc_vec3 *visit_normals = NULL;
+    prc_vec3 *bx = NULL, *by = NULL, *bz = NULL;
+    prc_encode_normal_tuple *tuples = NULL;
+    prc_encode_point_norm *pn = NULL;
+    int32_t *angles = NULL;
+    uint8_t *bin = NULL;
+    uint32_t angle_count = 0, bin_count = 0;
+    int ret = PRC_ERROR_INTERNAL;
+    int code;
+
+    if (normal_angle_array_out == NULL || normal_angle_count_out == NULL ||
+        normal_binary_data_out == NULL || normal_binary_data_size_out == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: NULL output\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    *normal_angle_array_out = NULL;
+    *normal_angle_count_out = 0;
+    *normal_binary_data_out = NULL;
+    *normal_binary_data_size_out = 0;
+
+    code = prc_encode_check_trav_arrays(ctx, mesh, trav);
+    if (code < 0)
+        return code;
+    num_tris = trav->edge_status_array_size;
+    if (num_tris == 0)
+        return 0;
+    if (corner_normals == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: NULL corner normals\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    npts = trav->num_decoded_points;
+
+    visit_normals = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(prc_vec3));
+    bx = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
+    by = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
+    bz = (prc_vec3 *)prc_malloc(ctx, (size_t)num_tris * sizeof(prc_vec3));
+    tuples = (prc_encode_normal_tuple *)prc_malloc(ctx, (size_t)num_tris * 3 * sizeof(prc_encode_normal_tuple));
+    pn = (prc_encode_point_norm *)prc_calloc(ctx, npts, sizeof(prc_encode_point_norm));
+    angles = (int32_t *)prc_malloc(ctx, (size_t)num_tris * 6 * sizeof(int32_t));
+    /* Per-visit worst case: 4 fresh bits, or 1 reference bit plus at most 32
+       back-reference index bits. */
+    bin = (uint8_t *)prc_malloc(ctx, (size_t)num_tris * 3 * 40 * sizeof(uint8_t));
+    if (visit_normals == NULL || bx == NULL || by == NULL || bz == NULL ||
+        tuples == NULL || pn == NULL || angles == NULL || bin == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c2\n");
+        ret = PRC_ERROR_MEMORY;
+        goto fail;
+    }
+
+    for (k = 0; k < num_tris; k++)
+    {
+        const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
+        uint32_t mesh_tri = trav->triangle_mesh_order[k];
+
+        code = prc_encode_vertex_normal_basis(prc_encode_decoded_vec(trav, idx[0]),
+            prc_encode_decoded_vec(trav, idx[1]), prc_encode_decoded_vec(trav, idx[2]),
+            &bx[k], &by[k], &bz[k]);
+        if (code < 0)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: degenerate triangle basis\n");
+            goto fail;
+        }
+
+        for (c = 0; c < 3; c++)
+        {
+            int32_t mv = trav->point_mesh_vertex[idx[c]];
+            uint32_t j, corner = 3;
+            prc_vec3 n;
+
+            for (j = 0; j < 3; j++)
+            {
+                if (mesh->tri_indices[(size_t)mesh_tri * 3 + j] == (uint32_t)mv)
+                    corner = j;
+            }
+            if (corner == 3)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: traversal/mesh corner mismatch\n");
+                goto fail;
+            }
+            n.x = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 0];
+            n.y = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 1];
+            n.z = corner_normals[(size_t)mesh_tri * 9 + (size_t)corner * 3 + 2];
+            if (prc_vec_normalize(&n) < 0)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL, "prc_encode_normals_c2: zero-length input normal\n");
+                goto fail;
+            }
+            visit_normals[(size_t)k * 3 + c] = n;
+            prc_encode_project_normal(n, bx[k], by[k], bz[k], &tuples[(size_t)k * 3 + c]);
+        }
+    }
+
+    /* has_multiple_normals must be fixed for a point's entire lifetime at its
+       first visit, so decide it up front: only if every incident visit wants
+       the same input normal can later visits legally consume zero bits. */
+    for (v = 0; v < npts; v++)
+        pn[v].all_same = 1;
+    for (k = 0; k < num_tris * 3; k++)
+    {
+        int32_t pt = trav->triangle_point_indices[k];
+
+        if (!pn[pt].has_first)
+        {
+            pn[pt].first_normal = visit_normals[k];
+            pn[pt].has_first = 1;
+        }
+        else if (prc_vec_dot_product(pn[pt].first_normal, visit_normals[k]) < 1.0 - 1.0e-9)
+        {
+            pn[pt].all_same = 0;
+        }
+    }
+
+    for (k = 0; k < num_tris; k++)
+    {
+        const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
+        prc_vec3 corner0_decoded;
+
+        corner0_decoded.x = corner0_decoded.y = corner0_decoded.z = 0.0;
+        for (c = 0; c < 3; c++)
+        {
+            uint32_t visit = k * 3 + c;
+            const prc_encode_normal_tuple *t = &tuples[visit];
+            prc_encode_point_norm *p = &pn[idx[c]];
+            prc_vec3 assigned;
+
+            if (p->state == PRC_VERTEX_NORM_NOT_ENCOUNTERED)
+            {
+                uint8_t hm = (uint8_t)!p->all_same;
+
+                bin[bin_count++] = hm;
+                bin[bin_count++] = t->tri_reversed;
+                bin[bin_count++] = t->x_reversed;
+                bin[bin_count++] = t->y_reversed;
+                angles[angle_count++] = t->theta_q;
+                angles[angle_count++] = t->phi_q;
+                prc_encode_simulate_decoded_normal(bx[k], by[k], bz[k], t, &assigned);
+                if (hm)
+                {
+                    p->state = PRC_VERTEX_NORM_IS_MULTIPLE;
+                    code = prc_encode_point_norm_append(ctx, p, visit_normals[visit], assigned);
+                    if (code < 0)
+                    {
+                        ret = code;
+                        goto fail;
+                    }
+                }
+                else
+                {
+                    p->state = PRC_VERTEX_NORM_IS_NOT_MULTIPLE;
+                    p->single_decoded = assigned;
+                }
+            }
+            else if (p->state == PRC_VERTEX_NORM_IS_NOT_MULTIPLE)
+            {
+                /* the decoder reuses the single stored normal without reading
+                   any bits; valid because all_same guaranteed every incident
+                   visit wants this normal */
+                assigned = p->single_decoded;
+            }
+            else
+            {
+                uint32_t s, found = UINT32_MAX;
+
+                for (s = 0; s < p->num_stored; s++)
+                {
+                    if (prc_vec_dot_product(p->slot_input[s], visit_normals[visit]) > 1.0 - 1.0e-9)
+                    {
+                        found = s;
+                        break;
+                    }
+                }
+                if (found != UINT32_MAX)
+                {
+                    /* inverse of the decoder's
+                       ref_index = (num_stored - 1) - read_index, emitted
+                       LSB-first over exactly the bit width the decoder will
+                       compute from its own num_stored */
+                    uint32_t number_bits = get_number_bits_to_store_unsigned_integer2(p->num_stored - 1);
+                    uint32_t read_index = (p->num_stored - 1) - found;
+                    uint32_t b;
+
+                    bin[bin_count++] = 1;
+                    for (b = 0; b < number_bits; b++)
+                        bin[bin_count++] = (uint8_t)((read_index >> b) & 1u);
+                    assigned = p->slot_decoded[found];
+                }
+                else
+                {
+                    bin[bin_count++] = 0;
+                    bin[bin_count++] = t->tri_reversed;
+                    bin[bin_count++] = t->x_reversed;
+                    bin[bin_count++] = t->y_reversed;
+                    angles[angle_count++] = t->theta_q;
+                    angles[angle_count++] = t->phi_q;
+                    prc_encode_simulate_decoded_normal(bx[k], by[k], bz[k], t, &assigned);
+                    code = prc_encode_point_norm_append(ctx, p, visit_normals[visit], assigned);
+                    if (code < 0)
+                    {
+                        ret = code;
+                        goto fail;
+                    }
+                }
+            }
+            if (c == 0)
+                corner0_decoded = assigned;
+        }
+
+        /* The decoder derives normal_was_reversed from the corner-0 normal
+           (prc_is_normal_reversed_single_normal) and, when set, swaps its
+           left/right edge handling for this triangle's grow pushes -- which
+           the already-emitted traversal arrays assumed never happens. Refuse
+           to build a stream the decoder would silently walk differently. */
+        {
+            prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
+            prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
+            prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
+            prc_vec3 mid, e1, e2, cross1;
+
+            prc_vec_avg(P0, P1, &mid);
+            prc_vec_sub(P1, P0, &e1);
+            prc_vec_sub(P2, mid, &e2);
+            prc_vec_cross(e2, e1, &cross1);
+            if (prc_vec_dot_product(cross1, corner0_decoded) < 0.0 &&
+                trav->edge_status_array[k] != 0)
+            {
+                prc_error(ctx, PRC_ERROR_INTERNAL,
+                    "prc_encode_normals_c2: normals reverse a growing triangle (unsupported)\n");
+                goto fail;
+            }
+        }
+    }
+
+    if (angle_count > 0 && (size_t)angle_count < (size_t)num_tris * 6)
+    {
+        int32_t *shrunk = (int32_t *)prc_realloc(ctx, angles, (size_t)angle_count * sizeof(int32_t));
+
+        if (shrunk != NULL)
+            angles = shrunk;
+    }
+    if (bin_count > 0 && (size_t)bin_count < (size_t)num_tris * 3 * 40)
+    {
+        uint8_t *shrunk = (uint8_t *)prc_realloc(ctx, bin, (size_t)bin_count * sizeof(uint8_t));
+
+        if (shrunk != NULL)
+            bin = shrunk;
+    }
+    *normal_angle_array_out = angles;
+    *normal_angle_count_out = angle_count;
+    *normal_binary_data_out = bin;
+    *normal_binary_data_size_out = bin_count;
+    angles = NULL;
+    bin = NULL;
+    ret = 0;
+
+fail:
+    if (angles != NULL)
+        prc_free(ctx, angles);
+    if (bin != NULL)
+        prc_free(ctx, bin);
+    if (visit_normals != NULL)
+        prc_free(ctx, visit_normals);
+    if (bx != NULL)
+        prc_free(ctx, bx);
+    if (by != NULL)
+        prc_free(ctx, by);
+    if (bz != NULL)
+        prc_free(ctx, bz);
+    if (tuples != NULL)
+        prc_free(ctx, tuples);
+    if (pn != NULL)
+    {
+        for (v = 0; v < npts; v++)
+        {
+            if (pn[v].slot_input != NULL)
+                prc_free(ctx, pn[v].slot_input);
+            if (pn[v].slot_decoded != NULL)
+                prc_free(ctx, pn[v].slot_decoded);
+        }
+        prc_free(ctx, pn);
+    }
+    return ret;
+}
+
+/* ---- Step E: bitstream assembly ---------------------------------------- */
+
+int
+prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_traversal_result *trav, double tolerance_mm,
+    const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
+    const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
+    const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
+    uint8_t must_recalculate_normals)
+{
+    uint32_t k, num_refs = 0;
+
+    if (state == NULL || trav == NULL || !(tolerance_mm > 0.0))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: bad arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    if ((trav->point_array == NULL && trav->point_array_size != 0) ||
+        (trav->edge_status_array == NULL && trav->edge_status_array_size != 0) ||
+        (trav->triangle_face_array == NULL && trav->triangle_face_array_size != 0) ||
+        (trav->points_is_reference_array == NULL && trav->points_is_reference_array_size != 0) ||
+        (trav->point_reference_array == NULL && trav->point_reference_array_size != 0))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: NULL array with non-zero count\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    if (must_recalculate_normals)
+    {
+        if (normal_is_reversed_c1 == NULL && trav->triangle_face_array_size != 0)
+        {
+            prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: missing C1 reversal bits\n");
+            return PRC_ERROR_INTERNAL;
+        }
+    }
+    else if ((normal_angle_array == NULL && normal_angle_array_count != 0) ||
+        (normal_binary_data == NULL && normal_binary_data_size != 0))
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: missing C2 normal data\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    for (k = 0; k < trav->points_is_reference_array_size; k++)
+    {
+        if (trav->points_is_reference_array[k])
+            num_refs++;
+    }
+    /* The reader sizes point_reference_array by counting these 1-bits, so a
+       mismatch would silently desynchronize everything after it. */
+    if (num_refs != trav->point_reference_array_size)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: reference bookkeeping mismatch\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_calculated */
+        goto werr;
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_faces */
+        goto werr;
+    if (prc_bitwrite_double(ctx, state, tolerance_mm) != 0)
+        goto werr;
+    /* float per the format; the reader applies the same truncation */
+    if (prc_bitwrite_float(ctx, state, (float)trav->origin[0]) != 0)
+        goto werr;
+    if (prc_bitwrite_float(ctx, state, (float)trav->origin[1]) != 0)
+        goto werr;
+    if (prc_bitwrite_float(ctx, state, (float)trav->origin[2]) != 0)
+        goto werr;
+    if (prc_bitwrite_compressed_integer_array(ctx, state, trav->point_array,
+            trav->point_array_size) != 0)
+        goto werr;
+    if (prc_bitwrite_character_array(ctx, state, trav->edge_status_array,
+            trav->edge_status_array_size, 2, 1, 0) != 0)
+        goto werr;
+    if (prc_bitwrite_compressed_indice_array(ctx, state, trav->triangle_face_array,
+            trav->triangle_face_array_size, 1, 0) != 0)
+        goto werr;
+    if (prc_bitwrite_uint32(ctx, state, trav->points_is_reference_array_size) != 0)
+        goto werr;
+    for (k = 0; k < trav->points_is_reference_array_size; k++)
+    {
+        if (prc_bitwrite_bit(ctx, state, trav->points_is_reference_array[k]) != 0)
+            goto werr;
+    }
+    if (prc_bitwrite_compressed_indice_array(ctx, state, trav->point_reference_array,
+            trav->point_reference_array_size, 0, num_refs) != 0)
+        goto werr;
+    if (prc_bitwrite_bit(ctx, state, must_recalculate_normals ? 1 : 0) != 0)
+        goto werr;
+
+    if (must_recalculate_normals)
+    {
+        for (k = 0; k < trav->triangle_face_array_size; k++)
+        {
+            if (prc_bitwrite_bit(ctx, state, normal_is_reversed_c1[k]) != 0)
+                goto werr;
+        }
+        /* stored in degrees; the reader converts to radians itself */
+        if (prc_bitwrite_double(ctx, state, crease_angle_degrees) != 0)
+            goto werr;
+        if (prc_bitwrite_uint8(ctx, state, 0) != 0)   /* normal_recalculation_flags */
+            goto werr;
+    }
+    else
+    {
+        uint32_t face_count = 1;
+
+        for (k = 0; k < trav->triangle_face_array_size; k++)
+        {
+            if (trav->triangle_face_array[k] >= 0 &&
+                (uint32_t)trav->triangle_face_array[k] + 1 > face_count)
+                face_count = (uint32_t)trav->triangle_face_array[k] + 1;
+        }
+        if (prc_bitwrite_uint8(ctx, state, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
+            goto werr;
+        if (prc_bitwrite_uint32(ctx, state, normal_binary_data_size) != 0)
+            goto werr;
+        for (k = 0; k < normal_binary_data_size; k++)
+        {
+            if (prc_bitwrite_bit(ctx, state, normal_binary_data[k]) != 0)
+                goto werr;
+        }
+        if (prc_bitwrite_short_array(ctx, state, normal_angle_array,
+                normal_angle_array_count, 1, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
+            goto werr;
+        /* every face non-planar: routes all decoding through the per-vertex
+           path, never the separate per-face-planar normal-sharing path */
+        for (k = 0; k < face_count; k++)
+        {
+            if (prc_bitwrite_bit(ctx, state, 0) != 0)
+                goto werr;
+        }
+    }
+
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_point_color */
+        goto werr;
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_multiple_line_attribute */
+        goto werr;
+    /* read unconditionally by the parser. The C2 branch forces has_faces on
+       the decode side, whose style bookkeeping dereferences
+       line_attribute_array[0], so C2 must carry one no-style (biased 0)
+       entry; C1 keeps it empty. */
+    if (must_recalculate_normals)
+    {
+        if (prc_bitwrite_short_array(ctx, state, NULL, 0, 1, 16) != 0)
+            goto werr;
+    }
+    else
+    {
+        int32_t no_style = 0;
+
+        if (prc_bitwrite_short_array(ctx, state, &no_style, 1, 1, 16) != 0)
+            goto werr;
+    }
+    if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* no_texture */
+        goto werr;
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_behaviors */
+        goto werr;
+    return 0;
+
+werr:
+    prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_to_stream: bit write failed\n");
+    return PRC_ERROR_INTERNAL;
 }
 
 void

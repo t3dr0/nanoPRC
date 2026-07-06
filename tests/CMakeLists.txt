@@ -23,3 +23,8 @@ add_executable(test_traversal tests/unit/test_traversal.c)
 target_link_libraries(test_traversal prc_static)
 target_include_directories(test_traversal PRIVATE tests)
 add_test(NAME test_traversal COMMAND test_traversal)
+
+add_executable(test_normals tests/unit/test_normals.c)
+target_link_libraries(test_normals prc_static)
+target_include_directories(test_normals PRIVATE tests)
+add_test(NAME test_normals COMMAND test_normals)
