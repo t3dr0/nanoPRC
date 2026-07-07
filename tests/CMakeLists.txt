@@ -43,3 +43,8 @@ add_executable(test_globals tests/unit/test_globals.c)
 target_link_libraries(test_globals prc_static)
 target_include_directories(test_globals PRIVATE tests)
 add_test(NAME test_globals COMMAND test_globals)
+
+add_executable(test_file_structure tests/unit/test_file_structure.c)
+target_link_libraries(test_file_structure prc_static)
+target_include_directories(test_file_structure PRIVATE tests)
+add_test(NAME test_file_structure COMMAND test_file_structure)
