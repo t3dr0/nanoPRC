@@ -76,7 +76,7 @@ build_one_triangle_file(prc_context *ctx, prc_write_global_tables *tables)
     root.bbox_min[0] = 0.0; root.bbox_min[1] = 0.0; root.bbox_min[2] = 0.0;
     root.bbox_max[0] = 1.0; root.bbox_max[1] = 1.0; root.bbox_max[2] = 0.0;
 
-    PRC_ASSERT_EQ(prc_write_prc_file(ctx, TEST_PRC_FILENAME, tables, &root, &tess_entry, 1), 0);
+    PRC_ASSERT_EQ(prc_write_prc_file(ctx, TEST_PRC_FILENAME, NULL, tables, &root, &tess_entry, 1), 0);
 }
 
 static void
@@ -130,11 +130,13 @@ test_prc_signature(prc_context *ctx)
 }
 
 /* Manually locates the model section (addressed via the main header's
-   start_offset/end_offset, at fixed byte offsets 87/91 for this writer's
-   single-file-structure, 4-section layout -- see
-   prc_write_model.c's prc_write_main_header_size/_bytes) and independently
-   confirms it is a valid zlib deflate stream whose decompressed size
-   matches a freshly-encoded copy of the same content. */
+   start_offset/end_offset) and independently confirms it is a valid zlib
+   deflate stream whose decompressed size matches a freshly-encoded copy of
+   the same content. The field byte positions come from
+   prc_write_main_header_compute_layout -- the same layout function
+   prc_write_model.c's own writer uses -- rather than hardcoded byte
+   offsets, so this test can't silently desync from the real layout if the
+   section count (PRC_WRITE_PRC_FILE_SECTION_COUNT) ever changes. */
 static void
 test_zlib_section_valid(prc_context *ctx)
 {
@@ -143,12 +145,13 @@ test_zlib_section_valid(prc_context *ctx)
     long file_size;
     uint8_t *file_bytes;
     uint32_t start_offset, end_offset;
+    prc_write_main_header_layout layout;
     z_stream strm;
     uint8_t *inflated;
     size_t inflated_cap;
     int zret;
     prc_bit_write_state expect_s;
-    uint32_t root_unique_id_expected = 1; /* single-node tree: root is product #1 */
+    uint32_t root_biased_index_expected = 1; /* single-node tree: root is the only (last) product */
 
     printf("  sub-case: zlib-compressed model section is valid\n");
 
@@ -164,8 +167,10 @@ test_zlib_section_valid(prc_context *ctx)
     PRC_ASSERT_EQ(fread(file_bytes, 1, (size_t)file_size, fid), (size_t)file_size);
     fclose(fid);
 
-    start_offset = read_le_uint32(file_bytes + 87);
-    end_offset = read_le_uint32(file_bytes + 91);
+    prc_write_main_header_compute_layout(PRC_WRITE_PRC_FILE_SECTION_COUNT, &layout);
+    PRC_ASSERT((long)layout.total_size < file_size);
+    start_offset = read_le_uint32(file_bytes + layout.start_offset_pos);
+    end_offset = read_le_uint32(file_bytes + layout.end_offset_pos);
     PRC_ASSERT(end_offset > start_offset);
     PRC_ASSERT((long)end_offset <= file_size);
 
@@ -188,7 +193,7 @@ test_zlib_section_valid(prc_context *ctx)
        section content (same encoder, fresh call -- not just re-reading
        what was already written). */
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &expect_s, 256), 0);
-    PRC_ASSERT_EQ(prc_write_model_file_to_stream(ctx, &expect_s, root_unique_id_expected, 1), 0);
+    PRC_ASSERT_EQ(prc_write_model_file_to_stream(ctx, &expect_s, NULL, root_biased_index_expected, 1), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &expect_s), 0);
 
     PRC_ASSERT_EQ(strm.total_out, expect_s.byte_pos);

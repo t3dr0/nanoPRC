@@ -57,6 +57,7 @@ nanoPRC includes several source-code demonstrations that showcase how to use the
 | demos/json_export | A utility to create a JSON dump from a PRC model |
 | demos/stl_export | A utility to create binary STL mesh files from a PRC model |
 | demos/obj_export | A utility to create OBJ files from a PRC model with MTL and textures |
+| demos/teapot_write | A utility to generate a PRC file of the Utah teapot from 32 bicubic NURBS patches |
 
 ### Deterministic Unzipped-Section Fuzzing
 

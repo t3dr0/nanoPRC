@@ -21,27 +21,12 @@
 #include "prc_data.h"
 #include "prc_bit.h"
 
-/* One polyline or line-segment element for the PRC_TYPE_TESS_3D_Wire
-   encoder (Table 142), the exact inverse of prc_parse_tess_3d_wire in
-   prc_parse_tess.c.
-
-   A line segment is an element with num_vertices == 2 and is_closed == 0.
-   A polyline is an element with num_vertices >= 2. A closed polygon (wire
-   loop) sets is_closed = 1; the reader implies the closing edge from the
-   last vertex back to the first automatically
-   (PRC_3DWIRETESSDATA_IsClosing). is_continuous marks that this element
-   shares its first vertex with the previous element
-   (PRC_3DWIRETESSDATA_IsContinuous); it has no effect on encoding beyond
-   that one flag bit -- vertex deduplication is always exact-position-based
-   across every element regardless of it. */
-typedef struct prc_write_wire_element_s
-{
-    const float *positions;     /* 3 floats per vertex: x, y, z */
-    uint32_t     num_vertices;
-    uint8_t      is_closed;     /* 1 = closed polyline (PRC_3DWIRETESSDATA_IsClosing) */
-    uint8_t      is_continuous; /* 1 = shares first vertex with previous element */
-    const float *colors;        /* 4 floats per vertex (RGBA), or NULL */
-} prc_write_wire_element;
+/* prc_write_wire_element is an alias of the public prc_api_write_wire_element
+   (include/prc_api.h) -- see that type's doc comment for the field
+   semantics (PRC_3DWIRETESSDATA_IsClosing/IsContinuous mapping, exact-match
+   vertex dedup, default-white color fill). Aliased rather than redefined
+   so the internal encoder and the public API can never drift apart. */
+typedef prc_api_write_wire_element prc_write_wire_element;
 
 /* Encode a wire (line/polyline) tessellation. Vertex positions are
    deduplicated (exact float match) across all elements before encoding;

@@ -24,33 +24,18 @@
 #include "prc_write_global.h"
 #include "prc_write_wire_tess.h"
 
-typedef enum prc_write_tess_kind_e
-{
-    PRC_WRITE_TESS_KIND_3D = 0,
-    PRC_WRITE_TESS_KIND_WIRE = 1
-} prc_write_tess_kind;
+/* prc_write_tess_kind and prc_write_tess_entry are aliases of the public
+   prc_api_write_tess_kind_t / prc_api_write_tessellation (include/prc_api.h)
+   -- see those types' doc comments for field semantics. Aliased rather
+   than redefined so the internal encoder and the public API can never
+   drift apart. Bridges to the existing per-format encoders
+   (prc_write_tess_3d.c / prc_write_wire_tess.c) -- exactly one of the two
+   field groups is read, selected by `kind`. */
+typedef prc_api_write_tess_kind_t prc_write_tess_kind;
+#define PRC_WRITE_TESS_KIND_3D PRC_API_WRITE_TESS_KIND_TRIANGLES
+#define PRC_WRITE_TESS_KIND_WIRE PRC_API_WRITE_TESS_KIND_WIRE
 
-/* One entry of the file structure's tessellation-section array (Table 48,
-   PRC_TYPE_ASM_FileStructureTessellation). Bridges to the existing
-   per-format encoders (prc_write_tess_3d.c / prc_write_wire_tess.c) --
-   exactly one of the two field groups below is read, selected by `kind`. */
-typedef struct prc_write_tess_entry_s
-{
-    prc_write_tess_kind kind;
-
-    /* PRC_WRITE_TESS_KIND_3D -- forwarded to prc_write_tess_3d */
-    const double *positions; uint32_t num_positions;
-    const double *normals; uint32_t num_normals;
-    const uint32_t *tri_indices;
-    const uint32_t *norm_indices;
-    uint32_t num_triangles;
-    const uint32_t *face_tri_counts;
-    uint32_t num_faces;
-
-    /* PRC_WRITE_TESS_KIND_WIRE -- forwarded to prc_write_wire_tess */
-    const prc_write_wire_element *wire_elements;
-    uint32_t num_wire_elements;
-} prc_write_tess_entry;
+typedef prc_api_write_tessellation prc_write_tess_entry;
 
 /* Schema (Table 8, always empty -- no custom entity schema in this write
    facility) + FileStructureGlobals (Table 39) combined section content.
@@ -64,6 +49,16 @@ int prc_write_schema_and_globals_to_stream(prc_context *ctx, prc_bit_write_state
 int prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *s,
     const prc_write_tess_entry *entries, uint32_t num_entries);
 
+/* PRC_TYPE_ASM_FileStructureGeometry (Table 49) section content, always
+   empty (topo_context_count = 0 -- exact B-Rep geometry is out of scope
+   for this write facility). Some third-party PRC readers assume this
+   section is always present in the file-structure's section table (Table
+   6's fixed section order), even when it has no content, rather than
+   treating it as fully optional the way nanoPRC's own type-tag-dispatch
+   reader does -- write it unconditionally so those readers don't
+   misinterpret a later (present) section's bytes as the missing one. */
+int prc_write_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s);
+
 /* Deflate-compresses `src` (zlib, default level, single deflateInit/deflate
    .../Z_FINISH/deflateEnd call sized via deflateBound) into a caller-owned
    (prc_free) buffer. Returns 0 on success. */
@@ -72,12 +67,16 @@ int prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len,
 
 /* Fixed-size uncompressed prc_file_structure_header (Table 37, the content
    at a file structure's section_offset[0]): "PRC" + min_vers_for_read +
-   auth_vers + 2 unique ids (16 bytes each) + file_count. file_count (the
-   embedded-uncompressed-file / raster-image table) is always written 0 --
-   no embedded images in this session's scope. Writes exactly
+   auth_vers + 2 unique ids + file_count. file_count (the embedded-
+   uncompressed-file / raster-image table) is always written 0 -- no
+   embedded images in this session's scope. Writes exactly
    PRC_WRITE_FILE_STRUCT_HEADER_SIZE raw (non-bit-packed, little-endian)
-   bytes to `out`. */
-#define PRC_WRITE_FILE_STRUCT_HEADER_SIZE 47u
+   bytes to `out`; the macro is built from the same PRC_WRITE_*_BYTES unit
+   constants prc_write_file_struct_header_bytes itself writes (in
+   prc_write_common.h), rather than being a separately hand-counted number,
+   so the two can't silently drift apart. */
+#define PRC_WRITE_FILE_STRUCT_HEADER_SIZE \
+    (PRC_WRITE_SIGNATURE_BYTES + 2u * PRC_WRITE_U32_BYTES + 2u * PRC_WRITE_UNIQUE_ID_BYTES + PRC_WRITE_U32_BYTES)
 void prc_write_file_struct_header_bytes(uint8_t *out, uint32_t min_vers_for_read, uint32_t auth_vers);
 
 #endif

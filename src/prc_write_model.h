@@ -24,28 +24,78 @@
 #include "prc_write_tree.h"
 #include "prc_write_file_structure.h"
 
+/* Number of entries prc_write_prc_file puts in a file structure's
+   section_offset[] table: [0] file-struct-header (implicit, not counted by
+   the parser's own section_count semantics the same way -- see
+   prc_write_prc_file's comment) + schema_globals + tree + tessellation +
+   geometry. Shared here (rather than as a local literal inside
+   prc_write_prc_file) so anything that needs to independently recompute
+   the main header's byte layout -- e.g. a test reading start_offset/
+   end_offset back out of a written file -- uses the exact same value the
+   writer does instead of hardcoding it a second time. */
+#define PRC_WRITE_PRC_FILE_SECTION_COUNT 5u
+
+/* Byte positions of the main prc_header's dynamic fields (Table 5/35,
+   single-file-structure layout), computed once so prc_write_main_header_
+   bytes (the writer) and any independent reader (tests, diagnostics) agree
+   by construction instead of by two people counting bytes the same way. */
+typedef struct prc_write_main_header_layout_s
+{
+    size_t total_size;               /* total header size in bytes */
+    size_t section_offset_table_pos; /* byte offset of file_info[0].section_offset[0] */
+    size_t start_offset_pos;         /* byte offset of the model section's start_offset field */
+    size_t end_offset_pos;           /* byte offset of the model section's end_offset field */
+} prc_write_main_header_layout;
+
+/* Fills `out` with the byte layout of a single-file-structure main header
+   whose one file structure has `section_count` entries in its
+   section_offset[] table. */
+void prc_write_main_header_compute_layout(uint32_t section_count, prc_write_main_header_layout *out);
+
 /* PRC_TYPE_ASM_ModelFile (Table 36) section content: the "model" section,
    addressed via the main header's start_offset/end_offset pair rather than
-   the per-file-structure section_offset[] table. root_unique_id is the
-   ContentPRCRefBase.unique_id assigned by prc_write_tree_to_stream to the
-   tree's root product occurrence (its *root_unique_id_out); this codebase's
-   own reader (prc_api_prep_model_tree) does not actually consult this
-   reference -- it just takes the last product of the last file structure's
-   products[] array -- but other PRC consumers (e.g. Adobe Reader) do, so it
-   is written faithfully. file_struct_count is always 1 in this write
+   the per-file-structure section_offset[] table. Its
+   ProductOccurrenceReference.unique_id is a FAR REFERENCE to the file
+   structure that owns the actual root product occurrence -- NOT the root
+   product's own ContentPRCRefBase.unique_id (confirmed the hard way: an
+   external reader failed to resolve a reference written as the latter).
+   Always written {PRC_WRITE_FILE_STRUCT_UID0,0,0,0} here, matching the
+   single file structure this write facility ever produces, whose own
+   identity (main header's file_info[0].unique_id and the file-structure-
+   header's unique_id_file) is likewise always that same value -- all
+   non-zero, per prc_write_common.h's PRC_WRITE_FILE_STRUCT_UID0 doc
+   comment (zero was confirmed to be rejected as a null/invalid sentinel
+   by at least one external reader). This codebase's own reader
+   (prc_api_prep_model_tree) does not actually consult this reference --
+   it just takes the last product of the last file structure's products[]
+   array -- but other PRC consumers do, so it is still written correctly.
+   root_biased_index is ProductOccurrenceReference.root_index: a BIASED
+   (1-based, 0 = none) index into the referenced file structure's
+   products[] array, like every other cross-reference in this format --
+   pass prc_write_tree_to_stream's *root_biased_index_out. model_name is
+   the model file's own base.name (NULL for unnamed, in which case
+   nanoPRC's own reader falls back to the literal name "model" -- see
+   prc_parse_model_file). file_struct_count is always 1 in this write
    facility (single-file-structure PRC, no cross-file references). */
 int prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
-    uint32_t root_unique_id, uint32_t file_struct_count);
+    const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count);
 
 /* Top-level orchestration: writes a complete, single-file-structure .prc
    file to `filename`. Encodes globals/tree/tessellation independently,
    deflates each (plus the ASM_ModelFile section), then writes the file in
    one forward pass -- main header (placeholder offsets) -> file-structure
-   header -> model section -> schema+globals section -> tree section ->
-   tessellation section -- and finally seeks back to offset 0 to rewrite the
-   main header now that every section's real offset is known. That single
-   fseek+fwrite is the only backward seek in the whole write path. */
+   header -> schema+globals section -> tree section -> tessellation section
+   -> geometry section -> model section (last) -- and finally seeks back to
+   offset 0 to rewrite the main header now that every section's real
+   offset is known. That single fseek+fwrite is the only backward seek in
+   the whole write path. The model section is deliberately written LAST,
+   immediately after every regular section: confirmed against a real
+   PRC stream (extracted from examples/cube.pdf) that this is the actual
+   convention, and at least one third-party reader relies on the regular
+   sections being contiguous up to the model section's start_offset rather
+   than merely trusting each section's own stored offset. */
 int prc_write_prc_file(prc_context *ctx, const char *filename,
+    const char *model_name,
     const prc_write_global_tables *tables,
     const prc_write_tree_node *root,
     const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries);

@@ -17,11 +17,70 @@
 #ifndef PRC_WRITE_COMMON_H
 #define PRC_WRITE_COMMON_H
 
+#include <stdint.h>
+
 /* Internal shared declarations for the write facility (encoder). The public
    write-side types (prc_write_tolerance, prc_write_tol_resolve) live in
    prc_api.h; this header exists for internals shared between the encoder's
    translation units. */
 
 #include "../include/prc_api.h"
+#include "prc_data.h"
+#include "prc_bit.h"
+
+/* Byte sizes of the raw (non-bit-packed) little-endian fields used by the
+   two file-level headers this write facility produces manually --
+   prc_write_file_structure.c's file-structure header and
+   prc_write_model.c's main prc_header. Shared here so both files' byte-
+   layout math (and each file's own PRC_WRITE_*_SIZE constant/layout
+   function) is built from the same named units instead of separately
+   re-deriving "16" or "4" in each place. */
+#define PRC_WRITE_U32_BYTES 4u
+#define PRC_WRITE_UNIQUE_ID_BYTES 16u /* 4x uint32 */
+#define PRC_WRITE_SIGNATURE_BYTES 3u  /* "PRC" */
+
+/* Writes `v` as 4 little-endian bytes at `p`, returning p + 4. The one
+   raw-byte (non-bit-packed) primitive shared by prc_write_file_structure.c
+   and prc_write_model.c, exactly mirroring prc_read_32bits_unsigned's
+   little-endian convention in prc_parse_main.c. */
+uint8_t *prc_write_le_uint32(uint8_t *p, uint32_t v);
+
+/* Fixed, non-zero placeholder unique IDs (Table 5/35's 4x uint32 "unique
+   id" fields, used both raw in the two file-level headers and via
+   prc_bitwrite_uint32 in the model section's far reference). All-zero IDs
+   were confirmed the hard way to be rejected as a null/invalid sentinel by
+   at least one external reader ("Empty Scene Detected" persisted after
+   every graphics-visibility and reference-target fix, and cleared once
+   these were made non-zero) -- these do not need to be cryptographically
+   random for a single-file writer to work correctly, only non-zero and
+   mutually consistent everywhere the format requires equality. Comparing
+   against a real, known-good PRC stream (extracted from examples/cube.pdf)
+   confirmed the required equalities: the main header's per-file-structure
+   file_info[0].unique_id must equal that file structure's own embedded
+   unique_id_file, and the model section's far reference to "the file
+   structure owning the root product" must equal that same value too --
+   PRC_WRITE_FILE_STRUCT_UID0 is used for all three. PRC_WRITE_FILE_UID0
+   (the overall file's own identity) and PRC_WRITE_APP_UID0 (authoring
+   application identity) are independent of it and of each other in the
+   real file, so distinct placeholder values are used for each. A future
+   revision could generate these per call instead of reusing fixed values. */
+#define PRC_WRITE_FILE_UID0 1u
+#define PRC_WRITE_APP_UID0 2u
+#define PRC_WRITE_FILE_STRUCT_UID0 3u
+
+/* Writes a 4x uint32 unique id {word0, 0, 0, 0} as raw little-endian bytes
+   at `p`, returning p + 16 (PRC_WRITE_UNIQUE_ID_BYTES). */
+uint8_t *prc_write_le_unique_id(uint8_t *p, uint32_t word0);
+
+/* Writes ContentPRCBase/ContentPRCRefBase's `name` field (Table 31): bit
+   same=1 with no following string if `name` is NULL (matching this write
+   facility's long-standing "no name" default), else same=0 followed by
+   `name`'s bytes. Shared by every translation unit that emits a name --
+   parts, product occurrences, and the model file -- since it's the one
+   piece of write-side name support to add rather than duplicate; see
+   prc_api_write_node's name/part_name fields and prc_api_write_prc_file's
+   model_name parameter in include/prc_api.h for the public entry points
+   that supply it. */
+int prc_write_name(prc_context *ctx, prc_bit_write_state *s, const char *name);
 
 #endif

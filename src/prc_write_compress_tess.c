@@ -566,7 +566,11 @@ static int
 prc_encode_edge_basis(prc_vec3 E0, prc_vec3 E1, prc_vec3 E3,
     prc_vec3 *x_out, prc_vec3 *y_out, prc_vec3 *z_out, prc_vec3 *origin_out)
 {
-    prc_vec3 x, y, z, z_temp, w, origin;
+    prc_vec3 x, z, z_temp, w, origin;
+    prc_vec3 y = { 0.0, 0.0, 0.0 }; /* always overwritten before use; silences a
+                                       false-positive uninitialized-use warning
+                                       the compiler can't resolve across the
+                                       use_alternate_basis branches */
     prc_basis basis;
     int code;
     uint8_t use_alternate_basis = 0;

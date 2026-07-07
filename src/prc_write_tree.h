@@ -25,46 +25,24 @@
    assembly tree, the exact inverse of prc_parse_file_tree (which dispatches
    to prc_parse_parts / prc_parse_product_occurrence in prc_parse_tree.c).
 
-   A representation item wraps one tessellation-section entry: PRC_WRITE_RI_
-   SURFACE writes PRC_TYPE_RI_PolyBrepModel (used for tessellated surface
-   geometry -- NOT exact B-Rep, which is out of scope), PRC_WRITE_RI_WIRE
-   writes PRC_TYPE_RI_PolyWire (line/polyline geometry). */
-typedef enum prc_write_ri_kind_e
-{
-    PRC_WRITE_RI_SURFACE = 0,
-    PRC_WRITE_RI_WIRE = 1
-} prc_write_ri_kind;
+   prc_write_ri_kind, prc_write_rep_item, and prc_write_tree_node are
+   aliases of the public prc_api_write_ri_kind_t / prc_api_write_rep_item /
+   prc_api_write_node (include/prc_api.h) -- see those types' doc comments
+   for field semantics. Aliased rather than redefined so the internal
+   encoder and the public API can never drift apart. A representation item
+   wraps one tessellation-section entry: PRC_WRITE_RI_SURFACE writes
+   PRC_TYPE_RI_PolyBrepModel (used for tessellated surface geometry -- NOT
+   exact B-Rep, which is out of scope), PRC_WRITE_RI_WIRE writes
+   PRC_TYPE_RI_PolyWire (line/polyline geometry). */
+typedef prc_api_write_ri_kind_t prc_write_ri_kind;
+#define PRC_WRITE_RI_SURFACE PRC_API_WRITE_RI_SURFACE
+#define PRC_WRITE_RI_WIRE PRC_API_WRITE_RI_WIRE
 
-typedef struct prc_write_rep_item_s
-{
-    prc_write_ri_kind kind;
-    uint32_t biased_tessellation_index; /* 1-based index into the file's
-                                            tessellation-section array */
-    uint8_t  is_closed;                 /* PRC_WRITE_RI_SURFACE only */
-} prc_write_rep_item;
+typedef prc_api_write_rep_item prc_write_rep_item;
 
-/* One node of the caller-supplied product/part tree. A node with
-   num_rep_items > 0 owns a part definition (with its own bounding box);
-   every node -- with or without a part -- becomes one product occurrence.
-   The tree is walked iteratively (explicit heap work stack): depth is
+/* The tree is walked iteratively (explicit heap work stack): depth is
    caller-controlled input, so no native recursion is used. */
-typedef struct prc_write_tree_node_s
-{
-    const prc_write_rep_item *rep_items;
-    uint32_t num_rep_items;
-    double bbox_min[3];
-    double bbox_max[3];
-
-    uint8_t has_transform;
-    uint8_t is_identity;   /* ignored if has_transform == 0; when 1, no
-                              transform is written at all (has_transform is
-                              forced to 0 on the wire -- identity needs none) */
-    double  transform[16]; /* column-major 4x4 (PRC_TYPE_MISC_GeneralTransformation),
-                               used only if has_transform && !is_identity */
-
-    struct prc_write_tree_node_s * const *children;
-    uint32_t num_children;
-} prc_write_tree_node;
+typedef prc_api_write_node prc_write_tree_node;
 
 /* Encodes the whole tree rooted at `root` into the current file structure's
    Table 47 section content (tag + parts[] + products[] + the trailing
@@ -76,9 +54,15 @@ typedef struct prc_write_tree_node_s
    unique_id values (ContentPRCRefBase.unique_id) are assigned sequentially
    in that same post-order, starting at 1.
 
-   *root_unique_id_out (if non-NULL) receives the root's assigned unique_id,
-   which prc_write_model.c's ASM_ModelFile root reference needs. */
+   *root_biased_index_out (if non-NULL) receives the root's BIASED (1-based)
+   index into this file structure's products[] array -- which, since the
+   root is always written last, equals the total product count. This is
+   the value prc_write_model.c's ASM_ModelFile root reference needs for its
+   ProductOccurrenceReference.root_index field: confirmed against a real
+   PRC stream that root_index follows the same biased-index convention
+   (0 = none) as every other cross-reference in this format, not a plain
+   0-based array index as its parser-side field name might suggest. */
 int prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
-    const prc_write_tree_node *root, uint32_t *root_unique_id_out);
+    const prc_write_tree_node *root, uint32_t *root_biased_index_out);
 
 #endif

@@ -677,8 +677,12 @@ PRC_EXPORT int prc_api_create_model_tree(prc_context *ctx, prc_api_data data, pr
 
 /* ------------------------------------------------------------------ */
 /* Write facility: public types.                                       */
-/* Reserved for the PRC encoder; prc_api_write_* entry points will be  */
-/* declared here as the write facility lands.                          */
+/*                                                                      */
+/* Not yet exposed here: per-file color/material/style/picture tables   */
+/* (globals section entries that representation items could reference  */
+/* by index) -- prc_api_write_prc_file always writes an empty table, so */
+/* every representation item gets the reader's default appearance.     */
+/* File a request upstream if you need materials/colors sooner.        */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -732,6 +736,195 @@ static PRC_INLINE prc_write_tolerance prc_write_tol_relative(double fraction)
  * @return Resolved tolerance in mm, clamped to a 1e-7 mm (0.1 nm) practical floor.
  */
 PRC_EXPORT double prc_write_tol_resolve(prc_context *ctx, prc_write_tolerance tol, double bbox_diagonal);
+
+/**
+ * @brief Representation-item kind for prc_api_write_rep_item.
+ *
+ * SURFACE writes a PRC_TYPE_RI_PolyBrepModel representation item (a
+ * tessellated *surface* -- triangles, not exact B-Rep geometry, which this
+ * write facility does not produce). WIRE writes a PRC_TYPE_RI_PolyWire
+ * representation item (line segments / polylines).
+ */
+typedef enum
+{
+    PRC_API_WRITE_RI_SURFACE = 0,
+    PRC_API_WRITE_RI_WIRE = 1
+} prc_api_write_ri_kind_t;
+
+/**
+ * @brief One representation item attached to a prc_api_write_node.
+ *
+ * A representation item does not carry geometry itself -- it points at one
+ * entry of the tessellation array passed to prc_api_write_prc_file.
+ */
+typedef struct prc_api_write_rep_item_s
+{
+    /** SURFACE or WIRE; must match the referenced tessellation entry's kind. */
+    prc_api_write_ri_kind_t kind;
+    /** 1-based index into the prc_api_write_prc_file `tess_entries` array
+        (index 0 of that array is biased_tessellation_index == 1). A value
+        of 0 is invalid -- every representation item must reference a real
+        tessellation entry. */
+    uint32_t biased_tessellation_index;
+    /** SURFACE only: 1 if the tessellated surface is a closed (watertight)
+        shell, 0 otherwise. Ignored for WIRE. */
+    uint8_t  is_closed;
+} prc_api_write_rep_item;
+
+/**
+ * @brief One polyline or line segment for a WIRE tessellation entry.
+ *
+ * A line segment is an element with num_vertices == 2 and is_closed == 0.
+ * A polyline is an element with num_vertices >= 2. Setting is_closed
+ * implies a closing edge back to the first vertex; is_continuous marks
+ * that this element shares its first vertex with the previous one (a
+ * pure rendering hint -- it does not change how vertices are encoded).
+ * Vertex positions are deduplicated (exact float match) across every
+ * element of the same tessellation entry automatically.
+ */
+typedef struct prc_api_write_wire_element_s
+{
+    const float *positions;     /**< 3 floats per vertex: x, y, z. */
+    uint32_t     num_vertices;
+    uint8_t      is_closed;
+    uint8_t      is_continuous;
+    /** 4 floats (RGBA) per vertex, or NULL for no per-vertex color. If any
+        element of the tessellation entry supplies colors, every vertex of
+        every element gets a color -- elements left NULL are filled with
+        opaque white. */
+    const float *colors;
+} prc_api_write_wire_element;
+
+/**
+ * @brief Kind selector for prc_api_write_tessellation.
+ */
+typedef enum
+{
+    /** Triangulated surface: positions/tri_indices/etc below. */
+    PRC_API_WRITE_TESS_KIND_TRIANGLES = 0,
+    /** Line/polyline geometry: wire_elements below. */
+    PRC_API_WRITE_TESS_KIND_WIRE = 1
+} prc_api_write_tess_kind_t;
+
+/**
+ * @brief One entry of the tessellation array passed to prc_api_write_prc_file.
+ *
+ * Exactly one field group is read, selected by `kind`. There is no
+ * deduplication or quantization on the TRIANGLES path -- positions are
+ * stored as supplied; use prc_write_tol_resolve if you want to pre-weld
+ * vertices yourself before calling in.
+ */
+typedef struct prc_api_write_tessellation_s
+{
+    prc_api_write_tess_kind_t kind;
+
+    /* --- PRC_API_WRITE_TESS_KIND_TRIANGLES --- */
+    const double *positions;       /**< 3 doubles per vertex. */
+    uint32_t      num_positions;
+    /** 3 doubles per normal, or NULL to have the encoder compute one flat
+        normal per face group (see face_tri_counts) from that face's first
+        triangle. */
+    const double *normals;
+    uint32_t      num_normals;
+    /** 3 vertex indices per triangle (into `positions`). */
+    const uint32_t *tri_indices;
+    /** 3 normal indices per triangle (into `normals`), or NULL if `normals`
+        is NULL. */
+    const uint32_t *norm_indices;
+    uint32_t      num_triangles;
+    /** Number of consecutive triangles (from tri_indices/norm_indices, in
+        order) belonging to each face group; must sum to num_triangles.
+        Each face group gets its own normal (computed or supplied). */
+    const uint32_t *face_tri_counts;
+    uint32_t      num_faces;
+
+    /* --- PRC_API_WRITE_TESS_KIND_WIRE --- */
+    const prc_api_write_wire_element *wire_elements;
+    uint32_t      num_wire_elements;
+} prc_api_write_tessellation;
+
+/**
+ * @brief One node of the product/part assembly tree passed to
+ * prc_api_write_prc_file.
+ *
+ * A node with rep_items attached owns a part definition (with the given
+ * bounding box); every node -- with or without a part -- becomes one
+ * product occurrence in the output file. Nest sub-assemblies via
+ * `children`. Pass a single node with num_children == 0 for the common
+ * case of one flat part.
+ */
+typedef struct prc_api_write_node_s
+{
+    const prc_api_write_rep_item *rep_items;
+    uint32_t num_rep_items;
+    /** Axis-aligned bounding box of this node's geometry, in the same
+        units as its tessellation entries' positions. Ignored if
+        num_rep_items == 0. */
+    double bbox_min[3];
+    double bbox_max[3];
+
+    /** Name of this node's product occurrence, as shown in a reader's
+        model tree (e.g. Adobe Reader/Acrobat's "Model Tree" panel), or
+        NULL for an unnamed occurrence (readers typically fall back to a
+        generic label like "node"). */
+    const char *name;
+    /** Name of this node's part definition -- the entry a reader's model
+        tree shows for the underlying geometry/body, distinct from the
+        occurrence name above. Only meaningful if num_rep_items > 0; NULL
+        for an unnamed part. */
+    const char *part_name;
+
+    /** 1 to attach a placement transform to this node (e.g. to position a
+        child within its parent's coordinate system), 0 for none. */
+    uint8_t has_transform;
+    /** Ignored if has_transform == 0. 1 means the identity transform --
+        equivalent to omitting a transform, and cheaper on the wire, so
+        prefer has_transform = 0 over has_transform = 1 with is_identity =
+        1 when you know a node is unplaced. */
+    uint8_t is_identity;
+    /** Column-major 4x4 placement matrix, used only if has_transform and
+        not is_identity. */
+    double  transform[16];
+
+    /** Array of `num_children` pointers to child nodes (sub-assemblies).
+        NULL/0 for a leaf node. */
+    struct prc_api_write_node_s * const *children;
+    uint32_t num_children;
+} prc_api_write_node;
+
+/**
+ * @brief Write a complete, single-file-structure .prc file to `filename`.
+ *
+ * This is the top-level entry point for the write facility. It encodes
+ * every entry of `tess_entries`, walks the product/part tree rooted at
+ * `root` (iteratively -- tree depth is caller data, not C call-stack
+ * depth), and assembles a full ISO 14739 PRC byte stream (schema/globals,
+ * tree, tessellation, geometry, and model-file sections, each
+ * zlib-deflated), including a correct main-header section-offset table.
+ * The result is a plain .prc file, not yet embedded in a PDF 3D annotation
+ * -- pass it to your own PDF tooling (or a future prc_pdf_embed_* entry
+ * point, not yet implemented) to get a 3D PDF.
+ *
+ * @param ctx              Active context.
+ * @param filename         Output file path.
+ * @param model_name       Name shown for the top-level "model" entry in a
+ *                         reader's model tree, or NULL to let the reader
+ *                         fall back to its own default label (e.g.
+ *                         nanoPRC's own reader assigns unnamed models the
+ *                         literal name "model").
+ * @param root             Root of the product/part tree to encode. Every
+ *                         prc_api_write_rep_item reachable from it must
+ *                         reference a valid entry of `tess_entries`.
+ * @param tess_entries     Array of tessellations referenced by rep items'
+ *                         biased_tessellation_index (1-based: entry 0 of
+ *                         this array is index 1).
+ * @param num_tess_entries Number of entries in tess_entries.
+ * @return 0 on success, negative PRC_ERROR_* code on failure (see
+ *         prc_api_print_error_stack for details).
+ */
+PRC_EXPORT int prc_api_write_prc_file(prc_context *ctx, const char *filename,
+    const char *model_name, const prc_api_write_node *root,
+    const prc_api_write_tessellation *tess_entries, uint32_t num_tess_entries);
 
 #ifdef __cplusplus
 }

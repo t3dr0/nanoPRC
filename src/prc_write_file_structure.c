@@ -89,6 +89,27 @@ fail:
 }
 
 int
+prc_write_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s)
+{
+    if (ctx == NULL || s == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_geometry_section_to_stream: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_FileStructureGeometry) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* base.attribute_count */
+    if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;     /* base.name.same */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* exact_geometry.topo_context_count */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* user_data.stream_size */
+
+    return 0;
+
+fail:
+    return s->error ? PRC_ERROR_MEMORY : PRC_ERROR_INTERNAL;
+}
+
+int
 prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len, uint8_t **out, size_t *out_len)
 {
     z_stream strm;
@@ -138,27 +159,19 @@ prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len, uint8_t 
     return 0;
 }
 
-static uint8_t *
-prc_write_le_uint32(uint8_t *p, uint32_t v)
-{
-    p[0] = (uint8_t)(v & 0xffu);
-    p[1] = (uint8_t)((v >> 8) & 0xffu);
-    p[2] = (uint8_t)((v >> 16) & 0xffu);
-    p[3] = (uint8_t)((v >> 24) & 0xffu);
-    return p + 4;
-}
-
 void
 prc_write_file_struct_header_bytes(uint8_t *out, uint32_t min_vers_for_read, uint32_t auth_vers)
 {
     uint8_t *p = out;
-    int i;
 
     p[0] = 'P'; p[1] = 'R'; p[2] = 'C';
-    p += 3;
+    p += PRC_WRITE_SIGNATURE_BYTES;
     p = prc_write_le_uint32(p, min_vers_for_read);
     p = prc_write_le_uint32(p, auth_vers);
-    for (i = 0; i < 4; i++) p = prc_write_le_uint32(p, 0); /* unique_id_file */
-    for (i = 0; i < 4; i++) p = prc_write_le_uint32(p, 0); /* unique_id_application */
-    p = prc_write_le_uint32(p, 0);                          /* file_count (embedded uncompressed files) */
+    /* Must equal the main header's file_info[0].unique_id and the model
+       section's far reference to this file structure -- see
+       PRC_WRITE_FILE_STRUCT_UID0's doc comment in prc_write_common.h. */
+    p = prc_write_le_unique_id(p, PRC_WRITE_FILE_STRUCT_UID0);
+    p = prc_write_le_unique_id(p, PRC_WRITE_APP_UID0);
+    p = prc_write_le_uint32(p, 0); /* file_count (embedded uncompressed files) */
 }

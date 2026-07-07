@@ -21,27 +21,39 @@
 /* ---- small shared field-group writers, matching prc_parse_common.c ---- */
 
 static int
-prc_write_content_prc_base_empty(prc_context *ctx, prc_bit_write_state *s)
+prc_write_content_prc_base_named(prc_context *ctx, prc_bit_write_state *s, const char *name)
 {
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1; /* attribute_count */
-    if (prc_bitwrite_bit(ctx, s, 1) != 0) return -1;     /* name.same */
+    if (prc_write_name(ctx, s, name) != 0) return -1;
     return 0;
 }
 
-/* ContentPRCRefBase + same_graphics=0 + GraphicsContent, all left at
-   inert defaults except unique_id -- the one field prc_write_tree assigns
-   meaningfully (sequential product unique_id, per session spec). */
 static int
-prc_write_base_with_graphics_default(prc_context *ctx, prc_bit_write_state *s, uint32_t unique_id)
+prc_write_content_prc_base_empty(prc_context *ctx, prc_bit_write_state *s)
 {
-    if (prc_write_content_prc_base_empty(ctx, s) != 0) return -1;
+    return prc_write_content_prc_base_named(ctx, s, NULL);
+}
+
+/* ContentPRCRefBase + same_graphics=0 + GraphicsContent, left at inert
+   defaults except unique_id (sequential product unique_id, per session
+   spec) and behavior_bit_field1's PRC_GRAPHICS_Show bit. Confirmed the
+   hard way: leaving behavior_bit_field1 at 0 (no bits set) leaves every
+   entity unmarked for display, and an external reader reported "Empty
+   Scene Detected" even though the file parsed correctly and the far
+   reference to the root product resolved -- PRC_GRAPHICS_Show must be set
+   on an entity for it to actually be shown, it is not implied by default
+   or by mere presence in the tree. */
+static int
+prc_write_base_with_graphics_default(prc_context *ctx, prc_bit_write_state *s, uint32_t unique_id, const char *name)
+{
+    if (prc_write_content_prc_base_named(ctx, s, name) != 0) return -1;
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* nonpersistent_id_cad */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* unique_id_cad */
     if (prc_bitwrite_uint32(ctx, s, unique_id) != 0) return -1; /* unique_id */
     if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1;            /* same_graphics */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* biased_layer_index */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* biased_index_of_line_style */
-    if (prc_bitwrite_uint8(ctx, s, 0) != 0) return -1;          /* behavior_bit_field1 */
+    if (prc_bitwrite_uint8(ctx, s, (uint8_t)PRC_GRAPHICS_Show) != 0) return -1; /* behavior_bit_field1 */
     if (prc_bitwrite_uint8(ctx, s, 0) != 0) return -1;          /* behavior_bit_field2 */
     return 0;
 }
@@ -167,7 +179,7 @@ prc_write_rep_item_entry(prc_context *ctx, prc_bit_write_state *s, const prc_wri
     uint32_t tag = (ri->kind == PRC_WRITE_RI_WIRE) ? PRC_TYPE_RI_PolyWire : PRC_TYPE_RI_PolyBrepModel;
 
     if (prc_bitwrite_uint32(ctx, s, tag) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, 0) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, 0, NULL) != 0) return -1;
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;                          /* biased_index_local_coordinate_system */
     if (prc_bitwrite_uint32(ctx, s, ri->biased_tessellation_index) != 0) return -1; /* biased_index_tessellation */
 
@@ -185,7 +197,7 @@ prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_no
     uint32_t k;
 
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_PartDefinition) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, 0) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, 0, node->part_name) != 0) return -1;
 
     if (prc_bitwrite_double(ctx, s, node->bbox_min[0]) != 0) return -1;
     if (prc_bitwrite_double(ctx, s, node->bbox_min[1]) != 0) return -1;
@@ -212,7 +224,7 @@ prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree
     uint8_t write_transform = (uint8_t)(node->has_transform && !node->is_identity);
 
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_ProductOccurrence) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, unique_id) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, unique_id, node->name) != 0) return -1;
 
     /* ReferencesOfProductOccurrence */
     if (prc_bitwrite_uint32(ctx, s, biased_part_index) != 0) return -1; /* biased_index_part */
@@ -256,7 +268,7 @@ prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree
 
 int
 prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
-    const prc_write_tree_node *root, uint32_t *root_unique_id_out)
+    const prc_write_tree_node *root, uint32_t *root_biased_index_out)
 {
     prc_write_tree_flat flat;
     uint32_t i;
@@ -304,12 +316,19 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_FileStructure) != 0) goto fail;
     if (prc_write_content_prc_base_empty(ctx, s) != 0) goto fail;
     if (prc_bitwrite_uint32(ctx, s, flat.count + 1) != 0) goto fail; /* next_available_index */
-    if (prc_bitwrite_uint32(ctx, s, flat.count - 1) != 0) goto fail; /* index_product_occurrence: the root */
+    /* index_product_occurrence: also a BIASED (1-based) index into
+       products[], like root_index in the model section's
+       ProductOccurrenceReference -- confirmed against a real PRC stream,
+       whose index_product_occurrence equaled its product count, not
+       product count minus one. Since the root is always written last,
+       that biased index equals flat.count, same as root_biased_index_out
+       below. */
+    if (prc_bitwrite_uint32(ctx, s, flat.count) != 0) goto fail; /* index_product_occurrence: the root */
 
     if (prc_write_user_data_empty(ctx, s) != 0) goto fail;
 
-    if (root_unique_id_out != NULL)
-        *root_unique_id_out = flat.count; /* root is last: unique_id == count */
+    if (root_biased_index_out != NULL)
+        *root_biased_index_out = flat.count; /* root is last: biased index == count */
 
     ret = 0;
     goto cleanup;

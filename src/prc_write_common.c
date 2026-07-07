@@ -14,7 +14,46 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <string.h>
 #include "prc_write_common.h"
+
+int
+prc_write_name(prc_context *ctx, prc_bit_write_state *s, const char *name)
+{
+    if (name == NULL)
+        return prc_bitwrite_bit(ctx, s, 1); /* same = 1: no name */
+
+    {
+        prc_string str;
+
+        if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1; /* same = 0: name follows */
+        memset(&str, 0, sizeof(str));
+        /* prc_bitwrite_string only reads through this pointer. */
+        str.string = (unsigned char *)name;
+        str.size = (prc_unsigned_int)strlen(name);
+        return prc_bitwrite_string(ctx, s, &str);
+    }
+}
+
+uint8_t *
+prc_write_le_uint32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v & 0xffu);
+    p[1] = (uint8_t)((v >> 8) & 0xffu);
+    p[2] = (uint8_t)((v >> 16) & 0xffu);
+    p[3] = (uint8_t)((v >> 24) & 0xffu);
+    return p + 4;
+}
+
+uint8_t *
+prc_write_le_unique_id(uint8_t *p, uint32_t word0)
+{
+    p = prc_write_le_uint32(p, word0);
+    p = prc_write_le_uint32(p, 0);
+    p = prc_write_le_uint32(p, 0);
+    p = prc_write_le_uint32(p, 0);
+    return p;
+}
 
 /* Floor is 1e-7 mm (0.1 nm), NOT FLT_MIN: coordinates get divided by the
    tolerance to form int32 grid indices, and dividing any physical coordinate
