@@ -2242,20 +2242,33 @@ prc_api_helper_get_attributes(prc_context *ctx, prc_api_attributes *api_attribut
 }
 
 static int
-prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product)
+prc_api_helper_init_model_node(prc_context *ctx, prc_api_product *product,
+    const prc_type_asm_modelfile *model_in)
 {
-    size_t len_name = 0;
-    char model_name[] = "Model";
+    static const char default_model_name[] = "Model";
+    const unsigned char *file_name = NULL;
+    size_t len_name;
+
+    /* Prefer the name actually stored in the PRC_TYPE_ASM_ModelFile's own
+       ContentPRCBase (same == 0 means a name follows), falling back to the
+       generic "Model" placeholder only when the file carries none -- most
+       PRC producers never set this field, hence the fallback. */
+    if (model_in != NULL && model_in->base.name.same == 0 &&
+        model_in->base.name.name.string != NULL)
+    {
+        file_name = model_in->base.name.name.string;
+    }
 
     product->is_model = 1;
-    len_name = strlen((const char *)model_name);
+    len_name = (file_name != NULL) ? strlen((const char *)file_name)
+                                    : strlen(default_model_name);
     product->name = (char *)prc_calloc(ctx, len_name + 1, sizeof(char));
     if (product->name == NULL)
     {
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_initialize_node\n");
         return PRC_ERROR_MEMORY;
     }
-    memcpy(product->name, model_name, len_name);
+    memcpy(product->name, (file_name != NULL) ? (const char *)file_name : default_model_name, len_name);
     product->type = PRC_API_NODE_PRODUCT;
     product->num_children = 1;
     product->part = NULL;
@@ -3196,7 +3209,7 @@ prc_api_helper_first_node(prc_context *ctx, prc_api_data data, uint32_t num_file
     int code;
 
     /* Initialize our model node */
-    code = prc_api_helper_init_model_node(ctx, product_tree);
+    code = prc_api_helper_init_model_node(ctx, product_tree, files[last_file_index].model);
     if (code < 0)
     {
         prc_error(ctx, code, "Failed in prc_api_helper_init_model_node\n");
