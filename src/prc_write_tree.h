@@ -61,8 +61,17 @@ typedef prc_api_write_node prc_write_tree_node;
    ProductOccurrenceReference.root_index field: confirmed against a real
    PRC stream that root_index follows the same biased-index convention
    (0 = none) as every other cross-reference in this format, not a plain
-   0-based array index as its parser-side field name might suggest. */
+   0-based array index as its parser-side field name might suggest.
+
+   default_biased_style_index is a biased (1-based) index into the
+   globals style table (prc_write_global.h), applied to every part,
+   product occurrence, and representation item's GraphicsContent -- or 0
+   for none. Pass 0 only if you have some other reason to believe the
+   reader you're targeting tolerates a completely styleless file; every
+   real-world PRC producer checked during this write facility's
+   development always attaches at least a default material somewhere. */
 int prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
-    const prc_write_tree_node *root, uint32_t *root_biased_index_out);
+    const prc_write_tree_node *root, uint32_t *root_biased_index_out,
+    uint32_t default_biased_style_index);
 
 #endif

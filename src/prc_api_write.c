@@ -51,3 +51,33 @@ prc_api_write_prc_file(prc_context *ctx, const char *filename,
     prc_write_global_tables_free(ctx, &tables);
     return code;
 }
+
+int
+prc_api_write_prc_buffer(prc_context *ctx,
+    const char *model_name, const prc_api_write_node *root,
+    const prc_api_write_tessellation *tess_entries, uint32_t num_tess_entries,
+    uint8_t **out_buf, size_t *out_size)
+{
+    prc_write_global_tables tables;
+    int code;
+
+    if (ctx == NULL || root == NULL || out_buf == NULL || out_size == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_api_write_prc_buffer: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    if (prc_write_global_tables_init(ctx, &tables) != 0)
+        return PRC_ERROR_MEMORY;
+
+    code = prc_write_prc_buffer(ctx, model_name, &tables, root, tess_entries, num_tess_entries, out_buf, out_size);
+
+    prc_write_global_tables_free(ctx, &tables);
+    return code;
+}
+
+void
+prc_api_write_prc_buffer_free(prc_context *ctx, uint8_t *buf)
+{
+    prc_free(ctx, buf);
+}

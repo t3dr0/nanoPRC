@@ -80,23 +80,38 @@ void prc_write_main_header_compute_layout(uint32_t section_count, prc_write_main
 int prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
     const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count);
 
-/* Top-level orchestration: writes a complete, single-file-structure .prc
-   file to `filename`. Encodes globals/tree/tessellation independently,
-   deflates each (plus the ASM_ModelFile section), then writes the file in
-   one forward pass -- main header (placeholder offsets) -> file-structure
-   header -> schema+globals section -> tree section -> tessellation section
-   -> geometry section -> model section (last) -- and finally seeks back to
-   offset 0 to rewrite the main header now that every section's real
-   offset is known. That single fseek+fwrite is the only backward seek in
-   the whole write path. The model section is deliberately written LAST,
-   immediately after every regular section: confirmed against a real
-   PRC stream (extracted from examples/cube.pdf) that this is the actual
-   convention, and at least one third-party reader relies on the regular
-   sections being contiguous up to the model section's start_offset rather
-   than merely trusting each section's own stored offset. */
+/* Top-level orchestration: assembles a complete, single-file-structure PRC
+   byte stream into one heap buffer (caller frees with prc_free). Encodes
+   globals/tree/tessellation independently, deflates each (plus the
+   ASM_ModelFile section), then -- since every section's compressed size is
+   known before anything is written -- computes the whole file's layout up
+   front and writes it in a single forward pass: main header -> file-
+   structure header -> schema+globals section -> tree section ->
+   tessellation section -> geometry section -> model section (last). The
+   model section is deliberately placed LAST, immediately after every
+   regular section: confirmed against a real PRC stream (extracted from
+   examples/cube.pdf) that this is the actual convention, and at least one
+   third-party reader relies on the regular sections being contiguous up to
+   the model section's start_offset rather than merely trusting each
+   section's own stored offset. This is the one real encoder; both
+   prc_write_prc_file (below) and the PDF-embedding path build on it rather
+   than re-deriving the section layout independently. `tables` is mutated:
+   prc_write_add_default_style adds one default gray material/style to it
+   before the globals section is written, so every part/product/rep-item
+   in the tree can reference a real style instead of leaving the file
+   with a completely empty style table (see prc_write_tree_to_stream's
+   default_biased_style_index doc comment for why). */
+int prc_write_prc_buffer(prc_context *ctx,
+    const char *model_name,
+    prc_write_global_tables *tables,
+    const prc_write_tree_node *root,
+    const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries,
+    uint8_t **out_buf, size_t *out_size);
+
+/* Thin wrapper: prc_write_prc_buffer, then a single fwrite to `filename`. */
 int prc_write_prc_file(prc_context *ctx, const char *filename,
     const char *model_name,
-    const prc_write_global_tables *tables,
+    prc_write_global_tables *tables,
     const prc_write_tree_node *root,
     const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries);
 

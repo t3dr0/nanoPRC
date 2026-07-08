@@ -34,6 +34,15 @@ typedef struct prc_encode_mesh_s
     uint32_t  num_positions;
     uint32_t *tri_indices;     /* num_triangles * 3, into positions[], after dedup + degenerate removal */
     uint32_t  num_triangles;
+    /* num_triangles entries: tri_orig_index[k] is the index into the
+       ORIGINAL, pre-preprocessing tri_indices/face array that surviving
+       triangle k came from. Surviving triangles keep their relative input
+       order (preprocessing only ever drops degenerate ones), so this is
+       exactly the subsequence of 0..original_num_triangles-1 that
+       survived -- needed to correctly align caller-supplied per-triangle
+       data (face groups, per-corner normals) with the post-preprocessing
+       triangle order every later encoding step operates on. */
+    uint32_t *tri_orig_index;
     prc_encode_edge *edges;    /* one entry per unique undirected edge in the clean index array */
     uint32_t  num_edges;
     uint32_t *tri_component;   /* num_triangles entries: connected-component label per triangle */
@@ -129,5 +138,23 @@ int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *sta
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
     uint8_t must_recalculate_normals);
+
+/* Full orchestration (Steps A through E) for one PRC_TYPE_TESS_3D_Compressed
+   tessellation entry, from raw caller-supplied geometry straight to bits:
+   preprocess (dedup + degenerate removal) -> traversal -> normal encoding
+   (C2 supplied-normals if `normals` is non-NULL, else C1 recalculated) ->
+   bitstream emission. Mirrors prc_write_tess_3d's input shape exactly
+   (same positions/normals/indices/face-group fields) so the two encoders
+   are interchangeable from the caller's side -- only the wire format and
+   these two extra parameters (tolerance, crease_angle_degrees; both only
+   meaningful for the encoder's own quantization/weld and C1's flat-normal
+   reconstruction) differ. face_tri_counts/num_faces may be NULL/0 to treat
+   the whole entry as one face. */
+int prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
+    const double *positions, uint32_t num_positions,
+    const double *normals, uint32_t num_normals,
+    const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
+    const uint32_t *face_tri_counts, uint32_t num_faces,
+    prc_write_tolerance tolerance, double crease_angle_degrees);
 
 #endif

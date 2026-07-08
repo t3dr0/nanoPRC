@@ -34,6 +34,7 @@
 typedef prc_api_write_tess_kind_t prc_write_tess_kind;
 #define PRC_WRITE_TESS_KIND_3D PRC_API_WRITE_TESS_KIND_TRIANGLES
 #define PRC_WRITE_TESS_KIND_WIRE PRC_API_WRITE_TESS_KIND_WIRE
+#define PRC_WRITE_TESS_KIND_COMPRESSED PRC_API_WRITE_TESS_KIND_COMPRESSED
 
 typedef prc_api_write_tessellation prc_write_tess_entry;
 

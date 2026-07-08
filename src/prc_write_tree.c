@@ -43,8 +43,20 @@ prc_write_content_prc_base_empty(prc_context *ctx, prc_bit_write_state *s)
    reference to the root product resolved -- PRC_GRAPHICS_Show must be set
    on an entity for it to actually be shown, it is not implied by default
    or by mere presence in the tree. */
+/* biased_style_index: biased (1-based) index into the globals style table
+   (see prc_write_global.h), or 0 for "no style" (inherit/default). Real-
+   world PRC producers apparently always attach at least a default
+   material somewhere in the tree -- files this write facility produced
+   with a genuinely empty style table (biased_style_index always 0)
+   round-tripped through nanoPRC's own parser and an independent PRC-to-
+   PDF converter's PARSER, but consistently failed to activate/render in
+   two independent real 3D-capable PDF viewers, even inside a byte-for-
+   byte copy of another, real file's own proven-working container --
+   narrowing the difference down to exactly this: no style/material data
+   anywhere in the file. */
 static int
-prc_write_base_with_graphics_default(prc_context *ctx, prc_bit_write_state *s, uint32_t unique_id, const char *name)
+prc_write_base_with_graphics_default(prc_context *ctx, prc_bit_write_state *s, uint32_t unique_id,
+    const char *name, uint32_t biased_style_index)
 {
     if (prc_write_content_prc_base_named(ctx, s, name) != 0) return -1;
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* nonpersistent_id_cad */
@@ -52,7 +64,7 @@ prc_write_base_with_graphics_default(prc_context *ctx, prc_bit_write_state *s, u
     if (prc_bitwrite_uint32(ctx, s, unique_id) != 0) return -1; /* unique_id */
     if (prc_bitwrite_bit(ctx, s, 0) != 0) return -1;            /* same_graphics */
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* biased_layer_index */
-    if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;         /* biased_index_of_line_style */
+    if (prc_bitwrite_uint32(ctx, s, biased_style_index) != 0) return -1; /* biased_index_of_line_style */
     if (prc_bitwrite_uint8(ctx, s, (uint8_t)PRC_GRAPHICS_Show) != 0) return -1; /* behavior_bit_field1 */
     if (prc_bitwrite_uint8(ctx, s, 0) != 0) return -1;          /* behavior_bit_field2 */
     return 0;
@@ -174,12 +186,13 @@ prc_write_tree_find_index(const prc_write_tree_flat *flat, const prc_write_tree_
 /* ---- per-entity writers ---- */
 
 static int
-prc_write_rep_item_entry(prc_context *ctx, prc_bit_write_state *s, const prc_write_rep_item *ri)
+prc_write_rep_item_entry(prc_context *ctx, prc_bit_write_state *s, const prc_write_rep_item *ri,
+    uint32_t biased_style_index)
 {
     uint32_t tag = (ri->kind == PRC_WRITE_RI_WIRE) ? PRC_TYPE_RI_PolyWire : PRC_TYPE_RI_PolyBrepModel;
 
     if (prc_bitwrite_uint32(ctx, s, tag) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, 0, NULL) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, 0, NULL, biased_style_index) != 0) return -1;
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1;                          /* biased_index_local_coordinate_system */
     if (prc_bitwrite_uint32(ctx, s, ri->biased_tessellation_index) != 0) return -1; /* biased_index_tessellation */
 
@@ -192,12 +205,13 @@ prc_write_rep_item_entry(prc_context *ctx, prc_bit_write_state *s, const prc_wri
 }
 
 static int
-prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_node *node)
+prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_node *node,
+    uint32_t biased_style_index)
 {
     uint32_t k;
 
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_PartDefinition) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, 0, node->part_name) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, 0, node->part_name, biased_style_index) != 0) return -1;
 
     if (prc_bitwrite_double(ctx, s, node->bbox_min[0]) != 0) return -1;
     if (prc_bitwrite_double(ctx, s, node->bbox_min[1]) != 0) return -1;
@@ -208,7 +222,7 @@ prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_no
 
     if (prc_bitwrite_uint32(ctx, s, node->num_rep_items) != 0) return -1;
     for (k = 0; k < node->num_rep_items; k++)
-        if (prc_write_rep_item_entry(ctx, s, &node->rep_items[k]) != 0) return -1;
+        if (prc_write_rep_item_entry(ctx, s, &node->rep_items[k], biased_style_index) != 0) return -1;
 
     if (prc_write_markup_data_empty(ctx, s) != 0) return -1;
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) return -1; /* number_views */
@@ -218,13 +232,14 @@ prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_no
 
 static int
 prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_node *node,
-    uint32_t unique_id, uint32_t biased_part_index, const prc_write_tree_flat *flat)
+    uint32_t unique_id, uint32_t biased_part_index, const prc_write_tree_flat *flat,
+    uint32_t biased_style_index)
 {
     uint32_t k;
     uint8_t write_transform = (uint8_t)(node->has_transform && !node->is_identity);
 
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_ProductOccurrence) != 0) return -1;
-    if (prc_write_base_with_graphics_default(ctx, s, unique_id, node->name) != 0) return -1;
+    if (prc_write_base_with_graphics_default(ctx, s, unique_id, node->name, biased_style_index) != 0) return -1;
 
     /* ReferencesOfProductOccurrence */
     if (prc_bitwrite_uint32(ctx, s, biased_part_index) != 0) return -1; /* biased_index_part */
@@ -268,7 +283,8 @@ prc_write_product(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree
 
 int
 prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
-    const prc_write_tree_node *root, uint32_t *root_biased_index_out)
+    const prc_write_tree_node *root, uint32_t *root_biased_index_out,
+    uint32_t default_biased_style_index)
 {
     prc_write_tree_flat flat;
     uint32_t i;
@@ -294,7 +310,7 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
     if (prc_bitwrite_uint32(ctx, s, parts_count) != 0) goto fail;
     for (i = 0; i < flat.count; i++)
         if (flat.order[i]->num_rep_items > 0)
-            if (prc_write_part(ctx, s, flat.order[i]) != 0) goto fail;
+            if (prc_write_part(ctx, s, flat.order[i], default_biased_style_index) != 0) goto fail;
 
     if (prc_bitwrite_uint32(ctx, s, flat.count) != 0) goto fail;
     {
@@ -307,7 +323,8 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
                 part_cursor++;
                 biased_part_index = part_cursor;
             }
-            if (prc_write_product(ctx, s, flat.order[i], i + 1, biased_part_index, &flat) != 0)
+            if (prc_write_product(ctx, s, flat.order[i], i + 1, biased_part_index, &flat,
+                    default_biased_style_index) != 0)
                 goto fail;
         }
     }

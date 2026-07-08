@@ -25,16 +25,17 @@
  * can do too.
  *
  * Usage:
- *     nano_prc_teapot_write [output.prc]
- * (defaults to "utah_teapot.prc" in the current directory if no path is
- * given). Open the result in any PRC-capable viewer (nanoPRC's own
- * nano_prc_viewer demo, Adobe Reader/Acrobat via a 3D-annotated PDF, or a
- * third-party PRC reader) to see the classic Utah teapot -- the sample
- * model created by Martin Newell at the University of Utah in 1975, a
- * de facto standard test object in computer graphics ever since. See
- * https://en.wikipedia.org/wiki/Utah_teapot for its history; the
- * control-point data used below (teapot_patches) is the classic 32-patch
- * Bezier formulation of that model.
+ *     nano_prc_teapot_write [output.prc] [output.pdf]
+ * (defaults to "utah_teapot.prc"/"utah_teapot.pdf" in the current directory
+ * if no paths are given). Writes both a plain .prc file and the same
+ * geometry embedded in a minimal 3D-annotated PDF (see Step 6 below); open
+ * either in any PRC-capable viewer (nanoPRC's own nano_prc_viewer demo,
+ * Adobe Reader/Acrobat, or a third-party PRC reader) to see the classic
+ * Utah teapot -- the sample model created by Martin Newell at the
+ * University of Utah in 1975, a de facto standard test object in computer
+ * graphics ever since. See https://en.wikipedia.org/wiki/Utah_teapot for
+ * its history; the control-point data used below (teapot_patches) is the
+ * classic 32-patch Bezier formulation of that model.
  *
  * THE THREE-LEVEL SHAPE OF THE WRITE API
  * ---------------------------------------------------------------------
@@ -535,6 +536,7 @@ teapot_build_mesh(double *positions, double *normals, uint32_t *tris, uint32_t *
 int main(int argc, char *argv[])
 {
     const char *output_path = (argc > 1) ? argv[1] : "utah_teapot.prc";
+    const char *pdf_path = (argc > 2) ? argv[2] : "utah_teapot.pdf";
     prc_context *ctx;
     double *positions;
     double *normals;
@@ -564,10 +566,27 @@ int main(int argc, char *argv[])
        norm_indices can reuse `tris` verbatim (the same vertex index
        selects both). That per-vertex normal is what makes shading vary
        smoothly across a whole patch instead of faceting at triangle/quad
-       boundaries; passing normals == NULL instead (as this demo used to)
-       asks the encoder to compute one flat normal per face group from
-       that face's first triangle, which is a reasonable default when you
-       don't have real per-vertex normals to hand, but looks faceted. */
+       boundaries; passing normals == NULL instead asks the encoder to
+       compute normals itself instead of using a supplied one, which is a
+       reasonable default when you don't have real per-vertex normals to
+       hand, but looks faceted.
+
+       kind = TRIANGLES (PRC_TYPE_TESS_3D), not COMPRESSED: a controlled,
+       isolated test (a plain non-degenerate cube, every other field held
+       constant) showed an independent PRC engine reads real geometry from
+       TRIANGLES but returns null geometry from COMPRESSED. It is NOT true
+       that real-world tessellation-only PRC producers generally pair
+       compressed tessellation with exact B-Rep geometry -- many generators
+       emit tessellation only -- so that is not an explanation for the
+       null-geometry result, and COMPRESSED remains a real, unresolved bug
+       in this write facility's encoder (or in the paired decoder) rather
+       than an inherently untested reader combination. Retested with the
+       has_faces fix, the prc_store_triangle_style decoder crash fix, and
+       the min_vers_for_read/auth_vers=10001 fix all applied: TRIANGLES
+       still reproduces the exact source triangle count (4096) via an
+       independent reader; COMPRESSED still comes back as null/empty
+       geometry -- none of today's fixes were the cause. Use TRIANGLES here
+       until that COMPRESSED bug is actually found. */
     prc_api_write_tessellation tess;
     memset(&tess, 0, sizeof(tess));
     tess.kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
@@ -647,71 +666,175 @@ int main(int argc, char *argv[])
         (unsigned)TEAPOT_TOTAL_VERTS, (unsigned)TEAPOT_TOTAL_TRIS, (unsigned)TEAPOT_TOTAL_FACES);
 
     /* model_name labels the top-level "model" entry itself -- the root of
-       the whole model tree, one level above root.name ("teapot"). */
-    code = prc_api_write_prc_file(ctx, output_path, "nanoPRC", &root, &tess, 1);
+       the whole model tree, one level above root.name ("teapot").
 
-    /* The geometry arrays were only needed for the duration of the call
-       above (prc_api_write_prc_file copies whatever it needs into the
-       encoded byte stream) -- safe to free them now regardless of
-       success or failure. */
-    free(positions);
-    free(normals);
-    free(tris);
-    free(face_tri_counts);
-
-    if (code != 0)
+       prc_api_write_prc_buffer does the same encoding prc_api_write_prc_file
+       does, but returns the complete PRC byte stream in memory instead of
+       writing it straight to disk -- so the exact same encoded bytes can be
+       (a) written out as a plain .prc file ourselves, and (b) embedded in a
+       PDF via prc_api_pdf_embed_prc below, without encoding the geometry
+       twice. */
     {
-        fprintf(stderr, "prc_api_write_prc_file failed (code %d)\n", code);
-        prc_api_print_error_stack(ctx);
-        prc_api_release_context(ctx);
-        return 1;
-    }
-    printf("Wrote %s\n", output_path);
+        uint8_t *prc_buf = NULL;
+        size_t prc_buf_size = 0;
+        FILE *out;
 
-    /* Step 6 (optional): read the file straight back, the same way
-       demos/quick_start does, as a sanity check that what we wrote is
-       actually well-formed. This is not required to use the write API --
-       it's here purely so this demo verifies its own output. */
-    {
-        prc_api_data data;
-        prc_api_product *model_tree = NULL;
-        uint32_t num_parts, num_products, num_markups;
-        uint32_t total_tess = 0, total_line_tess = 0;
+        code = prc_api_write_prc_buffer(ctx, "nanoPRC", &root, &tess, 1, &prc_buf, &prc_buf_size);
 
-        data = prc_api_open_contents(ctx, output_path);
-        if (data == NULL)
-        {
-            fprintf(stderr, "verification: prc_api_open_contents failed\n");
-            prc_api_print_error_stack(ctx);
-            prc_api_release_context(ctx);
-            return 1;
-        }
-
-        code = prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups);
-        if (code == 0)
-            code = prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups);
-        if (code == 0)
-            code = prc_api_get_number_tessellations(ctx, data, model_tree, &total_tess, &total_line_tess);
+        /* The geometry arrays were only needed for the duration of the call
+           above (the encoder copies whatever it needs into the encoded
+           byte stream) -- safe to free them now regardless of success or
+           failure. */
+        free(positions);
+        free(normals);
+        free(tris);
+        free(face_tri_counts);
 
         if (code != 0)
         {
-            fprintf(stderr, "verification: failed reading back the model tree\n");
+            fprintf(stderr, "prc_api_write_prc_buffer failed (code %d)\n", code);
             prc_api_print_error_stack(ctx);
-            prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL);
             prc_api_release_context(ctx);
             return 1;
         }
 
-        /* num_parts/num_products are preallocation counts for
-           prc_api_create_model_tree's internal tree (they count API tree
-           nodes, not literally "how many parts/products you wrote" -- a
-           single representation item contributes to both), so they're
-           not printed here; tessellations/faces map directly to what we
-           asked the encoder to write and are what most callers care about. */
-        printf("Verification: tessellations=%u faces_in_tess0=%u\n",
-            total_tess, total_tess > 0 ? prc_api_get_number_faces(ctx, data, 0) : 0);
+        out = fopen(output_path, "wb");
+        if (out == NULL || fwrite(prc_buf, 1, prc_buf_size, out) != prc_buf_size)
+        {
+            fprintf(stderr, "failed to write %s\n", output_path);
+            if (out != NULL) fclose(out);
+            prc_api_write_prc_buffer_free(ctx, prc_buf);
+            prc_api_release_context(ctx);
+            return 1;
+        }
+        fclose(out);
+        printf("Wrote %s (%u bytes)\n", output_path, (unsigned)prc_buf_size);
 
-        prc_api_release_data(ctx, data, NULL, 0, NULL, 0, model_tree);
+        /* Step 6: embed the same encoded bytes in a minimal, single-page
+           3D-annotated PDF -- the standard (ISO 32000) mechanism Adobe
+           Reader/Acrobat and examples/*.pdf in this repository use, not a
+           nanoPRC-specific format. One named view is enough to demonstrate
+           prc_pdf_view_spec; its eye/target/up are derived from the mesh's
+           own bounding box (computed by teapot_build_mesh above) so the
+           teapot is actually framed in shot rather than pointed at an
+           arbitrary fixed camera that might miss it entirely for
+           differently-scaled geometry. */
+        {
+            prc_pdf_view_spec view;
+            prc_pdf_write_options pdf_opts;
+            double center[3], extent[3], diag_len;
+            int a;
+
+            for (a = 0; a < 3; a++) center[a] = 0.5 * (bbox_min[a] + bbox_max[a]);
+            for (a = 0; a < 3; a++) extent[a] = bbox_max[a] - bbox_min[a];
+            diag_len = sqrt(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]);
+            if (diag_len < 1e-6) diag_len = 1.0;
+
+            memset(&view, 0, sizeof(view));
+            view.name = "Default";
+            /* A 3/4-ish view direction, offset from center by ~1.5x the
+               bounding box diagonal so the whole model fits comfortably
+               in frame regardless of its absolute size. up = +Z matches
+               this dataset's own up axis (the spout tip sits at the
+               highest Z value in teapot_patches). */
+            view.eye[0] = center[0] + diag_len * 1.0;
+            view.eye[1] = center[1] - diag_len * 1.3;
+            view.eye[2] = center[2] + diag_len * 0.7;
+            view.target[0] = center[0];
+            view.target[1] = center[1];
+            view.target[2] = center[2];
+            view.up[0] = 0.0; view.up[1] = 0.0; view.up[2] = 1.0;
+            view.is_default = 1;
+
+            memset(&pdf_opts, 0, sizeof(pdf_opts));
+            pdf_opts.views = &view;
+            pdf_opts.num_views = 1;
+
+            code = prc_api_pdf_embed_prc(ctx, pdf_path, prc_buf, prc_buf_size, &pdf_opts);
+            if (code != 0)
+            {
+                fprintf(stderr, "prc_api_pdf_embed_prc failed (code %d)\n", code);
+                prc_api_print_error_stack(ctx);
+                prc_api_write_prc_buffer_free(ctx, prc_buf);
+                prc_api_release_context(ctx);
+                return 1;
+            }
+            printf("Wrote %s\n", pdf_path);
+        }
+
+        prc_api_write_prc_buffer_free(ctx, prc_buf);
+    }
+
+    /* Step 7 (optional): read both files straight back -- the .prc file
+       directly, and the .pdf file through the same prc_api_open_contents
+       entry point (it transparently detects and extracts the embedded PRC
+       stream from a PDF 3D annotation) -- as a sanity check that both are
+       actually well-formed and agree with each other. This is not required
+       to use the write API; it's here purely so this demo verifies its own
+       output. */
+    {
+        const char *paths[2];
+        const char *labels[2];
+        int p;
+        uint32_t verified_tess[2] = { 0, 0 };
+        uint32_t verified_faces[2] = { 0, 0 };
+
+        paths[0] = output_path;  labels[0] = "prc";
+        paths[1] = pdf_path;     labels[1] = "pdf";
+
+        for (p = 0; p < 2; p++)
+        {
+            prc_api_data data;
+            prc_api_product *model_tree = NULL;
+            uint32_t num_parts, num_products, num_markups;
+            uint32_t total_tess = 0, total_line_tess = 0;
+
+            data = prc_api_open_contents(ctx, paths[p]);
+            if (data == NULL)
+            {
+                fprintf(stderr, "verification: prc_api_open_contents failed for %s\n", paths[p]);
+                prc_api_print_error_stack(ctx);
+                prc_api_release_context(ctx);
+                return 1;
+            }
+
+            code = prc_api_prep_model_tree(ctx, data, &num_parts, &num_products, &num_markups);
+            if (code == 0)
+                code = prc_api_create_model_tree(ctx, data, &model_tree, num_parts, num_products, num_markups);
+            if (code == 0)
+                code = prc_api_get_number_tessellations(ctx, data, model_tree, &total_tess, &total_line_tess);
+
+            if (code != 0)
+            {
+                fprintf(stderr, "verification: failed reading back the model tree from %s\n", paths[p]);
+                prc_api_print_error_stack(ctx);
+                prc_api_release_data(ctx, data, NULL, 0, NULL, 0, NULL);
+                prc_api_release_context(ctx);
+                return 1;
+            }
+
+            verified_tess[p] = total_tess;
+            verified_faces[p] = total_tess > 0 ? prc_api_get_number_faces(ctx, data, 0) : 0;
+
+            /* num_parts/num_products are preallocation counts for
+               prc_api_create_model_tree's internal tree (they count API
+               tree nodes, not literally "how many parts/products you
+               wrote" -- a single representation item contributes to both),
+               so they're not printed here; tessellations/faces map
+               directly to what we asked the encoder to write and are what
+               most callers care about. */
+            printf("Verification (%s): tessellations=%u faces_in_tess0=%u\n",
+                labels[p], verified_tess[p], verified_faces[p]);
+
+            prc_api_release_data(ctx, data, NULL, 0, NULL, 0, model_tree);
+        }
+
+        if (verified_tess[0] != verified_tess[1] || verified_faces[0] != verified_faces[1])
+        {
+            fprintf(stderr, "verification: .prc and .pdf disagree on tessellation/face counts\n");
+            prc_api_release_context(ctx);
+            return 1;
+        }
     }
 
     prc_api_release_context(ctx);

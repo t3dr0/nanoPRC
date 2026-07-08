@@ -17,6 +17,7 @@
 #include <string.h>
 #include "prc_write_file_structure.h"
 #include "prc_write_tess_3d.h"
+#include "prc_write_compress_tess.h"
 #include "prc_data.h"
 #include "zlib.h"
 
@@ -73,6 +74,21 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
             if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_TESS_3D) != 0) goto fail;
             if (prc_write_tess_3d(ctx, s, e->positions, e->num_positions, e->normals, e->num_normals,
                     e->tri_indices, e->norm_indices, e->num_triangles, e->face_tri_counts, e->num_faces) != 0)
+                goto fail;
+        }
+        else if (e->kind == PRC_WRITE_TESS_KIND_COMPRESSED)
+        {
+            /* A zero-valued tolerance/crease-angle (the memset(0) default
+               most callers start from) means "use a sensible default"
+               rather than a literal zero-mm weld distance or a zero-degree
+               crease angle -- see the field doc comments in prc_api.h. */
+            prc_write_tolerance tol = (e->tolerance.value > 0.0) ? e->tolerance : prc_write_tol_relative(1e-6);
+            double crease = (e->crease_angle_degrees > 0.0) ? e->crease_angle_degrees : 30.0;
+
+            if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_TESS_3D_Compressed) != 0) goto fail;
+            if (prc_write_compress_tess_entry(ctx, s, e->positions, e->num_positions,
+                    e->normals, e->num_normals, e->tri_indices, e->norm_indices, e->num_triangles,
+                    e->face_tri_counts, e->num_faces, tol, crease) != 0)
                 goto fail;
         }
         else

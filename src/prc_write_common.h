@@ -72,6 +72,31 @@ uint8_t *prc_write_le_uint32(uint8_t *p, uint32_t v);
    at `p`, returning p + 16 (PRC_WRITE_UNIQUE_ID_BYTES). */
 uint8_t *prc_write_le_unique_id(uint8_t *p, uint32_t word0);
 
+/* min_vers_for_read / auth_vers, written in both the main prc_header and
+   every PRC_TYPE_ASM_FileStructure header (Tables 5/37). Confirmed the
+   hard way: 0 does NOT mean "any reader accepts this" the way an earlier
+   assumption in this codebase held -- the spec documents at least some
+   entity fields as present only conditionally on authoring_version
+   crossing a threshold, "the sole mechanism for detecting its presence;
+   there is no secondary flag" (e.g. PRC_TYPE_GRAPH_DirectionalLight's
+   intensity, gated on >= 8030).
+
+   The ISO 14739 draft is explicit that 10001 is the ONLY compliant PRC
+   version ("This international standard specifies the PRC version 10001.
+   Documents with other PRC versions are non-compliant" -- version numbers
+   are year-modulo-2000 + day-of-year, so 10001 = 2010 day 1, this
+   document's own publication version). examples/cube.pdf declares
+   7094/23306 at these fields, which are NOT spec-compliant values --
+   third-party vendor toolkits (e.g. the one used by SolidWorks) are known
+   to write non-conformant version numbers here. cube.pdf's values were
+   useful during debugging purely as an independently-proven "a real
+   reader accepts this exact byte sequence" reference point, not because
+   they are the value a compliant writer should emit. Now that debugging
+   has established real readers accept our output, write the one value
+   the spec actually defines. */
+#define PRC_WRITE_MIN_VERS_FOR_READ 10001u
+#define PRC_WRITE_AUTH_VERS 10001u
+
 /* Writes ContentPRCBase/ContentPRCRefBase's `name` field (Table 31): bit
    same=1 with no following string if `name` is NULL (matching this write
    facility's long-standing "no name" default), else same=0 followed by

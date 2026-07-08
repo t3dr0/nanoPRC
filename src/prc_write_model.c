@@ -137,8 +137,8 @@ prc_write_main_header_bytes(uint8_t *out, uint32_t section_count, const uint32_t
 
     p[0] = 'P'; p[1] = 'R'; p[2] = 'C';
     p += PRC_WRITE_SIGNATURE_BYTES;
-    p = prc_write_le_uint32(p, 0); /* min_vers_for_read: 0 accepts any reader */
-    p = prc_write_le_uint32(p, 0); /* auth_vers */
+    p = prc_write_le_uint32(p, PRC_WRITE_MIN_VERS_FOR_READ);
+    p = prc_write_le_uint32(p, PRC_WRITE_AUTH_VERS);
     p = prc_write_le_unique_id(p, PRC_WRITE_FILE_UID0);
     p = prc_write_le_unique_id(p, PRC_WRITE_APP_UID0);
     p = prc_write_le_uint32(p, 1); /* filestructure_count */
@@ -158,18 +158,80 @@ prc_write_main_header_bytes(uint8_t *out, uint32_t section_count, const uint32_t
     p = prc_write_le_uint32(p, 0); /* file_count: multi-file not supported */
 }
 
+/* Adds one plain gray material + style to `tables` and returns its
+   biased (1-based) style index (0 on allocation failure). Every file
+   this write facility produces gets exactly this one default style,
+   applied to every part/product/representation-item in the tree (see
+   prc_write_tree_to_stream's default_biased_style_index parameter) --
+   real-world PRC producers apparently always attach at least a default
+   material somewhere, and a genuinely empty style table, while it
+   round-trips through nanoPRC's own parser and an independent PRC
+   converter's reader, was narrowed down (by elimination against a real,
+   independently-produced, proven-working PDF/PRC container) to being the
+   difference that keeps real 3D-capable PDF viewers from rendering this
+   facility's output. */
+static uint32_t
+prc_write_add_default_style(prc_context *ctx, prc_write_global_tables *tables)
+{
+    prc_rgb_color gray, black;
+    prc_graph_material material;
+    prc_graph_style style;
+    uint32_t biased_gray_index, biased_black_index, biased_material_index;
+
+    memset(&gray, 0, sizeof(gray));
+    gray.red = 0.7; gray.green = 0.7; gray.blue = 0.7; gray.alpha = 1.0;
+    biased_gray_index = prc_write_color_add(ctx, tables, &gray);
+    if (biased_gray_index == 0)
+        return 0;
+
+    memset(&black, 0, sizeof(black));
+    black.red = 0.0; black.green = 0.0; black.blue = 0.0; black.alpha = 1.0;
+    biased_black_index = prc_write_color_add(ctx, tables, &black);
+    if (biased_black_index == 0)
+        return 0;
+
+    memset(&material, 0, sizeof(material));
+    material.tag = PRC_TYPE_GRAPH_Material;
+    material.biased_ambient_index = biased_gray_index;
+    material.biased_diffuse_index = biased_gray_index;
+    material.biased_specular_index = biased_gray_index;
+    /* prc_internal_get_surface_material (prc_style_api.c) requires all
+       four *_index fields non-zero, not just ambient/diffuse/specular --
+       confirmed the hard way: leaving emissive at 0 ("no emissive
+       reference", which reads as spec-reasonable) rejects the whole
+       material with a parse error the moment a real viewer/our own
+       full-fidelity reader actually resolves it, even though every
+       lighter-weight check earlier in the pipeline accepts a material
+       with only three of the four set. */
+    material.biased_emissive_index = biased_black_index;
+    material.shininess = 0.3;
+    material.ambient_alpha = 1.0;
+    material.diffuse_alpha = 1.0;
+    material.emissive_alpha = 1.0;
+    material.specular_alpha = 1.0;
+    biased_material_index = prc_write_material_add(ctx, tables, &material);
+    if (biased_material_index == 0)
+        return 0;
+
+    memset(&style, 0, sizeof(style));
+    style.is_material = 1;
+    style.biased_color_index = biased_material_index; /* "biased_color_index" holds the material index when is_material */
+    return prc_write_style_add(ctx, tables, &style);
+}
+
 int
-prc_write_prc_file(prc_context *ctx, const char *filename,
+prc_write_prc_buffer(prc_context *ctx,
     const char *model_name,
-    const prc_write_global_tables *tables,
+    prc_write_global_tables *tables,
     const prc_write_tree_node *root,
-    const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries)
+    const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries,
+    uint8_t **out_buf, size_t *out_size)
 {
     prc_bit_write_state schema_s, tree_s, tess_s, geom_s, model_s;
     uint8_t *schema_comp = NULL, *tree_comp = NULL, *tess_comp = NULL, *geom_comp = NULL, *model_comp = NULL;
     size_t schema_comp_len = 0, tree_comp_len = 0, tess_comp_len = 0, geom_comp_len = 0, model_comp_len = 0;
     uint32_t root_biased_index = 0;
-    FILE *fid = NULL;
+    uint32_t default_style_index;
     int ret = PRC_ERROR_INTERNAL;
     /* See PRC_WRITE_PRC_FILE_SECTION_COUNT's doc comment: file-struct-header
        (implicit) + schema_globals + tree + tessellation + geometry. The
@@ -180,9 +242,11 @@ prc_write_prc_file(prc_context *ctx, const char *filename,
        prc_write_geometry_section_to_stream. */
     const uint32_t section_count = PRC_WRITE_PRC_FILE_SECTION_COUNT;
     uint32_t section_offsets[PRC_WRITE_PRC_FILE_SECTION_COUNT];
-    uint32_t start_offset = 0, end_offset = 0;
+    uint32_t start_offset, end_offset;
     size_t header_size;
-    uint8_t *header_buf = NULL;
+    uint8_t file_struct_header[PRC_WRITE_FILE_STRUCT_HEADER_SIZE];
+    uint8_t *buf = NULL;
+    size_t total_size;
 
     memset(&schema_s, 0, sizeof(schema_s));
     memset(&tree_s, 0, sizeof(tree_s));
@@ -190,10 +254,19 @@ prc_write_prc_file(prc_context *ctx, const char *filename,
     memset(&geom_s, 0, sizeof(geom_s));
     memset(&model_s, 0, sizeof(model_s));
 
-    if (ctx == NULL || filename == NULL || tables == NULL || root == NULL)
+    if (ctx == NULL || tables == NULL || root == NULL || out_buf == NULL || out_size == NULL)
     {
-        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_prc_file: invalid arguments\n");
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_prc_buffer: invalid arguments\n");
         return PRC_ERROR_INTERNAL;
+    }
+    *out_buf = NULL;
+    *out_size = 0;
+
+    default_style_index = prc_write_add_default_style(ctx, tables);
+    if (default_style_index == 0)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error adding default style in prc_write_prc_buffer\n");
+        return PRC_ERROR_MEMORY;
     }
 
     if (prc_bitwrite_init(ctx, &schema_s, 1024) != 0) goto cleanup;
@@ -201,7 +274,7 @@ prc_write_prc_file(prc_context *ctx, const char *filename,
     if (prc_bitwrite_flush(ctx, &schema_s) != 0) goto cleanup;
 
     if (prc_bitwrite_init(ctx, &tree_s, 1024) != 0) goto cleanup;
-    if (prc_write_tree_to_stream(ctx, &tree_s, root, &root_biased_index) != 0) goto cleanup;
+    if (prc_write_tree_to_stream(ctx, &tree_s, root, &root_biased_index, default_style_index) != 0) goto cleanup;
     if (prc_bitwrite_flush(ctx, &tree_s) != 0) goto cleanup;
 
     if (prc_bitwrite_init(ctx, &tess_s, 1024) != 0) goto cleanup;
@@ -222,46 +295,19 @@ prc_write_prc_file(prc_context *ctx, const char *filename,
     if (prc_write_deflate(ctx, geom_s.buf, geom_s.byte_pos, &geom_comp, &geom_comp_len) != 0) goto cleanup;
     if (prc_write_deflate(ctx, model_s.buf, model_s.byte_pos, &model_comp, &model_comp_len) != 0) goto cleanup;
 
+    /* Every section's final size is now known, so the complete layout
+       (and therefore the main header's offset table) can be computed
+       up front -- no placeholder-then-seek-back patch needed, unlike a
+       direct-to-file writer that doesn't know trailing sizes until it
+       has already written the header. */
     header_size = prc_write_main_header_size(section_count);
-    header_buf = (uint8_t *)prc_malloc(ctx, header_size);
-    if (header_buf == NULL)
-    {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_prc_file\n");
-        goto cleanup;
-    }
-    memset(header_buf, 0, header_size);
+    prc_write_file_struct_header_bytes(file_struct_header, PRC_WRITE_MIN_VERS_FOR_READ, PRC_WRITE_AUTH_VERS);
 
-    fid = fopen(filename, "wb");
-    if (fid == NULL)
-    {
-        prc_error(ctx, PRC_ERROR_IO, "prc_write_prc_file: failed to open output file\n");
-        goto cleanup;
-    }
-
-    /* Reserve the header's fixed-size space with a placeholder; every
-       offset field in it is patched in a single fseek+fwrite at the end,
-       once every section's real position is known. */
-    if (fwrite(header_buf, 1, header_size, fid) != header_size) goto io_fail;
-
-    section_offsets[0] = (uint32_t)ftell(fid);
-    {
-        uint8_t fh[PRC_WRITE_FILE_STRUCT_HEADER_SIZE];
-        prc_write_file_struct_header_bytes(fh, 0, 0);
-        if (fwrite(fh, 1, sizeof(fh), fid) != sizeof(fh)) goto io_fail;
-    }
-
-    section_offsets[1] = (uint32_t)ftell(fid);
-    if (fwrite(schema_comp, 1, schema_comp_len, fid) != schema_comp_len) goto io_fail;
-
-    section_offsets[2] = (uint32_t)ftell(fid);
-    if (fwrite(tree_comp, 1, tree_comp_len, fid) != tree_comp_len) goto io_fail;
-
-    section_offsets[3] = (uint32_t)ftell(fid);
-    if (fwrite(tess_comp, 1, tess_comp_len, fid) != tess_comp_len) goto io_fail;
-
-    section_offsets[4] = (uint32_t)ftell(fid);
-    if (fwrite(geom_comp, 1, geom_comp_len, fid) != geom_comp_len) goto io_fail;
-
+    section_offsets[0] = (uint32_t)header_size;
+    section_offsets[1] = section_offsets[0] + (uint32_t)sizeof(file_struct_header);
+    section_offsets[2] = section_offsets[1] + (uint32_t)schema_comp_len;
+    section_offsets[3] = section_offsets[2] + (uint32_t)tree_comp_len;
+    section_offsets[4] = section_offsets[3] + (uint32_t)tess_comp_len;
     /* The model section is addressed via start_offset/end_offset directly,
        not through section_offset[] -- see prc_parse_main.c's "the model
        file is defined special" handling -- but it must still be placed
@@ -274,24 +320,32 @@ prc_write_prc_file(prc_context *ctx, const char *filename,
        regular section's end as the model's start_offset, so placing the
        model section anywhere else produces a bogus (tiny) "end" for the
        real last regular section. */
-    start_offset = (uint32_t)ftell(fid);
-    if (fwrite(model_comp, 1, model_comp_len, fid) != model_comp_len) goto io_fail;
-    end_offset = (uint32_t)ftell(fid);
+    start_offset = section_offsets[4] + (uint32_t)geom_comp_len;
+    end_offset = start_offset + (uint32_t)model_comp_len;
+    total_size = (size_t)end_offset;
 
-    prc_write_main_header_bytes(header_buf, section_count, section_offsets, start_offset, end_offset);
-    if (fseek(fid, 0, SEEK_SET) != 0) goto io_fail;
-    if (fwrite(header_buf, 1, header_size, fid) != header_size) goto io_fail;
+    buf = (uint8_t *)prc_malloc(ctx, total_size);
+    if (buf == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_prc_buffer\n");
+        goto cleanup;
+    }
 
+    prc_write_main_header_bytes(buf, section_count, section_offsets, start_offset, end_offset);
+    memcpy(buf + section_offsets[0], file_struct_header, sizeof(file_struct_header));
+    memcpy(buf + section_offsets[1], schema_comp, schema_comp_len);
+    memcpy(buf + section_offsets[2], tree_comp, tree_comp_len);
+    memcpy(buf + section_offsets[3], tess_comp, tess_comp_len);
+    memcpy(buf + section_offsets[4], geom_comp, geom_comp_len);
+    memcpy(buf + start_offset, model_comp, model_comp_len);
+
+    *out_buf = buf;
+    *out_size = total_size;
+    buf = NULL;
     ret = 0;
-    goto cleanup;
-
-io_fail:
-    prc_error(ctx, PRC_ERROR_IO, "prc_write_prc_file: I/O error writing output file\n");
-    ret = PRC_ERROR_IO;
 
 cleanup:
-    if (fid != NULL) fclose(fid);
-    if (header_buf != NULL) prc_free(ctx, header_buf);
+    if (buf != NULL) prc_free(ctx, buf);
     if (schema_comp != NULL) prc_free(ctx, schema_comp);
     if (tree_comp != NULL) prc_free(ctx, tree_comp);
     if (tess_comp != NULL) prc_free(ctx, tess_comp);
@@ -303,4 +357,44 @@ cleanup:
     prc_bitwrite_release(ctx, &geom_s);
     prc_bitwrite_release(ctx, &model_s);
     return ret;
+}
+
+int
+prc_write_prc_file(prc_context *ctx, const char *filename,
+    const char *model_name,
+    prc_write_global_tables *tables,
+    const prc_write_tree_node *root,
+    const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries)
+{
+    uint8_t *buf = NULL;
+    size_t size = 0;
+    FILE *fid;
+    int code;
+
+    if (filename == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_prc_file: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    code = prc_write_prc_buffer(ctx, model_name, tables, root, tess_entries, num_tess_entries, &buf, &size);
+    if (code != 0)
+        return code;
+
+    fid = fopen(filename, "wb");
+    if (fid == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_IO, "prc_write_prc_file: failed to open output file\n");
+        prc_free(ctx, buf);
+        return PRC_ERROR_IO;
+    }
+
+    code = (fwrite(buf, 1, size, fid) == size) ? 0 : PRC_ERROR_IO;
+    fclose(fid);
+    prc_free(ctx, buf);
+
+    if (code != 0)
+        prc_error(ctx, PRC_ERROR_IO, "prc_write_prc_file: I/O error writing output file\n");
+
+    return code;
 }

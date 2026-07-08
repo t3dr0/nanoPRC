@@ -14,6 +14,7 @@
     along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <stdio.h>
 #include <string.h>
 #include <math.h>
 #include "prc_write_compress_tess.h"
@@ -211,7 +212,8 @@ prc_encode_preprocess(prc_context *ctx,
         uint32_t removed = 0;
 
         out->tri_indices = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * 3 * sizeof(uint32_t));
-        if (out->tri_indices == NULL)
+        out->tri_orig_index = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * sizeof(uint32_t));
+        if (out->tri_indices == NULL || out->tri_orig_index == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_preprocess triangle remap\n");
             ret = PRC_ERROR_MEMORY;
@@ -231,6 +233,7 @@ prc_encode_preprocess(prc_context *ctx,
             out->tri_indices[(size_t)clean_tris * 3 + 0] = a;
             out->tri_indices[(size_t)clean_tris * 3 + 1] = b;
             out->tri_indices[(size_t)clean_tris * 3 + 2] = c;
+            out->tri_orig_index[clean_tris] = i;
             clean_tris++;
         }
         out->num_triangles = clean_tris;
@@ -240,12 +243,17 @@ prc_encode_preprocess(prc_context *ctx,
         {
             prc_free(ctx, out->tri_indices);
             out->tri_indices = NULL;
+            prc_free(ctx, out->tri_orig_index);
+            out->tri_orig_index = NULL;
         }
         else if (clean_tris < num_triangles)
         {
             uint32_t *shrunk = (uint32_t *)prc_realloc(ctx, out->tri_indices, (size_t)clean_tris * 3 * sizeof(uint32_t));
+            uint32_t *shrunk_orig = (uint32_t *)prc_realloc(ctx, out->tri_orig_index, (size_t)clean_tris * sizeof(uint32_t));
             if (shrunk != NULL)
                 out->tri_indices = shrunk;
+            if (shrunk_orig != NULL)
+                out->tri_orig_index = shrunk_orig;
         }
     }
     if (remap != NULL)
@@ -1939,7 +1947,20 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
 
     if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_calculated */
         goto werr;
-    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_faces */
+    /* has_faces: per the spec (Table 175), Required, "TRUE if the entity
+       is built using geometrical faces". trav->triangle_face_array is
+       always real, populated per-triangle face-index data (prc_encode_
+       traversal defaults every entry to face 0 when the caller supplies
+       no explicit face grouping, never leaves it meaningless), so this
+       must always be TRUE -- confirmed the hard way: writing FALSE here
+       while still emitting a real triangle_face_array is self-
+       contradictory, and while nanoPRC's own decoder tolerates the
+       inconsistency (has_faces gates a few of its own optional-data
+       branches but the core geometry path doesn't depend on it), an
+       independent, stricter PRC engine silently returns a null/empty
+       geometry object for the whole entity rather than reject or repair
+       it. */
+    if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* has_faces */
         goto werr;
     if (prc_bitwrite_double(ctx, state, tolerance_mm) != 0)
         goto werr;
@@ -2056,16 +2077,148 @@ prc_encode_preprocess_free(prc_context *ctx, prc_encode_mesh *m)
         prc_free(ctx, m->positions);
     if (m->tri_indices != NULL)
         prc_free(ctx, m->tri_indices);
+    if (m->tri_orig_index != NULL)
+        prc_free(ctx, m->tri_orig_index);
     if (m->edges != NULL)
         prc_free(ctx, m->edges);
     if (m->tri_component != NULL)
         prc_free(ctx, m->tri_component);
     m->positions = NULL;
     m->tri_indices = NULL;
+    m->tri_orig_index = NULL;
     m->edges = NULL;
     m->tri_component = NULL;
     m->num_positions = 0;
     m->num_triangles = 0;
     m->num_edges = 0;
     m->num_components = 0;
+}
+
+int
+prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
+    const double *positions, uint32_t num_positions,
+    const double *normals, uint32_t num_normals,
+    const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
+    const uint32_t *face_tri_counts, uint32_t num_faces,
+    prc_write_tolerance tolerance, double crease_angle_degrees)
+{
+    prc_encode_mesh mesh;
+    prc_encode_traversal_result trav;
+    uint32_t *orig_face_id = NULL;      /* num_triangles entries, ORIGINAL (pre-preprocess) order */
+    uint32_t *face_indices_post = NULL; /* mesh.num_triangles entries, POST-preprocess order */
+    double *corner_normals = NULL;      /* mesh.num_triangles * 9, POST-preprocess order */
+    uint8_t *rev = NULL;
+    int32_t *angles = NULL;
+    uint8_t *bin = NULL;
+    uint32_t acount = 0, bsize = 0;
+    uint8_t must_recalculate_normals;
+    int mesh_ready = 0, trav_ready = 0;
+    int ret = PRC_ERROR_INTERNAL;
+    int code;
+    uint32_t f, t, k;
+
+    (void)num_normals;
+
+    if (ctx == NULL || s == NULL || num_triangles == 0)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    code = prc_encode_preprocess(ctx, positions, num_positions, tri_indices, num_triangles, tolerance, &mesh);
+    if (code != 0) return code;
+    mesh_ready = 1;
+
+    if (mesh.num_triangles == 0)
+    {
+        /* Every input triangle was degenerate after welding; nothing to
+           encode. Treated as a caller error (same as num_triangles == 0
+           above) rather than silently emitting an empty compressed
+           record, which this pipeline has never been exercised against. */
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_compress_tess_entry: no surviving triangles after weld\n");
+        goto cleanup;
+    }
+
+    if (face_tri_counts != NULL && num_faces > 0)
+    {
+        orig_face_id = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * sizeof(uint32_t));
+        face_indices_post = (uint32_t *)prc_malloc(ctx, (size_t)mesh.num_triangles * sizeof(uint32_t));
+        if (orig_face_id == NULL || face_indices_post == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+            ret = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        t = 0;
+        for (f = 0; f < num_faces; f++)
+        {
+            uint32_t n = face_tri_counts[f];
+            for (k = 0; k < n; k++)
+                orig_face_id[t++] = f;
+        }
+        for (k = 0; k < mesh.num_triangles; k++)
+            face_indices_post[k] = orig_face_id[mesh.tri_orig_index[k]];
+    }
+
+    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL);
+    if (code != 0) goto cleanup;
+    trav_ready = 1;
+
+    must_recalculate_normals = (normals == NULL) ? 1u : 0u;
+    if (!must_recalculate_normals)
+    {
+        corner_normals = (double *)prc_malloc(ctx, (size_t)mesh.num_triangles * 9 * sizeof(double));
+        if (corner_normals == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+            ret = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        for (k = 0; k < mesh.num_triangles; k++)
+        {
+            uint32_t orig_tri = mesh.tri_orig_index[k];
+            uint32_t c;
+            for (c = 0; c < 3; c++)
+            {
+                uint32_t nidx = norm_indices[(size_t)orig_tri * 3 + c];
+                memcpy(&corner_normals[((size_t)k * 3 + c) * 3], &normals[(size_t)nidx * 3], 3 * sizeof(double));
+            }
+        }
+        code = prc_encode_normals_c2(ctx, &mesh, &trav, corner_normals, &angles, &acount, &bin, &bsize);
+        if (code != 0)
+        {
+            /* Supplied per-corner normals can legitimately conflict with the
+               decoder's canonical traversal winding for a "growing" (non-
+               leaf) triangle -- a real geometric constraint of the C2 path,
+               not a bug (see prc_encode_normals_c2's own error message).
+               Rather than fail the whole entry over it, fall back to C1
+               (decoder-reconstructed normals from geometry): every real
+               mesh has SOME valid encoding, and reconstructed-but-rendered
+               beats exact-but-rejected. */
+            prc_free(ctx, corner_normals);
+            corner_normals = NULL;
+            must_recalculate_normals = 1u;
+            code = prc_encode_normals_c1(ctx, &mesh, &trav, NULL, &rev);
+        }
+    }
+    else
+    {
+        code = prc_encode_normals_c1(ctx, &mesh, &trav, NULL, &rev);
+    }
+    if (code != 0) goto cleanup;
+
+    code = prc_write_compress_tess_to_stream(ctx, s, &trav, mesh.tolerance_mm,
+        rev, crease_angle_degrees, angles, acount, bin, bsize, must_recalculate_normals);
+    ret = code;
+
+cleanup:
+    if (orig_face_id != NULL) prc_free(ctx, orig_face_id);
+    if (face_indices_post != NULL) prc_free(ctx, face_indices_post);
+    if (corner_normals != NULL) prc_free(ctx, corner_normals);
+    if (rev != NULL) prc_free(ctx, rev);
+    if (angles != NULL) prc_free(ctx, angles);
+    if (bin != NULL) prc_free(ctx, bin);
+    if (trav_ready) prc_encode_traversal_free(ctx, &trav);
+    if (mesh_ready) prc_encode_preprocess_free(ctx, &mesh);
+    return ret;
 }
