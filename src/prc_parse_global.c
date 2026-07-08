@@ -904,7 +904,7 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
     data->material_count = prc_bitread_uint32(ctx, bit_state);
     if (data->material_count > 0)
     {
-        data->materials = (prc_graph_material *)prc_calloc(ctx, data->material_count, sizeof(prc_graph_texture_definition));
+        data->materials = (prc_graph_material *)prc_calloc(ctx, data->material_count, sizeof(prc_graph_material));
         if (data->materials == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_global_data\n");

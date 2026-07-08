@@ -1979,6 +1979,19 @@ prc_store_triangle_style(prc_context *ctx, prc_tess_3d_compressed *data,
 		triangle_style_array[tri_num] = data->line_attribute_array[*style_index];
 		*style_index += 1;
 	}
+    else if (data->line_attribute_array_size == 0)
+    {
+        /* No per-triangle/per-face style data recorded at all (e.g. a
+           writer, like this codebase's own, that relies entirely on the
+           owning representation item/part's style reference rather than
+           per-triangle styles within the tessellation itself).
+           line_attribute_array is NULL/empty in this case -- 0 is this
+           level's existing "no style" sentinel (see the unbiasing check a
+           few hundred lines below: triangle_style_array[k] == 0 is left
+           as 0 rather than decremented), so use it instead of
+           dereferencing a NULL array. */
+        triangle_style_array[tri_num] = 0;
+    }
     else
     {
         if (data->line_attribute_array_size == 1)
