@@ -589,11 +589,22 @@ int main(int argc, char *argv[])
        has_faces means "built from real topological faces", not "has
        triangle-to-style groupings"). With all three fixed, this teapot
        (2592 verts, 4096 tris, 2048 faces) now reads back via that
-       independent reader as real, non-null geometry -- 4032 of 4096
-       triangles report correctly (still short by 64; not yet root-caused,
-       possibly related to the still-open grow-triangle winding gap in
-       prc_encode_normals_c1 -- see that function's comments). A dramatic
-       improvement over total failure, but not yet byte-for-byte exact. */
+       independent reader as real, non-null geometry: 4032 of 4096
+       triangles, which is CORRECT, not a shortfall -- teapot_patches[]'s
+       patches 20-23 (the lid's top pole) and 28-31 (the base's center
+       pole) each have all four control points of one grid row set to the
+       exact same point ({0,0,3.15} and {0,0,0} respectively, the classic
+       Utah teapot dataset's pole/apex construction), so every sample along
+       that row of each of those 8 patches coincides regardless of the
+       other parameter. Each of the resulting 8 quads per pole patch (64
+       quads total across all 8 pole patches) therefore has one zero-area
+       (degenerate) triangle and one real one; this write facility's own
+       preprocessing correctly welds/drops the degenerate ones, so
+       4096 - 64 == 4032 real triangles is exactly right. Confirmed by
+       inspecting the independent reader's own per-face triangle-index
+       counts: precisely those 64 faces (8 groups of 8, matching the 8
+       pole patches' first grid row) have 3 indices (1 triangle) instead
+       of 6 (2 triangles); every other face has the full 6. */
     prc_api_write_tessellation tess;
     memset(&tess, 0, sizeof(tess));
     tess.kind = PRC_API_WRITE_TESS_KIND_COMPRESSED;
