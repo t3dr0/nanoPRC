@@ -3780,8 +3780,19 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 face_style_index = face_out_reserved->style[0].face_style_index;
                 face_style_file_index = face_out_reserved->style[0].face_style_file_index;
             }
-            else
+            else if (has_style)
             {
+                /* has_style (line_attribute_array != NULL) is what gates
+                   the has_more_than_one_tri_style scan above that actually
+                   reads triangle_styles -- this access needs the same
+                   guard, or a compressed tessellation with no per-triangle
+                   style data (line_attribute_array/triangle_styles both
+                   NULL, e.g. every file this write facility produces,
+                   which never emits per-triangle styles) reads
+                   triangle_styles[0] out of a NULL array. face_style_index/
+                   face_style_file_index are already initialized to -1
+                   ("no style") above, so there is nothing to do in the
+                   no-style case. */
                 face_style_index = tess->triangle_styles[0];
                 face_style_file_index = file_index;
             }
