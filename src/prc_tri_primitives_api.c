@@ -3634,8 +3634,17 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         int num_prc_indices = tess->num_triangle_indices_prc_compressed_3d;
         uint8_t has_vertex_colors =
             (tess->decoded_point_color_array != NULL) ? true : false;
+        /* Gated on is_multiple_line_attribute (real per-face/per-triangle
+           style variation), not mere line_attribute_array != NULL -- see
+           the identical fix/comment in prc_api_get_number_faces. A lone
+           no-style placeholder entry (line_attribute_array_size == 1,
+           value 0) must NOT be treated as "has a real style": doing so
+           makes face_style_index resolve to a real style-table lookup at
+           index 0 below instead of staying -1 ("no style, use the
+           built-in default material" in prc_internal_api_get_style, which
+           only special-cases style_index < 0, not == 0). */
         uint8_t has_style =
-            (tess->line_attribute_array != NULL) ? true : false;
+            tess->is_multiple_line_attribute ? true : false;
         uint8_t has_more_than_one_tri_style = false;
         uint32_t num_triangles = tess->triangle_face_array_size;
         prc_internal_api_color_state_t initial_color_state;

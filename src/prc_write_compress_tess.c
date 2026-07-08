@@ -2008,20 +2008,21 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
 
     if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_calculated */
         goto werr;
-    /* has_faces: per the spec (Table 175), Required, "TRUE if the entity
-       is built using geometrical faces". trav->triangle_face_array is
-       always real, populated per-triangle face-index data (prc_encode_
-       traversal defaults every entry to face 0 when the caller supplies
-       no explicit face grouping, never leaves it meaningless), so this
-       must always be TRUE -- confirmed the hard way: writing FALSE here
-       while still emitting a real triangle_face_array is self-
-       contradictory, and while nanoPRC's own decoder tolerates the
-       inconsistency (has_faces gates a few of its own optional-data
-       branches but the core geometry path doesn't depend on it), an
-       independent, stricter PRC engine silently returns a null/empty
-       geometry object for the whole entity rather than reject or repair
-       it. */
-    if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* has_faces */
+    /* has_faces: per the spec (Table 175), "TRUE if the entity is built
+       using geometrical faces" -- i.e. real topological B-Rep faces, not
+       merely "triangle_face_array happens to group triangles by style".
+       This write facility never emits exact B-Rep geometry at all, so this
+       is always FALSE, matching a real, independently-produced compressed
+       PRC file (converted directly from a plain mesh format with no B-Rep,
+       via the same independent tool used elsewhere in this codebase for
+       ground-truth verification) that has real, multi-value
+       triangle_face_array data (genuinely different triangles assigned to
+       2 different faces) alongside has_faces == FALSE. An earlier version
+       of this comment claimed the opposite (has_faces must be TRUE
+       whenever triangle_face_array has real data) based on a test that
+       confounded this bit with a separate, since-fixed line_attribute_
+       array bug -- that conclusion was wrong. */
+    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_faces */
         goto werr;
     if (prc_bitwrite_double(ctx, state, tolerance_mm) != 0)
         goto werr;
@@ -2054,20 +2055,9 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     if (prc_bitwrite_bit(ctx, state, must_recalculate_normals ? 1 : 0) != 0)
         goto werr;
 
-    if (must_recalculate_normals)
-    {
-        for (k = 0; k < trav->triangle_face_array_size; k++)
-        {
-            if (prc_bitwrite_bit(ctx, state, normal_is_reversed_c1[k]) != 0)
-                goto werr;
-        }
-        /* stored in degrees; the reader converts to radians itself */
-        if (prc_bitwrite_double(ctx, state, crease_angle_degrees) != 0)
-            goto werr;
-        if (prc_bitwrite_uint8(ctx, state, 0) != 0)   /* normal_recalculation_flags */
-            goto werr;
-    }
-    else
+    /* face_number, i.e. max(triangle_face_array) + 1 -- needed both by the
+       C2 is_face_planar array below and by line_attribute_array further
+       down, for both C1 and C2. */
     {
         uint32_t face_count = 1;
 
@@ -2077,46 +2067,80 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
                 (uint32_t)trav->triangle_face_array[k] + 1 > face_count)
                 face_count = (uint32_t)trav->triangle_face_array[k] + 1;
         }
-        if (prc_bitwrite_uint8(ctx, state, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
-            goto werr;
-        if (prc_bitwrite_uint32(ctx, state, normal_binary_data_size) != 0)
-            goto werr;
-        for (k = 0; k < normal_binary_data_size; k++)
+
+        if (must_recalculate_normals)
         {
-            if (prc_bitwrite_bit(ctx, state, normal_binary_data[k]) != 0)
+            for (k = 0; k < trav->triangle_face_array_size; k++)
+            {
+                if (prc_bitwrite_bit(ctx, state, normal_is_reversed_c1[k]) != 0)
+                    goto werr;
+            }
+            /* stored in degrees; the reader converts to radians itself */
+            if (prc_bitwrite_double(ctx, state, crease_angle_degrees) != 0)
+                goto werr;
+            if (prc_bitwrite_uint8(ctx, state, 0) != 0)   /* normal_recalculation_flags */
                 goto werr;
         }
-        if (prc_bitwrite_short_array(ctx, state, normal_angle_array,
-                normal_angle_array_count, 1, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
-            goto werr;
-        /* every face non-planar: routes all decoding through the per-vertex
-           path, never the separate per-face-planar normal-sharing path */
-        for (k = 0; k < face_count; k++)
+        else
         {
-            if (prc_bitwrite_bit(ctx, state, 0) != 0)
+            if (prc_bitwrite_uint8(ctx, state, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
                 goto werr;
+            if (prc_bitwrite_uint32(ctx, state, normal_binary_data_size) != 0)
+                goto werr;
+            for (k = 0; k < normal_binary_data_size; k++)
+            {
+                if (prc_bitwrite_bit(ctx, state, normal_binary_data[k]) != 0)
+                    goto werr;
+            }
+            if (prc_bitwrite_short_array(ctx, state, normal_angle_array,
+                    normal_angle_array_count, 1, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
+                goto werr;
+            /* every face non-planar: routes all decoding through the
+               per-vertex path, never the separate per-face-planar
+               normal-sharing path */
+            for (k = 0; k < face_count; k++)
+            {
+                if (prc_bitwrite_bit(ctx, state, 0) != 0)
+                    goto werr;
+            }
         }
-    }
 
-    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_point_color */
-        goto werr;
-    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_multiple_line_attribute */
-        goto werr;
-    /* read unconditionally by the parser. The C2 branch forces has_faces on
-       the decode side, whose style bookkeeping dereferences
-       line_attribute_array[0], so C2 must carry one no-style (biased 0)
-       entry; C1 keeps it empty. */
-    if (must_recalculate_normals)
-    {
-        if (prc_bitwrite_short_array(ctx, state, NULL, 0, 1, 16) != 0)
+        if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_point_color */
             goto werr;
-    }
-    else
-    {
-        int32_t no_style = 0;
+        if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_multiple_line_attribute */
+            goto werr;
+        /* line_attribute_array: read unconditionally by the parser, one
+           entry per face (face_count), regardless of is_multiple_line_
+           attribute or C1/C2 -- confirmed against a real, independently-
+           produced multi-face compressed PRC file (2 distinct faces): its
+           line_attribute_array_size was 2 (== face_number), not a single
+           global entry, even with is_multiple_line_attribute == FALSE. An
+           earlier version of this code wrote either a genuinely empty
+           array (C1) or exactly one entry regardless of face count (both
+           since corrected): the former is confirmed to be what an
+           independent, strict PRC reader rejects outright (returns null
+           geometry); the latter was only ever verified against face_
+           count == 1 reference files and throws an "invalid vector
+           subscript" exception in that same reader once face_count > 1,
+           consistent with it expecting one entry per face. Every entry is
+           the same no-style (biased 0) placeholder value, since this
+           write facility never emits real per-face style data. */
+        {
+            int32_t *no_style_per_face = (int32_t *)prc_malloc(ctx, (size_t)face_count * sizeof(int32_t));
 
-        if (prc_bitwrite_short_array(ctx, state, &no_style, 1, 1, 16) != 0)
-            goto werr;
+            if (no_style_per_face == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "prc_write_compress_tess_to_stream: allocation error\n");
+                return PRC_ERROR_MEMORY;
+            }
+            memset(no_style_per_face, 0, (size_t)face_count * sizeof(int32_t));
+            if (prc_bitwrite_short_array(ctx, state, no_style_per_face, face_count, 1, 16) != 0)
+            {
+                prc_free(ctx, no_style_per_face);
+                goto werr;
+            }
+            prc_free(ctx, no_style_per_face);
+        }
     }
     if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* no_texture */
         goto werr;

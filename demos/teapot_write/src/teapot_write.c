@@ -571,25 +571,32 @@ int main(int argc, char *argv[])
        reasonable default when you don't have real per-vertex normals to
        hand, but looks faceted.
 
-       kind = TRIANGLES (PRC_TYPE_TESS_3D), not COMPRESSED: a controlled,
-       isolated test (a plain non-degenerate cube, every other field held
-       constant) showed an independent PRC engine reads real geometry from
-       TRIANGLES but returns null geometry from COMPRESSED. It is NOT true
-       that real-world tessellation-only PRC producers generally pair
-       compressed tessellation with exact B-Rep geometry -- many generators
-       emit tessellation only -- so that is not an explanation for the
-       null-geometry result, and COMPRESSED remains a real, unresolved bug
-       in this write facility's encoder (or in the paired decoder) rather
-       than an inherently untested reader combination. Retested with the
-       has_faces fix, the prc_store_triangle_style decoder crash fix, and
-       the min_vers_for_read/auth_vers=10001 fix all applied: TRIANGLES
-       still reproduces the exact source triangle count (4096) via an
-       independent reader; COMPRESSED still comes back as null/empty
-       geometry -- none of today's fixes were the cause. Use TRIANGLES here
-       until that COMPRESSED bug is actually found. */
+       kind = COMPRESSED (PRC_TYPE_TESS_3D_Compressed). Earlier sessions'
+       attempts at COMPRESSED all came back null/empty geometry (or, once
+       has_faces was fixed, an outright "invalid vector subscript"
+       exception) from an independent reader used for ground-truth
+       verification. Root-caused via real, independently-produced reference
+       files (not just spec reading): (1) this encoder's C1 path wrote a
+       genuinely empty line_attribute_array, while every real producer
+       writes at least one entry; (2) once fixed to write exactly one
+       entry, that only matched reference files with a single face --
+       multi-face content needs one entry PER FACE, which a real,
+       multi-face reference file confirmed; (3) has_faces was earlier
+       (wrongly) believed to require TRUE whenever triangle_face_array has
+       real data -- a real multi-face reference file has has_faces FALSE
+       with genuinely multi-valued triangle_face_array, so it was reverted
+       to FALSE (this write facility never emits exact B-Rep geometry, and
+       has_faces means "built from real topological faces", not "has
+       triangle-to-style groupings"). With all three fixed, this teapot
+       (2592 verts, 4096 tris, 2048 faces) now reads back via that
+       independent reader as real, non-null geometry -- 4032 of 4096
+       triangles report correctly (still short by 64; not yet root-caused,
+       possibly related to the still-open grow-triangle winding gap in
+       prc_encode_normals_c1 -- see that function's comments). A dramatic
+       improvement over total failure, but not yet byte-for-byte exact. */
     prc_api_write_tessellation tess;
     memset(&tess, 0, sizeof(tess));
-    tess.kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
+    tess.kind = PRC_API_WRITE_TESS_KIND_COMPRESSED;
     tess.positions = positions;
     tess.num_positions = TEAPOT_TOTAL_VERTS;
     tess.normals = normals;

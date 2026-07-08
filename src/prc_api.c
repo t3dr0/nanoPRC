@@ -3868,8 +3868,20 @@ prc_api_get_number_faces(prc_context *ctx, prc_api_data data_in,
            with different styles, we will treat this as a single face as the
            faces as they are indexed in the compressed structure can be scattered
            about. Really the face index is only used to express a style that those
-           triangles have */
-        if (tessellation->tess_3d_compressed->line_attribute_array != NULL ||
+           triangles have.
+
+           Gated on is_multiple_line_attribute (real per-face/per-triangle
+           style variation), NOT merely line_attribute_array != NULL: every
+           compressed tessellation carries a line_attribute_array (Table 174
+           requires it be read unconditionally), including a single no-style
+           placeholder entry when there is no real per-face variation at all
+           -- checking mere non-NULLness here collapsed every compressed
+           tessellation's face count to 1 once nanoPRC's own write facility
+           started always emitting that placeholder entry (previously it
+           only ever emitted one for the supplied-normals/C2 path, so this
+           branch was accidentally never exercised by nanoPRC's own C1
+           output). */
+        if (tessellation->tess_3d_compressed->is_multiple_line_attribute ||
             (tessellation->tess_3d_compressed->decoded_point_color_array != NULL))
         {
             /* We may need to look at the content of the line_attribute array

@@ -831,6 +831,9 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     data->origin_array.z = prc_bitread_float(ctx, bit_state);
 
 #if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->is_calculated = %d\n", data->is_calculated);
+    DEBUG_LOG("data->has_faces = %d\n", data->has_faces);
+    DEBUG_LOG("data->tolerance = %.17g\n", data->tolerance);
     DEBUG_LOG("data->origin_array.x = %lf\n", data->origin_array.x);
     DEBUG_LOG("data->origin_array.y = %lf\n", data->origin_array.y);
     DEBUG_LOG("data->origin_array.z = %lf\n", data->origin_array.z);
@@ -1055,6 +1058,9 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     }
 
     data->is_point_color = prc_bitread_bit(ctx, bit_state);
+#if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->is_point_color = %d\n", data->is_point_color);
+#endif
     if (data->is_point_color)
     {
         /* Spec not clear on the size of this array */
@@ -1111,6 +1117,9 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     }
 
     data->is_multiple_line_attribute = prc_bitread_bit(ctx, bit_state);
+#if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->is_multiple_line_attribute = %d\n", data->is_multiple_line_attribute);
+#endif
     if (data->is_multiple_line_attribute)
     {
         /* Spec not clear on the size of this array */
@@ -1132,8 +1141,14 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_parse_tess_3d_compressed\n");
         return PRC_ERROR_MEMORY;
     }
+#if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->line_attribute_array_size = %u\n", data->line_attribute_array_size);
+#endif
 
     data->no_texture = prc_bitread_bit(ctx, bit_state);
+#if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->no_texture = %d\n", data->no_texture);
+#endif
     if (!data->no_texture)
     {
         /* Read in the texture data.  First the CompressedTextureParameter */
@@ -1163,6 +1178,9 @@ prc_parse_tess_3d_compressed(prc_context *ctx, prc_bit_state *bit_state, prc_tes
     }
 
     data->has_behaviors = prc_bitread_bit(ctx, bit_state);
+#if DEBUG_COMPRESSED_TESS
+    DEBUG_LOG("data->has_behaviors = %d\n", data->has_behaviors);
+#endif
     if (data->has_behaviors)
     {
         data->behaviors_array = prc_bitread_character_array(ctx, bit_state,
