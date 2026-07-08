@@ -1373,27 +1373,65 @@ prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
         return PRC_ERROR_MEMORY;
     }
 
-    /* A fully isolated triangle (no neighbor on any edge -- its own
-       one-triangle chain) needs its reversal bit set even when normals are
-       recalculated rather than supplied: the decoder's prc_store_triangle_
-       indices swaps the output vertex order to (idx0, idx2, idx1) whenever
-       this bit is 0 (prc_decode_compressed_tess.c's prc_store_triangle_
-       indices), which silently flips the triangle's winding relative to
-       the caller's original tri_indices order unless the bit says
-       otherwise. Confirmed the hard way: a lone triangle round-tripped
-       through nanoPRC's own decoder with tri_indices==(0,1,2) as supplied
-       came back as (0,2,1) -- an inverted winding -- while a real,
-       independently-produced compressed PRC file for the identical
-       triangle set this bit TRUE. Left at the calloc'd default (0) for any
-       triangle with a neighbor (whether a chain start later grown into, or
-       a grow step itself): those aren't reproduced by this test case, and
-       the "reversed && growing" combination immediately below is refused
-       as unsupported, so blindly setting this bit for every triangle would
-       break every currently-working multi-triangle mesh. */
-    for (k = 0; k < num_tris; k++)
+    /* A fully isolated triangle -- the ONLY member of its connected
+       component, with no neighbor anywhere in the mesh -- needs its
+       reversal bit set even when normals are recalculated rather than
+       supplied: the decoder's prc_store_triangle_indices swaps the output
+       vertex order to (idx0, idx2, idx1) whenever this bit is 0
+       (prc_decode_compressed_tess.c's prc_store_triangle_indices), which
+       silently flips the triangle's winding relative to the caller's
+       original tri_indices order unless the bit says otherwise. Confirmed
+       the hard way: a lone triangle round-tripped through nanoPRC's own
+       decoder with tri_indices==(0,1,2) as supplied came back as (0,2,1)
+       -- an inverted winding -- while a real, independently-produced
+       compressed PRC file for the identical triangle set this bit TRUE.
+
+       This is deliberately identified via connected-component size
+       (mesh->tri_component/num_components), NOT trav->edge_status_array[k]
+       == 0: an ordinary "leaf" triangle deep inside a larger connected
+       mesh -- one whose remaining edges just happen to already have
+       treated neighbors by the time the traversal reaches it -- also gets
+       edge_status_array[k] == 0, despite having real neighbors. An
+       earlier version of this fix used that condition directly and broke
+       test_cube_c1_roundtrip's explicit "every rev[k] == 0" expectation
+       for the (fully connected, no isolated triangles) 12-triangle cube.
+
+       This does NOT generalize to triangles with a neighbor (chain start
+       later grown into, or a grow step itself): a real, independently-
+       produced two-triangle quad (chain start WITH a neighbor, plus its
+       grow step) has this bit TRUE on both triangles too, and
+       prc_set_left_right_edge_indices's "if (normal_was_reversed) swap
+       left and right bases" shows the decoder does have real support for
+       that combination -- but blindly setting rev[k]=1 for every triangle
+       breaks test_quad_roundtrip's decoded VERTEX POSITIONS (not just
+       winding), confirming the encoder's own grow-step basis/point math
+       (prc_encode_edge_basis and friends) does not yet produce correct
+       point data to pair with a reversed bit on a growing triangle -- a
+       real, currently-unimplemented gap, not merely an overcautious
+       restriction. Left at the calloc'd default (0) for any triangle with
+       a real neighbor until that's fixed; the "reversed && growing"
+       restriction a few lines down (input_normals != NULL branch only)
+       remains in place for the supplied-normals path. */
+    if (mesh->num_components > 0)
     {
-        if (trav->edge_status_array[k] == 0)
-            rev[k] = 1;
+        uint32_t *component_size = (uint32_t *)prc_calloc(ctx, mesh->num_components, sizeof(uint32_t));
+
+        if (component_size == NULL)
+        {
+            prc_free(ctx, rev);
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_normals_c1\n");
+            return PRC_ERROR_MEMORY;
+        }
+        for (k = 0; k < mesh->num_triangles; k++)
+            component_size[mesh->tri_component[k]]++;
+        for (k = 0; k < num_tris; k++)
+        {
+            uint32_t orig_tri = trav->triangle_mesh_order[k];
+
+            if (component_size[mesh->tri_component[orig_tri]] == 1)
+                rev[k] = 1;
+        }
+        prc_free(ctx, component_size);
     }
 
     if (input_normals != NULL)
