@@ -28,12 +28,12 @@
    section_offset[] table: [0] file-struct-header (implicit, not counted by
    the parser's own section_count semantics the same way -- see
    prc_write_prc_file's comment) + schema_globals + tree + tessellation +
-   geometry. Shared here (rather than as a local literal inside
-   prc_write_prc_file) so anything that needs to independently recompute
-   the main header's byte layout -- e.g. a test reading start_offset/
-   end_offset back out of a written file -- uses the exact same value the
-   writer does instead of hardcoding it a second time. */
-#define PRC_WRITE_PRC_FILE_SECTION_COUNT 5u
+   geometry + extra_geometry. Shared here (rather than as a local literal
+   inside prc_write_prc_file) so anything that needs to independently
+   recompute the main header's byte layout -- e.g. a test reading
+   start_offset/end_offset back out of a written file -- uses the exact
+   same value the writer does instead of hardcoding it a second time. */
+#define PRC_WRITE_PRC_FILE_SECTION_COUNT 6u
 
 /* Byte positions of the main prc_header's dynamic fields (Table 5/35,
    single-file-structure layout), computed once so prc_write_main_header_
@@ -79,6 +79,19 @@ void prc_write_main_header_compute_layout(uint32_t section_count, prc_write_main
    facility (single-file-structure PRC, no cross-file references). */
 int prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
     const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count);
+
+/* Same encoding as prc_write_model_file_to_stream, but the
+   ProductOccurrenceReference.unique_id far-reference is the caller-supplied
+   4-tuple `file_struct_uid` instead of the hardcoded
+   {PRC_WRITE_FILE_STRUCT_UID0,0,0,0} -- for diagnostics that need to point
+   this write facility's model-file encoding at a file structure this
+   library did not itself write (e.g. splicing this section into an
+   otherwise-real, independently-produced PRC stream to isolate whether the
+   model-file section's own bit encoding, not its referenced content, is
+   what a given reader objects to). */
+int prc_write_model_file_to_stream_ex(prc_context *ctx, prc_bit_write_state *s,
+    const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count,
+    const uint32_t file_struct_uid[4]);
 
 /* Top-level orchestration: assembles a complete, single-file-structure PRC
    byte stream into one heap buffer (caller frees with prc_free). Encodes

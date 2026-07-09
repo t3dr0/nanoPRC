@@ -180,6 +180,11 @@ prc_parse_file_schema(prc_context *ctx, prc_filestructure *file_struct, prc_bit_
             }
         }
     }
+#if DEBUG_MODEL_PARSING
+    DEBUG_LOG2("schema_count = %u\n", data->schema_count);
+    for (k = 0; k < data->schema_count; k++)
+        DEBUG_LOG2("  entity_schema[%zu].entity_type = %u\n", k, data->entity_schema[k].entity_type);
+#endif
     return 0;
 }
 
@@ -205,7 +210,12 @@ prc_parse_model_file(prc_context *ctx, prc_filestructure *file_struct,
     prc_init_bit_state(ctx, &bit_state, file_struct->model_unzipped, file_struct->model_size);
 
     /* For some reason there is an extra uint32 at the start of this */
-    prc_bitread_uint32(ctx, &bit_state);
+    {
+        uint32_t leading_u32 = prc_bitread_uint32(ctx, &bit_state);
+#if DEBUG_MODEL_PARSING
+        DEBUG_LOG2("model_file leading_uint32 = %u\n", leading_u32);
+#endif
+    }
 
     code = prc_read_check_tag(ctx, &bit_state, PRC_TYPE_ASM_ModelFile, &type);
     if (code < 0)
@@ -248,6 +258,11 @@ prc_parse_model_file(prc_context *ctx, prc_filestructure *file_struct,
 
     data->units_from_CAD_flag = prc_bitread_bit(ctx, &bit_state);
     data->units_from_CAD_file = prc_bitread_double(ctx, &bit_state);
+#if DEBUG_MODEL_PARSING
+    DEBUG_LOG2("model_file attribute_count=%u name.same=%u name.null=%u units_from_CAD_flag=%u units_from_CAD_file=%f\n",
+        data->base.attribute_data.attribute_count, data->base.name.same, data->base.name.name.null_flag,
+        data->units_from_CAD_flag, data->units_from_CAD_file);
+#endif
 
     data->number_of_root_product_occurrences = prc_bitread_uint32(ctx, &bit_state);
 

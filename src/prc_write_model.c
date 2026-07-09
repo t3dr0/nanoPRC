@@ -23,11 +23,20 @@ int
 prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
     const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count)
 {
+    uint32_t default_uid[4] = { PRC_WRITE_FILE_STRUCT_UID0, 0, 0, 0 };
+    return prc_write_model_file_to_stream_ex(ctx, s, model_name, root_biased_index, file_struct_count, default_uid);
+}
+
+int
+prc_write_model_file_to_stream_ex(prc_context *ctx, prc_bit_write_state *s,
+    const char *model_name, uint32_t root_biased_index, uint32_t file_struct_count,
+    const uint32_t file_struct_uid[4])
+{
     uint32_t k;
 
-    if (ctx == NULL || s == NULL || file_struct_count == 0)
+    if (ctx == NULL || s == NULL || file_struct_count == 0 || file_struct_uid == NULL)
     {
-        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_model_file_to_stream: invalid arguments\n");
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_model_file_to_stream_ex: invalid arguments\n");
         return PRC_ERROR_INTERNAL;
     }
 
@@ -36,7 +45,15 @@ prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
     if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;        /* base.attribute_count */
     if (prc_write_name(ctx, s, model_name) != 0) goto fail;    /* base.name */
 
-    if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;      /* units_from_CAD_flag */
+    /* units_from_CAD_flag: a real, independently-produced, tessellation-
+       only compressed PRC file (used as a working reference specifically
+       because it opens correctly in Acrobat) always writes this true, even
+       though units_from_CAD_file's actual value (1.0, i.e. no scaling) is
+       identical whether or not the flag is set. Acrobat's handling of an
+       unset flag here is untested/unconfirmed -- but since every field this
+       write facility has copied from real producer conventions so far has
+       turned out to matter more than it looked like it should, match it. */
+    if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;      /* units_from_CAD_flag */
     if (prc_bitwrite_double(ctx, s, 1.0) != 0) goto fail; /* units_from_CAD_file */
 
     if (prc_bitwrite_uint32(ctx, s, 1) != 0) goto fail; /* number_of_root_product_occurrences */
@@ -65,10 +82,10 @@ prc_write_model_file_to_stream(prc_context *ctx, prc_bit_write_state *s,
        prc_write_tree_to_stream's *root_biased_index_out, which -- since
        the tree encoder always places the root last -- equals that file
        structure's total product count. */
-    if (prc_bitwrite_uint32(ctx, s, PRC_WRITE_FILE_STRUCT_UID0) != 0) goto fail;
-    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;
-    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;
-    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, file_struct_uid[0]) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, file_struct_uid[1]) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, file_struct_uid[2]) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, file_struct_uid[3]) != 0) goto fail;
     if (prc_bitwrite_uint32(ctx, s, root_biased_index) != 0) goto fail; /* root_index */
     if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;    /* product_occurence_is_active */
 
@@ -178,8 +195,17 @@ prc_write_add_default_style(prc_context *ctx, prc_write_global_tables *tables)
     prc_graph_style style;
     uint32_t biased_gray_index, biased_black_index, biased_material_index;
 
+    /* A warm terracotta tone, not a light gray: a (0.7,0.7,0.7) neutral
+       gray reads as near-white under typical viewer lighting and default
+       (often white) backgrounds, making solid geometry effectively
+       invisible until the background is manually changed -- confirmed the
+       hard way testing this write facility's teapot demo in a real 3D-PDF
+       viewer. This is the one shared default every write-facility caller
+       gets when it doesn't specify its own style, so it needs to be
+       visible against both light and dark backgrounds, not just
+       plausible-looking in isolation. */
     memset(&gray, 0, sizeof(gray));
-    gray.red = 0.7; gray.green = 0.7; gray.blue = 0.7; gray.alpha = 1.0;
+    gray.red = 0.72; gray.green = 0.42; gray.blue = 0.20; gray.alpha = 1.0;
     biased_gray_index = prc_write_color_add(ctx, tables, &gray);
     if (biased_gray_index == 0)
         return 0;
@@ -227,19 +253,20 @@ prc_write_prc_buffer(prc_context *ctx,
     const prc_write_tess_entry *tess_entries, uint32_t num_tess_entries,
     uint8_t **out_buf, size_t *out_size)
 {
-    prc_bit_write_state schema_s, tree_s, tess_s, geom_s, model_s;
-    uint8_t *schema_comp = NULL, *tree_comp = NULL, *tess_comp = NULL, *geom_comp = NULL, *model_comp = NULL;
-    size_t schema_comp_len = 0, tree_comp_len = 0, tess_comp_len = 0, geom_comp_len = 0, model_comp_len = 0;
+    prc_bit_write_state schema_s, tree_s, tess_s, geom_s, extra_geom_s, model_s;
+    uint8_t *schema_comp = NULL, *tree_comp = NULL, *tess_comp = NULL, *geom_comp = NULL, *extra_geom_comp = NULL, *model_comp = NULL;
+    size_t schema_comp_len = 0, tree_comp_len = 0, tess_comp_len = 0, geom_comp_len = 0, extra_geom_comp_len = 0, model_comp_len = 0;
     uint32_t root_biased_index = 0;
     uint32_t default_style_index;
     int ret = PRC_ERROR_INTERNAL;
     /* See PRC_WRITE_PRC_FILE_SECTION_COUNT's doc comment: file-struct-header
-       (implicit) + schema_globals + tree + tessellation + geometry. The
-       (always-empty) geometry section is written even though this write
-       facility never produces exact B-Rep content: some third-party PRC
-       readers assume Table 6's fixed section set is always present and
-       misread a later section's bytes as geometry otherwise -- see
-       prc_write_geometry_section_to_stream. */
+       (implicit) + schema_globals + tree + tessellation + geometry +
+       extra_geometry. The (always-empty) geometry/extra_geometry sections
+       are written even though this write facility never produces exact
+       B-Rep content: some third-party PRC readers assume Table 6's fixed
+       section set is always present and misread a later section's bytes
+       as the missing one otherwise -- see prc_write_geometry_section_to_
+       stream and prc_write_extra_geometry_section_to_stream. */
     const uint32_t section_count = PRC_WRITE_PRC_FILE_SECTION_COUNT;
     uint32_t section_offsets[PRC_WRITE_PRC_FILE_SECTION_COUNT];
     uint32_t start_offset, end_offset;
@@ -252,6 +279,7 @@ prc_write_prc_buffer(prc_context *ctx,
     memset(&tree_s, 0, sizeof(tree_s));
     memset(&tess_s, 0, sizeof(tess_s));
     memset(&geom_s, 0, sizeof(geom_s));
+    memset(&extra_geom_s, 0, sizeof(extra_geom_s));
     memset(&model_s, 0, sizeof(model_s));
 
     if (ctx == NULL || tables == NULL || root == NULL || out_buf == NULL || out_size == NULL)
@@ -285,6 +313,10 @@ prc_write_prc_buffer(prc_context *ctx,
     if (prc_write_geometry_section_to_stream(ctx, &geom_s) != 0) goto cleanup;
     if (prc_bitwrite_flush(ctx, &geom_s) != 0) goto cleanup;
 
+    if (prc_bitwrite_init(ctx, &extra_geom_s, 64) != 0) goto cleanup;
+    if (prc_write_extra_geometry_section_to_stream(ctx, &extra_geom_s) != 0) goto cleanup;
+    if (prc_bitwrite_flush(ctx, &extra_geom_s) != 0) goto cleanup;
+
     if (prc_bitwrite_init(ctx, &model_s, 256) != 0) goto cleanup;
     if (prc_write_model_file_to_stream(ctx, &model_s, model_name, root_biased_index, 1) != 0) goto cleanup;
     if (prc_bitwrite_flush(ctx, &model_s) != 0) goto cleanup;
@@ -293,6 +325,7 @@ prc_write_prc_buffer(prc_context *ctx,
     if (prc_write_deflate(ctx, tree_s.buf, tree_s.byte_pos, &tree_comp, &tree_comp_len) != 0) goto cleanup;
     if (prc_write_deflate(ctx, tess_s.buf, tess_s.byte_pos, &tess_comp, &tess_comp_len) != 0) goto cleanup;
     if (prc_write_deflate(ctx, geom_s.buf, geom_s.byte_pos, &geom_comp, &geom_comp_len) != 0) goto cleanup;
+    if (prc_write_deflate(ctx, extra_geom_s.buf, extra_geom_s.byte_pos, &extra_geom_comp, &extra_geom_comp_len) != 0) goto cleanup;
     if (prc_write_deflate(ctx, model_s.buf, model_s.byte_pos, &model_comp, &model_comp_len) != 0) goto cleanup;
 
     /* Every section's final size is now known, so the complete layout
@@ -308,6 +341,7 @@ prc_write_prc_buffer(prc_context *ctx,
     section_offsets[2] = section_offsets[1] + (uint32_t)schema_comp_len;
     section_offsets[3] = section_offsets[2] + (uint32_t)tree_comp_len;
     section_offsets[4] = section_offsets[3] + (uint32_t)tess_comp_len;
+    section_offsets[5] = section_offsets[4] + (uint32_t)geom_comp_len;
     /* The model section is addressed via start_offset/end_offset directly,
        not through section_offset[] -- see prc_parse_main.c's "the model
        file is defined special" handling -- but it must still be placed
@@ -320,7 +354,7 @@ prc_write_prc_buffer(prc_context *ctx,
        regular section's end as the model's start_offset, so placing the
        model section anywhere else produces a bogus (tiny) "end" for the
        real last regular section. */
-    start_offset = section_offsets[4] + (uint32_t)geom_comp_len;
+    start_offset = section_offsets[5] + (uint32_t)extra_geom_comp_len;
     end_offset = start_offset + (uint32_t)model_comp_len;
     total_size = (size_t)end_offset;
 
@@ -337,6 +371,7 @@ prc_write_prc_buffer(prc_context *ctx,
     memcpy(buf + section_offsets[2], tree_comp, tree_comp_len);
     memcpy(buf + section_offsets[3], tess_comp, tess_comp_len);
     memcpy(buf + section_offsets[4], geom_comp, geom_comp_len);
+    memcpy(buf + section_offsets[5], extra_geom_comp, extra_geom_comp_len);
     memcpy(buf + start_offset, model_comp, model_comp_len);
 
     *out_buf = buf;
@@ -350,11 +385,13 @@ cleanup:
     if (tree_comp != NULL) prc_free(ctx, tree_comp);
     if (tess_comp != NULL) prc_free(ctx, tess_comp);
     if (geom_comp != NULL) prc_free(ctx, geom_comp);
+    if (extra_geom_comp != NULL) prc_free(ctx, extra_geom_comp);
     if (model_comp != NULL) prc_free(ctx, model_comp);
     prc_bitwrite_release(ctx, &schema_s);
     prc_bitwrite_release(ctx, &tree_s);
     prc_bitwrite_release(ctx, &tess_s);
     prc_bitwrite_release(ctx, &geom_s);
+    prc_bitwrite_release(ctx, &extra_geom_s);
     prc_bitwrite_release(ctx, &model_s);
     return ret;
 }

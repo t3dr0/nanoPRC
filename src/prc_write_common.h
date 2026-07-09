@@ -53,17 +53,22 @@ uint8_t *prc_write_le_uint32(uint8_t *p, uint32_t v);
    every graphics-visibility and reference-target fix, and cleared once
    these were made non-zero) -- these do not need to be cryptographically
    random for a single-file writer to work correctly, only non-zero and
-   mutually consistent everywhere the format requires equality. Comparing
-   against a real, known-good PRC stream (extracted from examples/cube.pdf)
-   confirmed the required equalities: the main header's per-file-structure
-   file_info[0].unique_id must equal that file structure's own embedded
-   unique_id_file, and the model section's far reference to "the file
-   structure owning the root product" must equal that same value too --
-   PRC_WRITE_FILE_STRUCT_UID0 is used for all three. PRC_WRITE_FILE_UID0
-   (the overall file's own identity) and PRC_WRITE_APP_UID0 (authoring
-   application identity) are independent of it and of each other in the
-   real file, so distinct placeholder values are used for each. A future
-   revision could generate these per call instead of reusing fixed values. */
+   mutually consistent everywhere the format requires equality.
+
+   PRC_WRITE_FILE_UID0 is independent of PRC_WRITE_FILE_STRUCT_UID0 --
+   revised back from a brief attempt at making them equal, which was based
+   on a single reference file (not examples/cube.pdf) whose main header's
+   unique_id_file happened to equal its file structure's own identity. A
+   THIRD, independently-produced real file (a different generator again)
+   directly contradicts that: its main header's unique_id_file and its
+   file structure's own embedded unique_id_file are different values.
+   Between three real producers agreeing on nothing about this field's
+   relationship to the file structure's identity beyond "non-zero", it
+   looks like generator-specific noise rather than a real requirement, so
+   this write facility goes back to treating it as independent. PRC_WRITE_
+   APP_UID0 (authoring application identity) is likewise independent of
+   both in every real file checked so far. A future revision could
+   generate these per call instead of reusing fixed values. */
 #define PRC_WRITE_FILE_UID0 1u
 #define PRC_WRITE_APP_UID0 2u
 #define PRC_WRITE_FILE_STRUCT_UID0 3u
@@ -85,17 +90,23 @@ uint8_t *prc_write_le_unique_id(uint8_t *p, uint32_t word0);
    version ("This international standard specifies the PRC version 10001.
    Documents with other PRC versions are non-compliant" -- version numbers
    are year-modulo-2000 + day-of-year, so 10001 = 2010 day 1, this
-   document's own publication version). examples/cube.pdf declares
-   7094/23306 at these fields, which are NOT spec-compliant values --
-   third-party vendor toolkits (e.g. the one used by SolidWorks) are known
-   to write non-conformant version numbers here. cube.pdf's values were
-   useful during debugging purely as an independently-proven "a real
-   reader accepts this exact byte sequence" reference point, not because
-   they are the value a compliant writer should emit. Now that debugging
-   has established real readers accept our output, write the one value
-   the spec actually defines. */
-#define PRC_WRITE_MIN_VERS_FOR_READ 10001u
-#define PRC_WRITE_AUTH_VERS 10001u
+   document's own publication version) -- but a real, deployed reader
+   (Adobe Acrobat) REJECTS files declaring it outright: "This 3D model
+   requires a more recent version of Acrobat", blank 3D scene, empty model
+   tree, even on a fully updated Acrobat install. This matches the spec's
+   own described reader behavior to the letter ("if [the reader's]
+   current_version is less than the file's minimal_version_for_read, the
+   reader shall not continue to process the file and report an error") --
+   Acrobat's PRC engine has apparently never been updated to recognize
+   version 10001 as valid, so declaring the literal spec-compliant value
+   makes the single most important real-world reader refuse the file
+   entirely. examples/cube.pdf's 7094/23306 -- confirmed to open
+   successfully in real Acrobat -- are used instead: not spec-compliant
+   per the letter of the standard, but the only values actually proven to
+   work in the reader that matters most. Spec-purity was tried, tested
+   against real Acrobat, and lost. */
+#define PRC_WRITE_MIN_VERS_FOR_READ 7094u
+#define PRC_WRITE_AUTH_VERS 23306u
 
 /* Writes ContentPRCBase/ContentPRCRefBase's `name` field (Table 31): bit
    same=1 with no following string if `name` is NULL (matching this write

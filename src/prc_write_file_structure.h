@@ -60,6 +60,15 @@ int prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_sta
    misinterpret a later (present) section's bytes as the missing one. */
 int prc_write_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s);
 
+/* PRC_TYPE_ASM_FileStructureExtraGeometry (Table 51): written unconditionally
+   empty for the same reason as prc_write_geometry_section_to_stream above --
+   Table 6's fixed section set includes this as a distinct section from
+   FileStructureGeometry, and a real, independently-produced, Acrobat-
+   working reference file always has six sections (file-struct-header +
+   five content sections) where this write facility previously only ever
+   produced five, omitting this one entirely. */
+int prc_write_extra_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s);
+
 /* Deflate-compresses `src` (zlib, default level, single deflateInit/deflate
    .../Z_FINISH/deflateEnd call sized via deflateBound) into a caller-owned
    (prc_free) buffer. Returns 0 on success. */

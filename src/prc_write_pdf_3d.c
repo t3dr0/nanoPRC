@@ -29,18 +29,27 @@
                                                          to 3DView objects,
                                                          omitted entirely if
                                                          no views given
-     3DView      <</Type/3DView /XN(name) /IN(name) /C2W[12 numbers] /CO d>>
-                                                      -- the 4 keys nanoPRC's
-                                                         own reader already
-                                                         extracts (prc_pdf.h:
-                                                         PDF_C2W/CO/IN/XN_NAME)
+     3DView      <</Type/3DView /XN(name) /C2W[12 numbers] /CO d>>
+                                                      -- no /IN: cube.pdf's
+                                                         real views never
+                                                         carry it alongside
+                                                         /XN, only /XN alone
+     BorderStyle <</S/S /Type/Border /W 0>>            -- cube.pdf carries
+                                                         both this AND the
+                                                         old-style /Border
+                                                         array on its Annot,
+                                                         not one or the other
      Annot       <</Type/Annot /Subtype/3D /Rect[x0 y0 x1 y1] /P <Page ref>
                    /3DD <3D stream ref> /3DV <default View ref> /3DI true
                    /3DA<</A/PO/D/PC/DIS/I/NP false/TB true/Transparent true>>
-                   /AP<</N <Appearance ref>>> /Border[0 0 0]
-                   /Contents(...) /NM(...)>>          -- /3DA copied verbatim
+                   /AP<</N <Appearance ref>>> /BS <BorderStyle ref>
+                   /Border[0 0 0] /Contents(...) /NM(...) /UID(1)>>
+                                                      -- /3DA copied verbatim
                                                          from cube.pdf's
-                                                         known-good values
+                                                         known-good values;
+                                                         /UID is a fixed
+                                                         placeholder, cube.pdf
+                                                         has one too
      Appearance  <</Type/XObject /Subtype/Form /BBox[0 0 w h]
                    /Matrix[1 0 0 1 0 0]
                    /Resources<</Font<</F1<</Type/Font/Subtype/Type1
@@ -202,8 +211,8 @@ prc_pdf_write_view_obj(prc_context *ctx, prc_pdf_writer *w, uint32_t obj_num,
     if (prc_pdf_begin_obj(ctx, w, obj_num) != 0) return PRC_ERROR_IO;
     if (fprintf(w->fid, "<</Type/3DView/XN") < 0) goto io_fail;
     prc_pdf_write_escaped_string(w, name);
-    if (fprintf(w->fid, "/IN") < 0) goto io_fail;
-    prc_pdf_write_escaped_string(w, name);
+    /* No /IN (internal name): examples/cube.pdf's real, working 3DView
+       objects only ever carry /XN, never /IN alongside it. */
     if (fprintf(w->fid, "/C2W[") < 0) goto io_fail;
     for (i = 0; i < 12; i++)
         if (fprintf(w->fid, i == 0 ? "%.6f" : " %.6f", c2w[i]) < 0) goto io_fail;
@@ -237,7 +246,7 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     char appearance_content[384];
     double title_width, title_x, title_y;
     int appearance_content_len;
-    uint32_t catalog_num, pages_num, page_num, annots_num, annot_num, appearance_num, stream_num;
+    uint32_t catalog_num, pages_num, page_num, annots_num, annot_num, appearance_num, stream_num, border_style_num;
     uint32_t *view_nums = NULL;
     uint32_t default_view_index = 0;
     uint32_t i;
@@ -302,6 +311,7 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     annot_num = prc_pdf_writer_alloc_obj(ctx, &w);
     appearance_num = prc_pdf_writer_alloc_obj(ctx, &w);
     stream_num = prc_pdf_writer_alloc_obj(ctx, &w);
+    border_style_num = prc_pdf_writer_alloc_obj(ctx, &w);
     for (i = 0; i < options->num_views; i++)
         view_nums[i] = prc_pdf_writer_alloc_obj(ctx, &w);
     if (w.error) { ret = PRC_ERROR_MEMORY; goto cleanup; }
@@ -355,30 +365,43 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     if (prc_pdf_write_stream_body(ctx, &w, (const uint8_t *)appearance_content, (size_t)appearance_content_len) != 0) goto io_fail;
     if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
 
+    /* Border style dict, as its own indirect object: examples/cube.pdf's
+       real, working annotation carries BOTH the old-style /Border[0 0 0]
+       array AND a /BS reference to this dict (`<</S/S/Type/Border/W 0>>`)
+       -- not one or the other. */
+    if (prc_pdf_begin_obj(ctx, &w, border_style_num) != 0) goto io_fail;
+    if (fprintf(fid, "<</S/S/Type/Border/W 0>>") < 0) goto io_fail;
+    if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
+
     /* Annotation. /3DA activation values based on a real, working 3D
        annotation (examples/cube.pdf): activate on page open, deactivate
-       on page close, hide the navigation panel, show the toolbar. That
-       reference file's /3DA also set /Transparent true, but per the
-       actual ISO 32000-2 Table 310 ("Entries in a 3D activation
-       dictionary"), /Transparent (like /Style and /Window) was only
-       introduced in PDF 2.0 -- using it in a file whose header declares
-       %PDF-1.7 is a version mismatch that at least two real-world readers
-       (confirmed by testing) reject the whole annotation over, even
-       though every OTHER key here is valid at 1.7 (/NP and /TB are
-       explicitly "(PDF 1.7)"; /A, /D, /DIS predate that). Left out here
-       for that reason -- not merely an omitted default. */
+       on page close, hide the navigation panel, show the toolbar,
+       /Transparent true. An earlier version of this code omitted
+       /Transparent, reasoning that it's a PDF-2.0-only key (ISO 32000-2
+       Table 310) and therefore a version mismatch in a %PDF-1.7 file --
+       but examples/cube.pdf itself declares %PDF-1.6 and includes
+       /Transparent true, and is the proven-working reference file used
+       throughout this codebase, directly contradicting that theory. The
+       real-world rejection observed when this was tested previously was
+       during the same investigation that also had several other, since-
+       fixed compressed-tessellation content bugs active simultaneously;
+       that test's conclusion was confounded and is superseded by matching
+       cube.pdf's real structure exactly. /UID is a stable per-annotation
+       identifier some readers use for revision tracking; cube.pdf has one
+       (an arbitrary-looking numeric string), so a fixed placeholder is
+       written here too rather than omitting the key entirely. */
     if (prc_pdf_begin_obj(ctx, &w, annot_num) != 0) goto io_fail;
     if (fprintf(fid, "<</Type/Annot/Subtype/3D/Rect[%.2f %.2f %.2f %.2f]/P %u 0 R",
                 rect_x0, rect_y0, rect_x1, rect_y1, page_num) < 0) goto io_fail;
     if (fprintf(fid, "/3DD %u 0 R", stream_num) < 0) goto io_fail;
     if (options->num_views > 0)
         if (fprintf(fid, "/3DV %u 0 R", view_nums[default_view_index]) < 0) goto io_fail;
-    if (fprintf(fid, "/3DI true/3DA<</A/PO/D/PC/DIS/I/NP false/TB true>>") < 0) goto io_fail;
-    if (fprintf(fid, "/AP<</N %u 0 R>>/Border[0 0 0]/Contents", appearance_num) < 0) goto io_fail;
+    if (fprintf(fid, "/3DI true/3DA<</A/PO/D/PC/DIS/I/NP false/TB true/Transparent true>>") < 0) goto io_fail;
+    if (fprintf(fid, "/AP<</N %u 0 R>>/BS %u 0 R/Border[0 0 0]/Contents", appearance_num, border_style_num) < 0) goto io_fail;
     prc_pdf_write_escaped_string(&w, "3D Model");
     if (fprintf(fid, "/NM") < 0) goto io_fail;
     prc_pdf_write_escaped_string(&w, "nanoPRC_3DAnnot");
-    if (fprintf(fid, ">>") < 0) goto io_fail;
+    if (fprintf(fid, "/UID(1)>>") < 0) goto io_fail;
     if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
 
     /* Annots array as its own indirect object rather than inline in the

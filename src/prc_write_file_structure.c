@@ -125,6 +125,41 @@ fail:
     return s->error ? PRC_ERROR_MEMORY : PRC_ERROR_INTERNAL;
 }
 
+/* PRC_TYPE_ASM_FileStructureExtraGeometry (Table 51): a real, independently-
+   produced, tessellation-only compressed PRC file (used as a working
+   reference specifically because it opens correctly in Acrobat) has SIX
+   sections in its file structure's offset table (file-struct-header +
+   five content sections); this write facility only ever produced five
+   (file-struct-header + schema/globals + tree + tessellation + geometry),
+   omitting ExtraGeometry entirely -- matching the pre-existing comment on
+   prc_write_geometry_section_to_stream's caller about "some third-party
+   PRC readers assum[ing] Table 6's fixed section set is always present
+   and misread[ing] a later section's bytes as geometry otherwise". Field
+   order/content mirrors prc_parse_file_extra_geometry exactly (prc_parse_
+   file_structure.c): tag, ContentPRCBase (attribute_count, name), then
+   extra_geom_count -- that parser does NOT consume a trailing user_data
+   stream despite the struct having a user_data field, so this writer
+   doesn't emit one either. */
+int
+prc_write_extra_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s)
+{
+    if (ctx == NULL || s == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_extra_geometry_section_to_stream: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+
+    if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_FileStructureExtraGeometry) != 0) goto fail;
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* base.attribute_count */
+    if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;     /* base.name.same */
+    if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail; /* extra_geom_count */
+
+    return 0;
+
+fail:
+    return s->error ? PRC_ERROR_MEMORY : PRC_ERROR_INTERNAL;
+}
+
 int
 prc_write_deflate(prc_context *ctx, const uint8_t *src, size_t src_len, uint8_t **out, size_t *out_len)
 {

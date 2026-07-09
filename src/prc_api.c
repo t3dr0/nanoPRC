@@ -2204,6 +2204,22 @@ prc_api_helper_get_attributes(prc_context *ctx, prc_api_attributes *api_attribut
                         break;
                     case PRC_ATTRIBUTE_TYPE_CHAR_UTF8:
                         api_attr->type = PRC_API_STRING_ATTRIBUTE;
+                        /* val_string.string is NULL whenever null_flag is set
+                           (no string value at all, e.g. an empty CHAR_UTF8
+                           attribute) -- confirmed the hard way via a crash
+                           (strlen on NULL) reading a real-world file with
+                           exactly this attribute shape. Produce an empty
+                           string instead of dereferencing NULL. */
+                        if (prc_attr->val_string.null_flag || prc_attr->val_string.string == NULL)
+                        {
+                            api_attr->value_string = (char *)prc_calloc(ctx, 1, sizeof(char));
+                            if (api_attr->value_string == NULL)
+                            {
+                                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_api_helper _get_attributes\n");
+                                return PRC_ERROR_MEMORY;
+                            }
+                            break;
+                        }
                         api_attr->value_string = (char *)prc_calloc(ctx,
                             strlen((const char *)prc_attr->val_string.string) + 1, sizeof(char));
                         if (api_attr->value_string == NULL)
