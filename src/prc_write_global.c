@@ -383,11 +383,17 @@ prc_write_globals_to_stream(prc_context *ctx, prc_bit_write_state *s, const prc_
         return PRC_ERROR_INTERNAL;
     }
 
-    /* tess_chord / tess_angle: tessellation-quality globals, unrelated to
-       the tables this encoder manages -- written as harmless defaults so
-       the real parser's fixed field order is satisfied. */
-    if (prc_bitwrite_double(ctx, s, 0.0) != 0) goto fail;
-    if (prc_bitwrite_double(ctx, s, 0.0) != 0) goto fail;
+    /* tess_chord / tess_angle: tessellation-quality globals. Previously
+       written as 0.0/0.0 ("harmless defaults" -- untested assumption).
+       Two independently-produced real files both show non-zero values
+       here (chord 600/2000, angle 40/40 -- the angle agreeing exactly
+       across two different generators strongly suggests a shared,
+       widely-used default), while every file this write facility has
+       produced left both at a literal zero -- which a stricter reader
+       could plausibly read as "zero tolerance", i.e. a degenerate/invalid
+       quality target, rather than "unset". Match the real convention. */
+    if (prc_bitwrite_double(ctx, s, 2000.0) != 0) goto fail;
+    if (prc_bitwrite_double(ctx, s, 40.0) != 0) goto fail;
 
     /* serialize_help: no markup font-key data in this phase */
     if (prc_bitwrite_string(ctx, s, NULL) != 0) goto fail;   /* default_font_family_name: absent */

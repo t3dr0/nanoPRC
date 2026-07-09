@@ -2009,20 +2009,21 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* is_calculated */
         goto werr;
     /* has_faces: per the spec (Table 175), "TRUE if the entity is built
-       using geometrical faces" -- i.e. real topological B-Rep faces, not
-       merely "triangle_face_array happens to group triangles by style".
-       This write facility never emits exact B-Rep geometry at all, so this
-       is always FALSE, matching a real, independently-produced compressed
-       PRC file (converted directly from a plain mesh format with no B-Rep,
-       via the same independent tool used elsewhere in this codebase for
-       ground-truth verification) that has real, multi-value
-       triangle_face_array data (genuinely different triangles assigned to
-       2 different faces) alongside has_faces == FALSE. An earlier version
-       of this comment claimed the opposite (has_faces must be TRUE
-       whenever triangle_face_array has real data) based on a test that
-       confounded this bit with a separate, since-fixed line_attribute_
-       array bug -- that conclusion was wrong. */
-    if (prc_bitwrite_bit(ctx, state, 0) != 0)   /* has_faces */
+       using geometrical faces". A prior revision of this comment argued
+       for always FALSE, based on a locally-converted reference file that
+       had real multi-value triangle_face_array data alongside has_faces ==
+       FALSE. A genuinely third-party, in-the-wild, real-world Acrobat-
+       targeted 3D PDF (unlike that locally-converted reference) shows the
+       opposite: has_faces == TRUE alongside its own real, multi-face
+       triangle_face_array data -- and, while not proven in isolation as
+       the sole fix, this is the only remaining value-level discrepancy
+       found against that reference after every other section of this
+       write facility's output was independently confirmed byte/structure-
+       correct via extensive splice testing against the same file. Setting
+       it FALSE while genuinely emitting face-indexed triangle data is
+       also simply self-contradictory on its face ("no faces" plus 2048
+       faces of triangle data in the very next arrays). */
+    if (prc_bitwrite_bit(ctx, state, 1) != 0)   /* has_faces */
         goto werr;
     if (prc_bitwrite_double(ctx, state, tolerance_mm) != 0)
         goto werr;
@@ -2036,9 +2037,34 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     if (prc_bitwrite_compressed_integer_array(ctx, state, trav->point_array,
             trav->point_array_size) != 0)
         goto werr;
-    if (prc_bitwrite_character_array(ctx, state, trav->edge_status_array,
-            trav->edge_status_array_size, 2, 1, 0) != 0)
-        goto werr;
+    /* edge_status_array is documented (ISO/CD 14739-1 §7.8.9, Table 175/
+       CR-14) to hold 3*T entries, not T -- one 2-bit field per triangle is
+       the only one a decoder actually consumes (indexed edge_status[t],
+       not edge_status[3t]), but entries [T .. 3T-1] must still be present
+       on disk as zero padding. Writing only T entries (this write
+       facility's own prior behavior) round-trips fine through a reader
+       that just trusts the stored count, but is not what the format
+       specifies, and was found -- via a decoder cross-checked directly
+       against Adobe Acrobat -- to be one of the load-bearing details a
+       stricter reader's array-cardinality validation depends on. */
+    {
+        uint32_t t_count = trav->edge_status_array_size;
+        uint32_t padded_count = t_count * 3;
+        uint8_t *padded = (uint8_t *)prc_calloc(ctx, padded_count > 0 ? padded_count : 1, sizeof(uint8_t));
+
+        if (padded == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "prc_write_compress_tess_to_stream: allocation error\n");
+            return PRC_ERROR_MEMORY;
+        }
+        memcpy(padded, trav->edge_status_array, (size_t)t_count * sizeof(uint8_t));
+        if (prc_bitwrite_character_array(ctx, state, padded, padded_count, 2, 1, 0) != 0)
+        {
+            prc_free(ctx, padded);
+            goto werr;
+        }
+        prc_free(ctx, padded);
+    }
     if (prc_bitwrite_compressed_indice_array(ctx, state, trav->triangle_face_array,
             trav->triangle_face_array_size, 1, 0) != 0)
         goto werr;

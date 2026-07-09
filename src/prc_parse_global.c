@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include "prc_parse_global.h"
 #include "prc_parse_common.h"
+#include "debug.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 /* Need to figure out how to pass the ctx here */
@@ -835,6 +836,7 @@ int prc_parse_global_data(prc_context *ctx, prc_bit_state *bit_state, prc_file_s
 
     data->tess_chord = prc_bitread_double(ctx, bit_state);
     data->tess_angle = prc_bitread_double(ctx, bit_state);
+    DEBUG_LOG2("global tess_chord=%.17g tess_angle=%.17g\n", data->tess_chord, data->tess_angle);
 
     code = prc_parse_serialize_help(ctx, bit_state, &data->serialize_help);
     if (code < 0)
