@@ -764,22 +764,31 @@ int main(int argc, char *argv[])
 
             memset(&view, 0, sizeof(view));
             view.name = "Default";
-            /* A 3/4-ish view direction, offset from center by ~3.5x the
-               bounding box diagonal so the whole model fits comfortably in
-               frame regardless of its absolute size or the viewer's
-               default field of view. The multiplier was previously ~1.78x
-               the diagonal (magnitude of (1.0,-1.3,0.7)); confirmed too
-               tight in real-world testing (the teapot rendered off-screen,
-               needing manual hunting to find) against examples/cube.pdf's
-               own real, working 3DView -- its eye is ~240 units from
-               target with CO (eye-target distance) 219.5, a considerably
-               more generous margin relative to that cube's own size than
-               this demo was previously using. up = +Z matches this
-               dataset's own up axis (the spout tip sits at the highest Z
-               value in teapot_patches). */
-            view.eye[0] = center[0] + diag_len * 3.0;
-            view.eye[1] = center[1] - diag_len * 3.9;
-            view.eye[2] = center[2] + diag_len * 2.1;
+            /* A 3/4-ish view direction. Distance multiplier history (all
+               2026-07-10, same session): started at ~1.78x the bounding-
+               box diagonal (magnitude of (1.0,-1.3,0.7)), found "too
+               tight, teapot off-screen" -- but that was BEFORE prc_pdf_
+               compute_c2w_co's camera-matrix bug (transposed rows,
+               inverted forward vector) was fixed, so "off-screen" was very
+               likely the camera pointing at the wrong place entirely, not
+               a real distance problem; widened to ~5.3x, which just made a
+               mis-pointed camera's frame wide enough to stumble onto the
+               object anyway. Once the matrix bug was fixed (camera
+               provably centered on the model, verified by solving eye +
+               CO*forward against the mesh's own real bbox center), that
+               ~5.3x distance made the teapot fill only ~10% of the view
+               (confirmed in Acrobat) -- tried dividing by 7 (~0.76x) to
+               reach the requested ~70%, which overshot into clipping.
+               Landed back on the ORIGINAL ~1.78x value: it sits neatly
+               between the two data points (0.76x too close, 5.3x too far)
+               and was never actually wrong on distance -- only on
+               direction, since the matrix bug was still active on that
+               very first attempt too. up = +Z matches this dataset's own
+               up axis (the spout tip sits at the highest Z value in
+               teapot_patches). */
+            view.eye[0] = center[0] + diag_len * 1.0;
+            view.eye[1] = center[1] - diag_len * 1.3;
+            view.eye[2] = center[2] + diag_len * 0.7;
             view.target[0] = center[0];
             view.target[1] = center[1];
             view.target[2] = center[2];

@@ -86,10 +86,14 @@ void prc_pdf_write_escaped_string(prc_pdf_writer *w, const char *s);
    re-converting our own utah_teapot.prc through an independent PRC-to-PDF
    tool), and absent from every one of our own attempts that real readers
    rejected. /ID is technically optional per spec, but apparently not
-   practically optional for at least two real 3D-capable readers. Must be
-   called last, after every object has been written via
-   prc_pdf_begin_obj/end_obj. Checks w->error and the underlying FILE's
-   error indicator; returns PRC_ERROR_IO on any write failure. */
-int prc_pdf_write_xref_and_trailer(prc_context *ctx, prc_pdf_writer *w, uint32_t root_obj_num);
+   practically optional for at least two real 3D-capable readers.
+   `info_obj_num` is written as /Info in the trailer if non-zero (an
+   indirect reference to a Document Information dictionary object the
+   caller has already written), omitted entirely if zero. Must be called
+   last, after every object has been written via prc_pdf_begin_obj/
+   end_obj. Checks w->error and the underlying FILE's error indicator;
+   returns PRC_ERROR_IO on any write failure. */
+int prc_pdf_write_xref_and_trailer(prc_context *ctx, prc_pdf_writer *w,
+    uint32_t root_obj_num, uint32_t info_obj_num);
 
 #endif

@@ -68,8 +68,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "prc_write_pdf_3d.h"
 #include "prc_write_pdf.h"
+
+/* Document Information dictionary values. PRC_PDF_PRODUCER identifies this
+   write facility to anything inspecting the PDF's own metadata (distinct
+   from the embedded PRC stream's own version/producer fields, which are
+   unrelated). */
+#define PRC_PDF_PRODUCER "nanoPRC (AGPL)"
 
 /* Default page: landscape, 4:3 aspect (width:height = 4:3), long edge
    (width) = 11in at 72pt/in -- height = 11in * 3/4 = 8.25in = 594pt.
@@ -142,59 +149,82 @@ vec3_scale(prc_pdf_vec3 a, double s)
 }
 
 /* Converts an eye/target/up "look-at" camera into the PDF format's
-   camera-to-world matrix (row-major 3x3 rotation + translation, 12
-   numbers -- confirmed against examples/cube.pdf's real 3DView objects)
-   and center-of-orbit distance. Degenerate inputs (eye == target, or up
-   parallel to the view direction) fall back to a well-defined axis-
-   aligned basis instead of producing NaNs. */
+   camera-to-world matrix and center-of-orbit distance.
+
+   2026-07-10: the previous version of this function was wrong in two
+   compounding ways, found by extracting examples/cube.pdf's raw, real
+   3DView object (`C2W[0.176366 -0.821474 0.542287 -0.573928 0.361762
+   0.734666 -0.799688 -0.440804 -0.407664 199.596 116.632 67.996]/CO
+   219.534`) and comparing it against the cube's own true geometric
+   center, computed precisely from its full exported vertex data:
+   (24.037, 19.861, -21.498).
+
+   (1) The 12-number layout is 3 CONSECUTIVE ROWS, each one full basis
+       vector (R.x R.y R.z, U.x U.y U.z, F.x F.y F.z), NOT 3 rows of
+       INTERLEAVED components (R.x U.x F.x, R.y U.y F.y, R.z U.z F.z) as
+       this function previously wrote. Confirmed by reading c2w[0..2] as
+       a single vector directly from cube.pdf's own bytes and checking it
+       is unit length (it is), then verifying right = cross(up, forward)
+       reproduces it (see below).
+   (2) The third basis vector is FORWARD (eye -> target), not BACK
+       (target -> eye) as this function previously computed. Confirmed
+       by solving for the cube's real center two ways from cube.pdf's
+       real numbers: target = eye - CO*back lands at (80.5,-44.6,157.5)
+       (nowhere near the cube); target = eye + CO*forward, with forward
+       read directly as cube.pdf's own third row, lands at
+       (24.042,19.857,-21.498) -- matching the true center to 3+ decimal
+       places.
+
+   Degenerate inputs (eye == target, or up parallel to the view
+   direction) fall back to a well-defined axis-aligned basis instead of
+   producing NaNs. */
 static void
 prc_pdf_compute_c2w_co(const prc_pdf_view_spec *v, double c2w[12], double *co_out)
 {
-    prc_pdf_vec3 eye, target, up_in, back, right, true_up;
-    double back_len;
+    prc_pdf_vec3 eye, target, up_in, forward, right, true_up;
+    double dist;
 
     eye.x = v->eye[0]; eye.y = v->eye[1]; eye.z = v->eye[2];
     target.x = v->target[0]; target.y = v->target[1]; target.z = v->target[2];
     up_in.x = v->up[0]; up_in.y = v->up[1]; up_in.z = v->up[2];
 
-    back = vec3_sub(eye, target);
-    back_len = vec3_length(back);
-    if (back_len < 1e-9)
+    forward = vec3_sub(target, eye);
+    dist = vec3_length(forward);
+    if (dist < 1e-9)
     {
-        back.x = 0.0; back.y = 0.0; back.z = 1.0;
-        back_len = 0.0;
+        forward.x = 0.0; forward.y = 0.0; forward.z = -1.0;
+        dist = 0.0;
     }
     else
     {
-        back = vec3_scale(back, 1.0 / back_len);
+        forward = vec3_scale(forward, 1.0 / dist);
     }
 
-    right = vec3_cross(up_in, back);
+    right = vec3_cross(up_in, forward);
     if (vec3_length(right) < 1e-9)
     {
         /* Requested up is parallel to the view direction -- pick whichever
-           world axis is least aligned with `back` as a fallback up. */
+           world axis is least aligned with `forward` as a fallback up. */
         prc_pdf_vec3 fallback_up;
         fallback_up.x = 0.0; fallback_up.y = 1.0; fallback_up.z = 0.0;
-        if (fabs(back.y) > 0.9)
+        if (fabs(forward.y) > 0.9)
         {
             fallback_up.x = 1.0; fallback_up.y = 0.0; fallback_up.z = 0.0;
         }
-        right = vec3_cross(fallback_up, back);
+        right = vec3_cross(fallback_up, forward);
     }
     right = vec3_scale(right, 1.0 / vec3_length(right));
-    true_up = vec3_cross(back, right);
+    true_up = vec3_cross(forward, right);
 
-    /* Columns = camera-space right/up/back expressed in world space;
-       flattened row-major (R11 R12 R13 R21 R22 R23 R31 R32 R33), then the
-       camera position -- matches the 12-number layout read directly out
-       of examples/cube.pdf's own 3DView objects. */
-    c2w[0] = right.x;  c2w[1] = true_up.x;  c2w[2] = back.x;
-    c2w[3] = right.y;  c2w[4] = true_up.y;  c2w[5] = back.y;
-    c2w[6] = right.z;  c2w[7] = true_up.z;  c2w[8] = back.z;
+    /* Rows = camera-space right/up/forward expressed in world space, each
+       one a contiguous triple -- matches the 12-number layout read
+       directly out of examples/cube.pdf's own 3DView object. */
+    c2w[0] = right.x;    c2w[1] = right.y;    c2w[2] = right.z;
+    c2w[3] = true_up.x;  c2w[4] = true_up.y;  c2w[5] = true_up.z;
+    c2w[6] = forward.x;  c2w[7] = forward.y;  c2w[8] = forward.z;
     c2w[9] = eye.x; c2w[10] = eye.y; c2w[11] = eye.z;
 
-    *co_out = back_len;
+    *co_out = dist;
 }
 
 static int
@@ -246,7 +276,7 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     char appearance_content[384];
     double title_width, title_x, title_y;
     int appearance_content_len;
-    uint32_t catalog_num, pages_num, page_num, annots_num, annot_num, appearance_num, stream_num, border_style_num;
+    uint32_t catalog_num, pages_num, page_num, annots_num, annot_num, appearance_num, stream_num, border_style_num, info_num;
     uint32_t *view_nums = NULL;
     uint32_t default_view_index = 0;
     uint32_t i;
@@ -312,6 +342,7 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     appearance_num = prc_pdf_writer_alloc_obj(ctx, &w);
     stream_num = prc_pdf_writer_alloc_obj(ctx, &w);
     border_style_num = prc_pdf_writer_alloc_obj(ctx, &w);
+    info_num = prc_pdf_writer_alloc_obj(ctx, &w);
     for (i = 0; i < options->num_views; i++)
         view_nums[i] = prc_pdf_writer_alloc_obj(ctx, &w);
     if (w.error) { ret = PRC_ERROR_MEMORY; goto cleanup; }
@@ -430,7 +461,31 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     if (fprintf(fid, "<</Type/Catalog/Pages %u 0 R>>", pages_num) < 0) goto io_fail;
     if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
 
-    if (prc_pdf_write_xref_and_trailer(ctx, &w, catalog_num) != 0) goto cleanup;
+    /* Document Information dictionary: /Producer identifies this write
+       facility; /CreationDate is this file's actual write time, in the
+       PDF date-string format (ISO 32000-1 7.9.4), UTC ('Z' relationship,
+       no offset digits needed). gmtime()'s static buffer is used and
+       copied out immediately -- no other call between here and its use. */
+    if (prc_pdf_begin_obj(ctx, &w, info_num) != 0) goto io_fail;
+    if (fprintf(fid, "<</Producer") < 0) goto io_fail;
+    prc_pdf_write_escaped_string(&w, PRC_PDF_PRODUCER);
+    {
+        time_t now = time(NULL);
+        struct tm tm_utc;
+        struct tm *tm_ptr = gmtime(&now);
+        char date_str[32];
+
+        if (tm_ptr != NULL)
+        {
+            tm_utc = *tm_ptr;
+            strftime(date_str, sizeof(date_str), "D:%Y%m%d%H%M%SZ", &tm_utc);
+            if (fprintf(fid, "/CreationDate(%s)", date_str) < 0) goto io_fail;
+        }
+    }
+    if (fprintf(fid, ">>") < 0) goto io_fail;
+    if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
+
+    if (prc_pdf_write_xref_and_trailer(ctx, &w, catalog_num, info_num) != 0) goto cleanup;
 
     ret = 0;
     goto cleanup;

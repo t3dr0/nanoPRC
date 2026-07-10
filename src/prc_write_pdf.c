@@ -220,7 +220,8 @@ prc_pdf_write_id_hex_string(prc_pdf_writer *w, const uint8_t id16[16])
 }
 
 int
-prc_pdf_write_xref_and_trailer(prc_context *ctx, prc_pdf_writer *w, uint32_t root_obj_num)
+prc_pdf_write_xref_and_trailer(prc_context *ctx, prc_pdf_writer *w,
+    uint32_t root_obj_num, uint32_t info_obj_num)
 {
     long xref_pos;
     uint32_t i;
@@ -251,7 +252,12 @@ prc_pdf_write_xref_and_trailer(prc_context *ctx, prc_pdf_writer *w, uint32_t roo
     }
 
     prc_pdf_generate_id(w, root_obj_num, xref_pos, id16);
-    if (fprintf(w->fid, "trailer\n<< /Size %u /Root %u 0 R /ID[", w->obj_count + 1, root_obj_num) < 0)
+    if (fprintf(w->fid, "trailer\n<< /Size %u /Root %u 0 R", w->obj_count + 1, root_obj_num) < 0)
+        goto io_fail;
+    if (info_obj_num != 0)
+        if (fprintf(w->fid, " /Info %u 0 R", info_obj_num) < 0)
+            goto io_fail;
+    if (fprintf(w->fid, " /ID[") < 0)
         goto io_fail;
     /* Both halves identical: this writer only ever produces a fresh,
        single-revision file, never an incremental update (where the first
