@@ -591,7 +591,13 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
     }
     prc_free(ctx, sorted);
 
-    node_capacity = distinct_count * 2 + 2;
+    /* +2 over the "normal" 2*distinct_count-1 node budget covers the
+       active_count==1 single-value special case's extra phantom leaf below;
+       +2 more (total +4) covers the unconditional top-level phantom-wrap
+       merge (two more nodes: the dead phantom branch and the new outer
+       root) added after the main merge loop, in every case including that
+       single-value one. */
+    node_capacity = distinct_count * 2 + 4;
     nodes = (prc_huff_build_node **)prc_calloc(ctx, node_capacity, sizeof(prc_huff_build_node *));
     active = (prc_huff_build_node **)prc_calloc(ctx, node_capacity, sizeof(prc_huff_build_node *));
     if (nodes == NULL || active == NULL)
@@ -679,6 +685,69 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
         active[min1] = parent;
         active[min2] = active[active_count - 1];
         active_count--;
+    }
+
+    /* A real, independently-produced compressed PRC file's Huffman tree for
+       these array fields is always structurally INCOMPLETE in one specific
+       way: every actual leaf code begins with bit 1, and the root's entire
+       0-branch is unused (Kraft sum 0.5, not 1.0) -- confirmed by decoding
+       the real leaf tables for edge_status_array, triangle_face_array's and
+       point_reference_array's bit_lengths sub-arrays (2026-07-10 causal-
+       isolation investigation: swapping only this write facility's own,
+       complete/optimal tree into an otherwise-real, Acrobat-working file
+       reproduces Acrobat's blank-model-tree rejection; the real tree's
+       *codes*, once this extra wrap is added, match hand-verified digit for
+       digit). Reproduce it by wrapping the tree built above (over the real
+       leaves only) with one more merge against an unused phantom leaf,
+       placed as the LEFT (0) child so every real leaf's code gains a
+       leading 1 bit -- matching the real encoder's output exactly, not
+       merely a same-size, differently-shaped valid alternative. */
+    {
+        prc_huff_build_node *phantom_wrap = (prc_huff_build_node *)prc_malloc(ctx, sizeof(prc_huff_build_node));
+        prc_huff_build_node *new_root;
+
+        if (phantom_wrap == NULL)
+        {
+            prc_free(ctx, active);
+            *out_root = active[0];
+            *out_nodes = nodes;
+            *out_node_count = node_count;
+            return -1;
+        }
+        /* NOT a leaf: a dead internal node with no children. The real
+           encoder's leaf table has exactly as many entries as there are
+           distinct real values (confirmed against the real file: 4 leaves
+           for edge_status_array, not 5) -- prc_huff_assign_codes only
+           records a table entry for is_leaf nodes it actually pops, and
+           this node (is_leaf=0, left=right=NULL) contributes nothing when
+           popped, exactly mirroring how the decoder's own on-demand tree
+           walk (prc_huffman_data_decoder / prc_bitread_character_array)
+           never touches root->left in the first place, since no real
+           leaf's code starts with bit 0. */
+        phantom_wrap->freq = 0;
+        phantom_wrap->value = 0;
+        phantom_wrap->is_leaf = 0;
+        phantom_wrap->left = NULL;
+        phantom_wrap->right = NULL;
+        nodes[node_count++] = phantom_wrap;
+
+        new_root = (prc_huff_build_node *)prc_malloc(ctx, sizeof(prc_huff_build_node));
+        if (new_root == NULL)
+        {
+            prc_free(ctx, active);
+            *out_root = active[0];
+            *out_nodes = nodes;
+            *out_node_count = node_count;
+            return -1;
+        }
+        new_root->freq = active[0]->freq;
+        new_root->is_leaf = 0;
+        new_root->value = 0;
+        new_root->left = phantom_wrap;
+        new_root->right = active[0];
+        nodes[node_count++] = new_root;
+
+        active[0] = new_root;
     }
 
     *out_root = active[0];
@@ -838,10 +907,53 @@ prc_bitwrite_huffman_block(prc_context *ctx, prc_bit_write_state *state,
         goto cleanup;
     }
 
+    /* prc_huff_assign_codes emits leaves in tree-traversal order (right
+       child before left, depth-first), not sorted by value -- the real
+       file's own leaf table is always listed in ascending leaf VALUE
+       order regardless of tree shape (confirmed against the real
+       edge_status_array table: values 0,1,2,3 in that order, while this
+       tree's own traversal order was 0,3,1,2). Table order has no bearing
+       on decodability (each value/code_length/code_value triple is
+       self-contained), only on matching the real encoder's exact bytes;
+       sort here so this write facility's output does. */
+    {
+        uint32_t a, b_idx;
+        for (a = 0; a + 1 < leaf_count; a++)
+        {
+            uint32_t min_idx = a;
+            for (b_idx = a + 1; b_idx < leaf_count; b_idx++)
+                if (leaf_values[b_idx] < leaf_values[min_idx])
+                    min_idx = b_idx;
+            if (min_idx != a)
+            {
+                uint32_t tmp;
+                tmp = leaf_values[a]; leaf_values[a] = leaf_values[min_idx]; leaf_values[min_idx] = tmp;
+                tmp = code_lengths[a]; code_lengths[a] = code_lengths[min_idx]; code_lengths[min_idx] = tmp;
+                tmp = code_values[a]; code_values[a] = code_values[min_idx]; code_values[min_idx] = tmp;
+            }
+        }
+    }
+
     max_code_length = 0;
     for (k = 0; k < leaf_count; k++)
         if (code_lengths[k] > max_code_length)
             max_code_length = code_lengths[k];
+
+    /* The real file's max_code_length FIELD/bit-width is the PRE-wrap
+       maximum (one less than the true maximum code length among leaves
+       after prc_huff_build_tree's unconditional top-level phantom wrap),
+       not the true maximum -- confirmed by decoding real leaf tables for
+       edge_status_array (field=3, but leaves include code_length=4),
+       triangle_face_array's and point_reference_array's bit_lengths
+       sub-arrays (same pattern, 2026-07-10 investigation). This works
+       because max_code_length is used as a FIXED BIT-WIDTH for each leaf's
+       code_length field (not a hard value cap): (max_code_length-1) bits
+       can represent max_code_length itself whenever max_code_length <=
+       2^(max_code_length-1) - 1, true for every real table observed so
+       far. Fall back to the true (unreduced) maximum if that check fails,
+       rather than risk writing a field too narrow to hold the real values. */
+    if (max_code_length >= 2 && max_code_length <= (1u << (max_code_length - 1)) - 1)
+        max_code_length -= 1;
 
     if (prc_bitwrite_init(ctx, &sub, 64) != 0)
         goto cleanup;
