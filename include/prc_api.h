@@ -971,6 +971,17 @@ PRC_EXPORT int prc_api_write_prc_file(prc_context *ctx, const char *filename,
  * e.g. to embed it in a PDF via prc_api_pdf_embed_prc without a round trip
  * through disk.
  *
+ * @param ctx              Active context.
+ * @param model_name       Name shown for the top-level "model" entry in a
+ *                         reader's model tree, or NULL to let the reader
+ *                         fall back to its own default label -- see
+ *                         prc_api_write_prc_file for the full description.
+ * @param root             Root of the product/part tree to encode -- see
+ *                         prc_api_write_prc_file for the full description.
+ * @param tess_entries     Array of tessellations referenced by rep items'
+ *                         biased_tessellation_index -- see prc_api_write_
+ *                         prc_file for the full description.
+ * @param num_tess_entries Number of entries in tess_entries.
  * @param out_buf  Receives a buffer owned by `ctx`'s allocator; release it
  *                 with prc_api_write_prc_buffer_free (or prc_free) when
  *                 done. Set to NULL on failure.
@@ -1032,9 +1043,9 @@ typedef struct prc_pdf_write_options_s
 /**
  * @brief Embed an in-memory PRC byte stream into a new, minimal, single-
  * page PDF 1.7 file as a standard (ISO 32000) 3D annotation -- the same
- * mechanism examples/*.pdf in this repository already use, and the one
- * nanoPRC's own PDF reader (prc_api_open_contents on a .pdf path) already
- * round-trips.
+ * mechanism the PDF files under examples/ in this repository already use,
+ * and the one nanoPRC's own PDF reader (prc_api_open_contents on a .pdf
+ * path) already round-trips.
  *
  * The page has no static content of its own; the 3D view fills the
  * annotation's rectangle (page size minus margins), with a solid light-
