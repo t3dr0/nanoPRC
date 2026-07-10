@@ -131,13 +131,20 @@ int prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
    the type tag, which the caller-side dispatcher owns) into an initialized
    prc_bit_write_state. Exactly one of the two normal-data sets applies:
    must_recalculate_normals != 0 selects the C1 fields, 0 selects the C2
-   fields. */
+   fields. is_face_planar (C2 only, ignored otherwise) is a caller-owned
+   array of face_count entries (face_count == max(triangle_face_array)+1),
+   or NULL to mark every face non-planar (this write facility's own
+   encoder never detects/uses the planar-face shortcut for freshly
+   generated content, so its one caller always passes NULL here --
+   this parameter exists for diagnostics re-encoding a real file's
+   already-decoded per-face planarity, which must be reproduced exactly
+   to keep that file's own normal_angle_array/normal_binary_data valid). */
 int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     const prc_encode_traversal_result *trav, double tolerance_mm,
     const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
-    uint8_t must_recalculate_normals);
+    uint8_t must_recalculate_normals, const uint8_t *is_face_planar);
 
 /* Full orchestration (Steps A through E) for one PRC_TYPE_TESS_3D_Compressed
    tessellation entry, from raw caller-supplied geometry straight to bits:

@@ -1960,7 +1960,7 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
     const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
     const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
     const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
-    uint8_t must_recalculate_normals)
+    uint8_t must_recalculate_normals, const uint8_t *is_face_planar)
 {
     uint32_t k, num_refs = 0;
 
@@ -2121,12 +2121,19 @@ prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
             if (prc_bitwrite_short_array(ctx, state, normal_angle_array,
                     normal_angle_array_count, 1, PRC_ENCODE_NORMAL_ANGLE_BITS) != 0)
                 goto werr;
-            /* every face non-planar: routes all decoding through the
-               per-vertex path, never the separate per-face-planar
-               normal-sharing path */
+            /* is_face_planar: NULL (this write facility's only real
+               caller) means every face non-planar, routing all decoding
+               through the per-vertex path and never the separate
+               per-face-planar normal-sharing path. A caller-supplied
+               array (diagnostics re-encoding a real file's own decoded
+               planarity) is written as-is instead -- the normal_angle_
+               array/normal_binary_data above were generated assuming
+               specific faces use the planar shortcut, so silently
+               forcing them all non-planar here would desync the
+               decoder's normal reconstruction against that data. */
             for (k = 0; k < face_count; k++)
             {
-                if (prc_bitwrite_bit(ctx, state, 0) != 0)
+                if (prc_bitwrite_bit(ctx, state, is_face_planar != NULL ? is_face_planar[k] : 0) != 0)
                     goto werr;
             }
         }
@@ -2319,7 +2326,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     if (code != 0) goto cleanup;
 
     code = prc_write_compress_tess_to_stream(ctx, s, &trav, mesh.tolerance_mm,
-        rev, crease_angle_degrees, angles, acount, bin, bsize, must_recalculate_normals);
+        rev, crease_angle_degrees, angles, acount, bin, bsize, must_recalculate_normals, NULL);
     ret = code;
 
 cleanup:

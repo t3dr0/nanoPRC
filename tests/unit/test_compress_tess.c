@@ -379,7 +379,7 @@ test_single_triangle_roundtrip(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -446,7 +446,7 @@ test_quad_roundtrip(prc_context *ctx)
     PRC_ASSERT_EQ(prc_encode_normals_c1(ctx, &mesh, &res, NULL, &rev), 0);
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -520,7 +520,7 @@ test_disjoint_roundtrip(prc_context *ctx)
     PRC_ASSERT_EQ(prc_encode_normals_c1(ctx, &mesh, &res, NULL, &rev), 0);
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -606,7 +606,7 @@ test_cube_c1_roundtrip(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 256), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -738,7 +738,7 @@ test_cube_c2_roundtrip(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 256), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        NULL, 0.0, angles, acount, bin, bsize, 0), 0);
+        NULL, 0.0, angles, acount, bin, bsize, 0, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -844,7 +844,7 @@ test_c1_sign_convention(prc_context *ctx, double nz)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -1433,7 +1433,7 @@ test_teapot_face_groups(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 4096), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        rev, 30.0, NULL, 0, NULL, 0, 1), 0);
+        rev, 30.0, NULL, 0, NULL, 0, 1, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);

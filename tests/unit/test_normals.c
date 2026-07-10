@@ -147,7 +147,7 @@ encode_and_parse_c2(prc_context *ctx, const double *positions, uint32_t npos,
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 256), 0);
     PRC_ASSERT_EQ(prc_write_compress_tess_to_stream(ctx, &w, &res, mesh.tolerance_mm,
-        NULL, 0.0, angles, acount, bin, bsize, 0), 0);
+        NULL, 0.0, angles, acount, bin, bsize, 0, NULL), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
