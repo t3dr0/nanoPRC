@@ -1062,11 +1062,45 @@ prc_bit_width_u32(uint32_t v)
     return width;
 }
 
+/* ISO/CD 14739-1 SS9.1 "GetNumberOfBitsUsedToStoreUnsignedInteger":
+   unsigned GetNumberOfBitsUsedToStoreUnsignedInteger(unsigned uValue) {
+       unsigned uNbBit = 1, uTemp = 1;
+       while (uValue > uTemp) { uTemp *= 2; uNbBit++; }
+       return uNbBit;
+   }
+   This is NOT the same function as prc_bit_width_u32 above (which counts
+   bits in v's binary representation, i.e. smallest k with v < 2^k): the
+   spec's version starts its comparison at uTemp==1 with uNbBit==1 already
+   counted, so it returns one MORE than prc_bit_width_u32(uValue) whenever
+   uValue is not itself an exact power of two (or zero) -- e.g. uValue=252
+   (not a power of 2): spec returns 9, prc_bit_width_u32(252) returns 8.
+   Algebraically, GetNumberOfBitsUsedToStoreUnsignedInteger(v) == 1 +
+   prc_bit_width_u32(v > 0 ? v - 1 : 0) for all v >= 0 (verified by direct
+   trace of the spec's while loop above). This was the source of a real
+   bug: this write facility previously used prc_bit_width_u32(magnitude)
+   directly, one bit too few for every magnitude that isn't itself an
+   exact power of two -- confirmed by pairing each of point_array's real,
+   decoded values against the real puck file's own bit_lengths table entry
+   for that exact value (2026-07-10 investigation), which matched this
+   spec formula exactly across all 17 distinct (value, real bit_length)
+   pairs sampled before this fix was traced back to the spec text. */
+static uint32_t
+prc_spec_bits_for_unsigned(uint32_t v)
+{
+    return 1 + prc_bit_width_u32(v > 0 ? v - 1 : 0);
+}
+
+/* SS9.13 "WriteIntegerWithVariableBitNumber": 1 sign bit + (uBitNumber-1)
+   magnitude bits via WriteUnsignedIntegerWithVariableBitNumber (SS9.14,
+   direct MSB-first binary of the magnitude itself, not biased) -- this
+   write facility's prc_bitwrite_int_variable_bit already implements that
+   packing correctly; only the LENGTH this function computes (fed in as
+   bit_lengths[k], i.e. uBitNumber) was wrong. */
 static uint32_t
 prc_int32_bit_width_signed(int32_t v)
 {
     uint32_t magnitude = (v < 0) ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
-    return 1 + prc_bit_width_u32(magnitude);
+    return 1 + prc_spec_bits_for_unsigned(magnitude);
 }
 
 /* Pairs with prc_bitread_character_array (prc_bit.c 896-1251, "10.6 Inverse
