@@ -519,6 +519,49 @@ struct prc_huff_build_node_s
     prc_huff_build_node *right;
 };
 
+static uint32_t
+prc_bit_width_u32(uint32_t v)
+{
+    uint32_t width = 0;
+    while (v != 0)
+    {
+        v >>= 1;
+        width++;
+    }
+    return width;
+}
+
+/* ISO/CD 14739-1 SS9.1 "GetNumberOfBitsUsedToStoreUnsignedInteger":
+   unsigned GetNumberOfBitsUsedToStoreUnsignedInteger(unsigned uValue) {
+       unsigned uNbBit = 1, uTemp = 1;
+       while (uValue > uTemp) { uTemp *= 2; uNbBit++; }
+       return uNbBit;
+   }
+   This is NOT the same function as prc_bit_width_u32 above (which counts
+   bits in v's binary representation, i.e. smallest k with v < 2^k): the
+   spec's version starts its comparison at uTemp==1 with uNbBit==1 already
+   counted, so it returns one MORE than prc_bit_width_u32(uValue) whenever
+   uValue is not itself an exact power of two (or zero) -- e.g. uValue=252
+   (not a power of 2): spec returns 9, prc_bit_width_u32(252) returns 8.
+   Algebraically, GetNumberOfBitsUsedToStoreUnsignedInteger(v) == 1 +
+   prc_bit_width_u32(v > 0 ? v - 1 : 0) for all v >= 0 (verified by direct
+   trace of the spec's while loop above). Used both for signed per-value
+   bit-lengths (prc_int32_bit_width_signed below) and for the
+   max_code_length FIELD written by prc_bitwrite_huffman_block, which
+   turned out to need the SAME spec function applied to the true maximum
+   code length among leaves, not "true max minus 1" as an earlier,
+   incomplete fix assumed (2026-07-10: that heuristic only coincidentally
+   matched real files for max values of 4-5; it broke down for point_
+   array's max_code_length of 8, where the correct field value is 4, not
+   7 -- found by comparing this write facility's own leaf table, which
+   already matched the real file's leaf-for-leaf exactly by this point,
+   against the real file's actual max_code_length field value). */
+static uint32_t
+prc_spec_bits_for_unsigned(uint32_t v)
+{
+    return 1 + prc_bit_width_u32(v > 0 ? v - 1 : 0);
+}
+
 static int
 prc_huff_value_compare(const void *a, const void *b)
 {
@@ -771,7 +814,30 @@ typedef struct
    max_code_length > 32 (prc_bit.c 645-650), so this aborts as soon as a
    code would need more than 32 bits rather than building an
    unreadable-by-design table. Returns 0 on success, -1 on a too-long code
-   or allocation failure. */
+   or allocation failure.
+
+   KNOWN LOOSE END (2026-07-10): for leaves with EQUAL frequency, this
+   write facility's code VALUE assignment does not always match what real,
+   independently-produced PRC files use -- confirmed by simulating this
+   exact algorithm (including prc_huff_build_tree's specific "first found,
+   ascending-index" tie-break and swap-with-last active-list mechanics)
+   against normal_angle_array's real 22-leaf frequency table: 12 of 22
+   leaves matched exactly (same code_length AND code_value), but all 10
+   mismatches were confined to frequency-tied leaves (e.g. two leaves both
+   occurring 23 times get the same code LENGTH in both this tree and the
+   real one, but the real file swaps which of the two gets the lower vs.
+   higher code VALUE). Tested the standard "canonical Huffman" hypothesis
+   (reassign code values purely from the already-correct lengths, sorted
+   by value, independent of tree shape) -- did not match either. The real
+   encoder's exact tie-breaking rule for equal-frequency leaves has not
+   been determined; would need tied-frequency examples from more real
+   files to pin down with confidence rather than guess from one. Does NOT
+   affect code LENGTH (hence total field size is already correct) and is
+   not shown to matter for decodability by any reader tried, including
+   Acrobat -- unlike the phantom-wrap/tree-shape fix elsewhere in this
+   file, which IS confirmed causal to Acrobat's blank-model-tree
+   rejection. Affects normal_angle_array and (very likely, same
+   mechanism, not independently re-verified) point_reference_array. */
 static int
 prc_huff_assign_codes(prc_context *ctx, prc_huff_build_node *root, uint32_t leaf_count,
     uint32_t *leaf_values, uint32_t *code_lengths, uint32_t *code_values)
@@ -934,26 +1000,30 @@ prc_bitwrite_huffman_block(prc_context *ctx, prc_bit_write_state *state,
         }
     }
 
-    max_code_length = 0;
-    for (k = 0; k < leaf_count; k++)
-        if (code_lengths[k] > max_code_length)
-            max_code_length = code_lengths[k];
+    {
+        uint32_t true_max_code_length = 0;
+        for (k = 0; k < leaf_count; k++)
+            if (code_lengths[k] > true_max_code_length)
+                true_max_code_length = code_lengths[k];
 
-    /* The real file's max_code_length FIELD/bit-width is the PRE-wrap
-       maximum (one less than the true maximum code length among leaves
-       after prc_huff_build_tree's unconditional top-level phantom wrap),
-       not the true maximum -- confirmed by decoding real leaf tables for
-       edge_status_array (field=3, but leaves include code_length=4),
-       triangle_face_array's and point_reference_array's bit_lengths
-       sub-arrays (same pattern, 2026-07-10 investigation). This works
-       because max_code_length is used as a FIXED BIT-WIDTH for each leaf's
-       code_length field (not a hard value cap): (max_code_length-1) bits
-       can represent max_code_length itself whenever max_code_length <=
-       2^(max_code_length-1) - 1, true for every real table observed so
-       far. Fall back to the true (unreduced) maximum if that check fails,
-       rather than risk writing a field too narrow to hold the real values. */
-    if (max_code_length >= 2 && max_code_length <= (1u << (max_code_length - 1)) - 1)
-        max_code_length -= 1;
+        /* The real file's max_code_length FIELD is NOT the true maximum
+           code length among leaves (after prc_huff_build_tree's
+           unconditional top-level phantom wrap) -- it is SS9.1
+           "GetNumberOfBitsUsedToStoreUnsignedInteger" applied to that true
+           maximum (prc_spec_bits_for_unsigned above), i.e. the number of
+           bits needed to represent the true maximum as an unsigned value
+           per the spec's own counting function, used here as a FIXED
+           BIT-WIDTH for each leaf's code_length field (which can therefore
+           exceed the field's own numeric value -- it is a bit-width, not a
+           value cap). An earlier fix used "true_max - 1" as a shortcut,
+           which coincidentally matches this spec formula for true_max in
+           {3,4,5} but diverges for larger values (true_max=8 needs field=4,
+           not 7) -- found via point_array's larger, 9-leaf alphabet, where
+           this write facility's own leaf table already matched the real
+           file leaf-for-leaf, isolating the max_code_length field itself
+           as the sole remaining discrepancy (2026-07-10). */
+        max_code_length = prc_spec_bits_for_unsigned(true_max_code_length);
+    }
 
     if (prc_bitwrite_init(ctx, &sub, 64) != 0)
         goto cleanup;
@@ -1049,46 +1119,6 @@ cleanup:
 /* ------------------------------------------------------------------ */
 /* Array writers                                                       */
 /* ------------------------------------------------------------------ */
-
-static uint32_t
-prc_bit_width_u32(uint32_t v)
-{
-    uint32_t width = 0;
-    while (v != 0)
-    {
-        v >>= 1;
-        width++;
-    }
-    return width;
-}
-
-/* ISO/CD 14739-1 SS9.1 "GetNumberOfBitsUsedToStoreUnsignedInteger":
-   unsigned GetNumberOfBitsUsedToStoreUnsignedInteger(unsigned uValue) {
-       unsigned uNbBit = 1, uTemp = 1;
-       while (uValue > uTemp) { uTemp *= 2; uNbBit++; }
-       return uNbBit;
-   }
-   This is NOT the same function as prc_bit_width_u32 above (which counts
-   bits in v's binary representation, i.e. smallest k with v < 2^k): the
-   spec's version starts its comparison at uTemp==1 with uNbBit==1 already
-   counted, so it returns one MORE than prc_bit_width_u32(uValue) whenever
-   uValue is not itself an exact power of two (or zero) -- e.g. uValue=252
-   (not a power of 2): spec returns 9, prc_bit_width_u32(252) returns 8.
-   Algebraically, GetNumberOfBitsUsedToStoreUnsignedInteger(v) == 1 +
-   prc_bit_width_u32(v > 0 ? v - 1 : 0) for all v >= 0 (verified by direct
-   trace of the spec's while loop above). This was the source of a real
-   bug: this write facility previously used prc_bit_width_u32(magnitude)
-   directly, one bit too few for every magnitude that isn't itself an
-   exact power of two -- confirmed by pairing each of point_array's real,
-   decoded values against the real puck file's own bit_lengths table entry
-   for that exact value (2026-07-10 investigation), which matched this
-   spec formula exactly across all 17 distinct (value, real bit_length)
-   pairs sampled before this fix was traced back to the spec text. */
-static uint32_t
-prc_spec_bits_for_unsigned(uint32_t v)
-{
-    return 1 + prc_bit_width_u32(v > 0 ? v - 1 : 0);
-}
 
 /* SS9.13 "WriteIntegerWithVariableBitNumber": 1 sign bit + (uBitNumber-1)
    magnitude bits via WriteUnsignedIntegerWithVariableBitNumber (SS9.14,
@@ -1400,7 +1430,16 @@ prc_bitwrite_compressed_indice_array(prc_context *ctx, prc_bit_write_state *stat
         uint32_t abs_diff = (diff < 0) ? (uint32_t)(-diff) : (uint32_t)diff;
         int32_t delta;
 
-        needed[k] = 1 + prc_bit_width_u32(abs_diff);
+        /* Same SS9.1 GetNumberOfBitsUsedToStoreUnsignedInteger formula as
+           prc_int32_bit_width_signed (this write facility's other signed
+           bit-length site) -- this call site computed the delta's signed
+           bit-length independently and had the identical bug: 1 +
+           prc_bit_width_u32(abs_diff) undercounts by 1 bit whenever
+           abs_diff isn't itself an exact power of two. Found via triangle_
+           face_array, whose more varied face-index deltas exposed this
+           where point_reference_array's narrower delta range happened not
+           to (2026-07-10). */
+        needed[k] = 1 + prc_spec_bits_for_unsigned(abs_diff);
         delta = (int32_t)needed[k] - (int32_t)needed[k - 1];
         if (delta < -32 || delta > 31)
         {
