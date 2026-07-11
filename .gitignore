@@ -23,6 +23,7 @@ __pycache__/
 
 # Local debug build artifacts
 build-debug/
+build_asan/
 python/src/nanoprc_py/_core.pdb
 
 # Generated Doxygen output
@@ -30,3 +31,6 @@ docs/doxygen/html/
 docs/doxygen/xml-public/
 docs/doxygen/*.log
 CLAUDE.md
+
+# Local Claude Code config (personal tool permissions, not project-wide)
+.claude/
