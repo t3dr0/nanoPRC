@@ -128,6 +128,7 @@ add_subdirectory(demos)
 
 enable_testing()
 include(tests/CMakeLists.txt)
+include(tests/internal/CMakeLists.txt)
 
 # Install what we built
 install(TARGETS nano_prc)
