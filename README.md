@@ -57,6 +57,17 @@ nanoPRC includes several source-code demonstrations that showcase how to use the
 | demos/json_export | A utility to create a JSON dump from a PRC model |
 | demos/stl_export | A utility to create binary STL mesh files from a PRC model |
 | demos/obj_export | A utility to create OBJ files from a PRC model with MTL and textures |
+| demos/teapot_write | A utility to generate a PRC file of the Utah teapot from 32 bicubic NURBS patches, demonstrating the write API below |
+
+### Writing PRC files
+
+nanoPRC can also write PRC content, using only the public API in `include/prc_api.h` (see the "Write
+facility" section of that header for the current, authoritative list of what is and isn't implemented).
+`prc_api_write_prc_file`/`prc_api_write_prc_buffer` encode a product/part tree and tessellation data to
+a PRC stream; `prc_api_pdf_embed_prc` embeds that stream in a minimal 3D-annotated PDF. Tessellation
+can be written as uncompressed triangles, wire geometry, or the fully compressed format. Geometry is
+always tessellated before writing -- PRC also supports writing exact NURBS/B-Rep surfaces directly, but
+nanoPRC does not do that yet. Materials/colors/styles are not yet exposed through the write API either.
 
 ### Deterministic Unzipped-Section Fuzzing
 

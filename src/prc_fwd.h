@@ -21,4 +21,33 @@
 typedef struct prc_base_with_graphics_s prc_base_with_graphics;
 typedef struct prc_misc_entity_reference_s prc_misc_entity_reference;
 
+/* Marks a declaration as deprecated, producing a compiler warning (not an
+   error) at each use site. Two macros are needed, not one, because GCC/Clang
+   and MSVC disagree on where the annotation must go on a typedef:
+     GCC/Clang : typedef OldType NewName __attribute__((deprecated(msg)));  (postfix)
+     MSVC      : typedef __declspec(deprecated(msg)) OldType NewName;      (prefix)
+   Putting __declspec in the postfix slot is a hard MSVC syntax error
+   (confirmed: C2054), so each macro is a no-op on the compiler that doesn't
+   use that slot; use BOTH at every deprecated-typedef site (see prc_api.h)
+   and exactly one of the two will expand to anything for a given compiler.
+   Other compilers get no-ops for both, so an unrecognized toolchain still
+   compiles (just without the warning). */
+#if defined(__GNUC__) || defined(__clang__)
+#define PRC_DEPRECATED_PREFIX(msg)
+#define PRC_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#elif defined(_MSC_VER)
+#define PRC_DEPRECATED_PREFIX(msg) __declspec(deprecated(msg))
+#define PRC_DEPRECATED(msg)
+#else
+#define PRC_DEPRECATED_PREFIX(msg)
+#define PRC_DEPRECATED(msg)
+#endif
+
+/* C99 "inline" is used bare (paired with an explicit leading "static" at each
+   call site, e.g. "static PRC_INLINE T *f(...)") rather than baked into this
+   macro as "static inline", since MSVC 2015+ and GCC/Clang both accept plain
+   C99 "inline" when compiling as C, and folding "static" in here would
+   double it up at every use site. */
+#define PRC_INLINE inline
+
 #endif

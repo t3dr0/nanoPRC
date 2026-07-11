@@ -31,6 +31,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 option(PRC_ENABLE_DEBUG_MEMORY "Enable PRC debug memory tracking" OFF)
 option(PRC_ENABLE_UNZIPPED_FUZZ "Enable deterministic fuzzing of unzipped PRC sections" OFF)
+option(NANOPRC_ENABLE_BREP "Enable B-Rep write facility (Phase 2)" OFF)
 
 add_subdirectory(thirdparty) # thirdparty libraries
 # demos are added after the library target so demo executables can link
@@ -39,13 +40,27 @@ add_subdirectory(thirdparty) # thirdparty libraries
 add_definitions(-DPRC_LITTLE_ENDIAN -DPRC_BUILD_SHARED)
 
 # Our source files
-add_library(nano_prc SHARED
+set(PRC_CORE_SOURCES
 	"src/prc_api.c"
+	"src/prc_api_debug.c"
+	"src/prc_api_write.c"
+	"src/prc_api_write_pdf.c"
 	"src/prc_style_api.c"
 	"src/prc_tri_primitives_api.c"
 	"src/prc_tri_primitives_helper_api.c"
 	"src/prc_uncompressed_primitives_api.c"
 	"src/prc_bit.c"
+	"src/prc_write_bit.c"
+	"src/prc_write_common.c"
+	"src/prc_write_compress_tess.c"
+	"src/prc_write_tess_3d.c"
+	"src/prc_write_wire_tess.c"
+	"src/prc_write_global.c"
+	"src/prc_write_tree.c"
+	"src/prc_write_file_structure.c"
+	"src/prc_write_model.c"
+	"src/prc_write_pdf.c"
+	"src/prc_write_pdf_3d.c"
 	"src/prc_context.c"
 	"src/prc_double.c"
 	"src/prc_error.c"
@@ -69,6 +84,8 @@ add_library(nano_prc SHARED
 	"src/prc_decode_compressed_tess.c"
 	"src/prc_decode_markup_tess.c")
 
+add_library(nano_prc SHARED ${PRC_CORE_SOURCES})
+
 # Specify C99 Standard
 set_property(TARGET nano_prc PROPERTY C_STANDARD 99)
 
@@ -90,7 +107,28 @@ target_include_directories(nano_prc PUBLIC "${CMAKE_BINARY_DIR}/generated")
 target_compile_definitions(nano_prc PRIVATE PRC_VERSION_STRING="${PRC_VERSION_STRING}")
 target_compile_definitions(nano_prc PUBLIC PRC_DEBUG_MEMORY=$<BOOL:${PRC_ENABLE_DEBUG_MEMORY}>)
 target_compile_definitions(nano_prc PUBLIC PRC_ENABLE_UNZIPPED_FUZZ=$<BOOL:${PRC_ENABLE_UNZIPPED_FUZZ}>)
+
+# Static twin of nano_prc, built from the same sources, for tests that need
+# to call internal (non-PRC_EXPORT) functions directly -- those aren't
+# visible across a shared-library boundary on Windows, since PRC_EXPORT is
+# the only thing that gets dllexport'd. "src" is PUBLIC here (unlike on
+# nano_prc) so test binaries can reach internal headers like prc_bit.h.
+add_library(prc_static STATIC ${PRC_CORE_SOURCES})
+set_property(TARGET prc_static PROPERTY C_STANDARD 99)
+target_include_directories(prc_static PUBLIC "include" "src" "${CMAKE_BINARY_DIR}/generated")
+target_link_libraries(prc_static PUBLIC zlib)
+if (UNIX)
+	target_link_libraries(prc_static PUBLIC m)
+endif()
+target_compile_definitions(prc_static PRIVATE PRC_VERSION_STRING="${PRC_VERSION_STRING}")
+target_compile_definitions(prc_static PUBLIC PRC_DEBUG_MEMORY=$<BOOL:${PRC_ENABLE_DEBUG_MEMORY}>)
+target_compile_definitions(prc_static PUBLIC PRC_ENABLE_UNZIPPED_FUZZ=$<BOOL:${PRC_ENABLE_UNZIPPED_FUZZ}>)
+
 add_subdirectory(demos)
+
+enable_testing()
+include(tests/CMakeLists.txt)
+include(tests/internal/CMakeLists.txt)
 
 # Install what we built
 install(TARGETS nano_prc)

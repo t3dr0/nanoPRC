@@ -2806,7 +2806,7 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         face_out->reserved = (void *)prc_calloc(ctx, 1, sizeof(prc_internal_api_face));
         if (face_out->reserved == NULL)
             return PRC_API_ERROR_MEMORY;
-        face_out_reserved = (prc_internal_api_face *)face_out->reserved;
+        face_out_reserved = prc_face_internal_face(face_out);
 
         if (tess_type == PRC_TYPE_TESS_3D)
         {
@@ -3641,8 +3641,17 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         int num_prc_indices = tess->num_triangle_indices_prc_compressed_3d;
         uint8_t has_vertex_colors =
             (tess->decoded_point_color_array != NULL) ? true : false;
+        /* Gated on is_multiple_line_attribute (real per-face/per-triangle
+           style variation), not mere line_attribute_array != NULL -- see
+           the identical fix/comment in prc_api_get_number_faces. A lone
+           no-style placeholder entry (line_attribute_array_size == 1,
+           value 0) must NOT be treated as "has a real style": doing so
+           makes face_style_index resolve to a real style-table lookup at
+           index 0 below instead of staying -1 ("no style, use the
+           built-in default material" in prc_internal_api_get_style, which
+           only special-cases style_index < 0, not == 0). */
         uint8_t has_style =
-            (tess->line_attribute_array != NULL) ? true : false;
+            tess->is_multiple_line_attribute ? true : false;
         uint8_t has_more_than_one_tri_style = false;
         uint32_t num_triangles = tess->triangle_face_array_size;
         prc_internal_api_color_state_t initial_color_state;
@@ -3787,8 +3796,19 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
                 face_style_index = face_out_reserved->style[0].face_style_index;
                 face_style_file_index = face_out_reserved->style[0].face_style_file_index;
             }
-            else
+            else if (has_style)
             {
+                /* has_style (line_attribute_array != NULL) is what gates
+                   the has_more_than_one_tri_style scan above that actually
+                   reads triangle_styles -- this access needs the same
+                   guard, or a compressed tessellation with no per-triangle
+                   style data (line_attribute_array/triangle_styles both
+                   NULL, e.g. every file this write facility produces,
+                   which never emits per-triangle styles) reads
+                   triangle_styles[0] out of a NULL array. face_style_index/
+                   face_style_file_index are already initialized to -1
+                   ("no style") above, so there is nothing to do in the
+                   no-style case. */
                 face_style_index = tess->triangle_styles[0];
                 face_style_file_index = file_index;
             }
@@ -4745,7 +4765,7 @@ PRC_EXPORT uint32_t
 prc_api_number_of_materials(prc_context *ctx, prc_api_data data_in, const prc_api_tess *tess)
 {
     uint32_t num_faces = tess->num_faces;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     tess_type = tess->type;
 
@@ -4768,7 +4788,7 @@ prc_api_get_num_graphics_primitives(prc_context *ctx, prc_api_data data_in,
     uint32_t num_faces = tess->num_faces;
     uint32_t k;
     size_t num_objects = 0;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     /* If this is a compressed tessellation we only have one object which is
        triangles */
@@ -4813,7 +4833,7 @@ PRC_EXPORT int
 prc_api_get_face_vertices(prc_context *ctx, const prc_api_tess *tess,
     uint32_t face_index, uint32_t *vertex_count, prc_api_vertex **vertices)
 {
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     tess_type = tess->type;
 
@@ -4849,14 +4869,14 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
     prc_internal_api_face *face;
     size_t k;
     prc_internal_api_tess_entities *entity;
-    prc_api_test_type_t tess_type;
+    prc_api_tess_type_t tess_type;
 
     /* If this is a compressed tessellation we only have one object which is triangles */
     tess_type = tess->type;
 
     if (tess_type == PRC_API_TESS_3D_Compressed)
     {
-        face = (prc_internal_api_face *)tess->tess_faces[face_index].reserved;
+        face = prc_face_internal_face(&tess->tess_faces[face_index]);
 
         graphics_object->type = PRC_API_TRIANGLES;
         graphics_object->num_indices = face->num_indices;
@@ -4866,7 +4886,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     if (tess_type == PRC_API_TESS_3D_Wire || tess_type == PRC_API_TESS_MarkUp)
     {
-        prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->reserved;
+        prc_internal_api_wire *wire = prc_tess_internal_wire(tess);
         if (graphics_index > tess->num_line_primitives - 1)
             return PRC_API_ERROR_PARAMETER;
         graphics_object->type = wire[graphics_index].type;
@@ -4877,7 +4897,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
 
     if (tess_type == PRC_API_TESS_3D_Wire_Extra)
     {
-        prc_internal_api_wire *wire = (prc_internal_api_wire *)tess->tess_faces[face_index].reserved;
+        prc_internal_api_wire *wire = prc_face_internal_wire(&tess->tess_faces[face_index]);
         if (graphics_index > tess->num_line_primitives - 1)
             return PRC_API_ERROR_PARAMETER;
         graphics_object->type = wire[graphics_index].type;
@@ -4889,7 +4909,7 @@ prc_api_get_graphics_primitive(prc_context *ctx, prc_api_data data_in,
     if (graphics_index > tess->tess_faces[face_index].num_graphic_primitives - 1)
         return PRC_API_ERROR_PARAMETER;
 
-    face = (prc_internal_api_face *)tess->tess_faces[face_index].reserved;
+    face = prc_face_internal_face(&tess->tess_faces[face_index]);
 
     /* Run through each of the entity types */
     for (k = 0; k < PRC_INTERNAL_API_MAX; k++)

@@ -17,6 +17,21 @@
 #ifndef PRC_DATA_H
 #define PRC_DATA_H
 
+/* prc_data_temp.h (an early draft of this file, sharing this same PRC_DATA_H
+   guard and never #included by any build target) was removed in Phase 0 of
+   the write-facility work. It was audited struct-by-struct, enum-by-enum,
+   and #define-by-#define against this file first: every uniquely-named
+   entry in it was either an exact duplicate under an older/typo'd name
+   (e.g. prc_addtional_target_data_s -> prc_additional_target_data_s,
+   prc_misc_cart_trans_s -> prc_cart_transformation_s, prc_compressed_entity_t
+   -> PRC_Compressed_curve_t) or an incomplete/abandoned draft superseded by a
+   more complete, spec-accurate version here (e.g. the by-value prc_type_ri_*
+   union members replaced by the by-pointer prc_ri_* union in prc_ri_s; the
+   merged prc_topo_multiple_unique_vertex_s replaced by the correct split
+   into prc_topo_multiple_vertex_s / prc_topo_unique_vertex_s; prc_ptr_surface
+   with its "// needs work" TODO field replaced by a filled-in prc_surface
+   field). No content was ported over because none was missing. */
+
 #include <stdint.h>
 #include <stddef.h>
 #include "prc_context.h"

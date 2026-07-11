@@ -1,0 +1,116 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nanoPRC is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nanoPRC is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#ifndef PRC_WRITE_GLOBAL_H
+#define PRC_WRITE_GLOBAL_H
+
+#include <stddef.h>
+#include "prc_write_common.h"
+#include "prc_data.h"
+#include "prc_bit.h"
+
+/* Encoder for the globals section (Table 40, prc_parse_global_data /
+   prc_parse_global.c): the file-wide color/material/picture/style tables
+   that representation items reference by biased index. Out of this
+   session's scope (always emitted as empty/default so the real parser's
+   fixed field order is satisfied): texture definitions, line patterns,
+   fill patterns, and reference coordinate systems.
+
+   Usage: init a prc_write_global_tables, add entries via the *_add
+   functions (each returns the 1-based "biased index" -- 0 means error --
+   that other write-side records should store to reference the entry),
+   then call prc_write_globals_to_stream once all entries are added. */
+
+/* Input pixel format for prc_write_picture_add. RGB/RGBA are raw pixel
+   bytes the caller has already decoded; PNG/JPEG are the original
+   encoded file bytes (dimensions are extracted from them here). */
+typedef enum prc_write_pix_format_e
+{
+    PRC_WRITE_PIX_RGB = 0,
+    PRC_WRITE_PIX_RGBA,
+    PRC_WRITE_PIX_PNG,
+    PRC_WRITE_PIX_JPEG
+} prc_write_pix_format;
+
+typedef struct prc_write_picture_s
+{
+    prc_write_pix_format format;
+    const uint8_t *data;      /* RGB/RGBA: width*height*[3|4] raw bytes;
+                                  PNG/JPEG: the encoded file bytes */
+    size_t          data_size;
+    uint32_t        width;    /* required for RGB/RGBA; ignored (parsed
+                                  from `data`) for PNG/JPEG */
+    uint32_t        height;   /* required for RGB/RGBA; ignored (parsed
+                                  from `data`) for PNG/JPEG */
+} prc_write_picture;
+
+typedef struct prc_write_global_tables_s
+{
+    prc_rgb_color      *colors;
+    uint32_t             color_count, color_cap;
+
+    prc_graph_material  *materials;
+    uint32_t             material_count, material_cap;
+
+    prc_graph_picture   *pictures;
+    uint32_t             picture_count, picture_cap;
+
+    prc_graph_style     *styles;
+    uint32_t             style_count, style_cap;
+} prc_write_global_tables;
+
+int prc_write_global_tables_init(prc_context *ctx, prc_write_global_tables *tables);
+void prc_write_global_tables_free(prc_context *ctx, prc_write_global_tables *tables);
+
+/* Each *_add function returns the 1-based biased index of the (possibly
+   deduplicated, possibly newly appended) table entry, or 0 on error. */
+
+/* Dedup on (red, green, blue) only -- the on-disk format
+   (prc_parse_rgb(..., has_alpha=false)) never stores alpha, so two colors
+   differing only in alpha are indistinguishable once written. */
+uint32_t prc_write_color_add(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_rgb_color *color);
+
+/* material->tag must be PRC_TYPE_GRAPH_Material or
+   PRC_TYPE_GRAPH_TextureApplication (Table 89's two material variants).
+   Dedup compares the tag-appropriate numeric fields only (not `base`). */
+uint32_t prc_write_material_add(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_graph_material *material);
+
+/* Dedup key is (is_material, biased_color_index, is_transparency +
+   transparency, is_rendering_parameters + rendering_parameters), per the
+   design's specified style dedup tuple. style->tag is ignored on input;
+   the entry is always written out as PRC_TYPE_GRAPH_Style. */
+uint32_t prc_write_style_add(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_graph_style *style);
+
+/* No deduplication. For PNG/JPEG, `picture->data` is parsed here (validating
+   the PNG signature/IHDR chunk or the JPEG SOI marker + a scanned SOF
+   marker) purely to recover pixel_width/pixel_height -- consistent with the
+   real prc_graph_picture (Table 93), the globals section stores only this
+   format/dimensions metadata, never the encoded/raw bytes themselves; those
+   live in a separate uncompressed-file table (prc_parse_file_structure.c)
+   that is out of this encoder's scope, so biased_uncompressed_file_index is
+   always written 0 (unassigned). */
+uint32_t prc_write_picture_add(prc_context *ctx, prc_write_global_tables *tables,
+    const prc_write_picture *picture);
+
+/* Emit the complete globals section (Table 40) in the exact field order
+   prc_parse_global_data expects. */
+int prc_write_globals_to_stream(prc_context *ctx, prc_bit_write_state *s,
+    const prc_write_global_tables *tables);
+
+#endif

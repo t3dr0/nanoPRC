@@ -1,0 +1,167 @@
+/* Copyright (C) 2023-2026 CascadiaVoxel LLC
+
+    nanoPRC is free software: you can redistribute it and/or modify it under
+    the terms of the GNU Affero General Public License as published by the
+    Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    nanoPRC is distributed in the hope that it will be useful, but WITHOUT
+    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+    FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+    License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with nanoPRC. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+#ifndef PRC_WRITE_COMPRESS_TESS_H
+#define PRC_WRITE_COMPRESS_TESS_H
+
+#include <stdint.h>
+#include "prc_write_common.h"
+#include "prc_data.h"
+#include "prc_bit.h"
+
+typedef struct prc_encode_edge_s
+{
+    uint32_t v0, v1;     /* deduplicated vertex indices, v0 < v1 */
+    int32_t  tri0, tri1; /* -1 if boundary (only one adjacent triangle) */
+} prc_encode_edge;
+
+typedef struct prc_encode_mesh_s
+{
+    double   *positions;       /* num_positions * 3 doubles, deduplicated */
+    uint32_t  num_positions;
+    uint32_t *tri_indices;     /* num_triangles * 3, into positions[], after dedup + degenerate removal */
+    uint32_t  num_triangles;
+    /* num_triangles entries: tri_orig_index[k] is the index into the
+       ORIGINAL, pre-preprocessing tri_indices/face array that surviving
+       triangle k came from. Surviving triangles keep their relative input
+       order (preprocessing only ever drops degenerate ones), so this is
+       exactly the subsequence of 0..original_num_triangles-1 that
+       survived -- needed to correctly align caller-supplied per-triangle
+       data (face groups, per-corner normals) with the post-preprocessing
+       triangle order every later encoding step operates on. */
+    uint32_t *tri_orig_index;
+    prc_encode_edge *edges;    /* one entry per unique undirected edge in the clean index array */
+    uint32_t  num_edges;
+    uint32_t *tri_component;   /* num_triangles entries: connected-component label per triangle */
+    uint32_t  num_components;
+    double    bbox[6];         /* xmin,ymin,zmin,xmax,ymax,zmax */
+    double    tolerance_mm;    /* resolved tolerance actually used for dedup */
+} prc_encode_mesh;
+
+int prc_encode_preprocess(prc_context *ctx,
+    const double *positions, uint32_t num_positions,
+    const uint32_t *tri_indices, uint32_t num_triangles,
+    prc_write_tolerance tolerance,
+    prc_encode_mesh *out);
+
+void prc_encode_preprocess_free(prc_context *ctx, prc_encode_mesh *m);
+
+typedef struct prc_encode_traversal_result_s
+{
+    int32_t  *point_array;               /* 3 int32 per emitted point, DV triples */
+    uint32_t  point_array_size;          /* == 3 * number of points emitted */
+    uint8_t  *edge_status_array;         /* 1 byte per triangle: bit0 = right edge grows, bit1 = left edge grows */
+    uint32_t  edge_status_array_size;    /* == num_triangles */
+    int32_t  *triangle_face_array;       /* 1 per triangle, in traversal emission order */
+    uint32_t  triangle_face_array_size;  /* == num_triangles */
+    uint8_t  *points_is_reference_array; /* 1 byte (0/1) per reference-bit slot */
+    uint32_t  points_is_reference_array_size;
+    int32_t  *point_reference_array;     /* existing-vertex index per reference slot consumed */
+    uint32_t  point_reference_array_size;
+    double    origin[3];                 /* the one global chain origin (decoder's origin_array) */
+    int32_t  *triangle_point_indices;    /* 3 per triangle, TRAVERSAL order, in the decoder's
+                                            treated order: the vertices_out[] slot each corner
+                                            of the triangle decodes into */
+    uint32_t *triangle_mesh_order;       /* 1 per triangle, TRAVERSAL order: index of the input
+                                            mesh triangle emitted at that traversal position */
+    int32_t  *point_mesh_vertex;         /* decoder point index -> deduplicated mesh vertex
+                                            (index into mesh->positions) */
+    double   *decoded_positions;         /* 3 per decoder point: the decoder-exact reconstructed
+                                            position, so normal bases derived from these match
+                                            the decoder's own basis construction */
+    uint32_t  num_decoded_points;
+} prc_encode_traversal_result;
+
+/* Optional per-decoder-point diagnostics captured during traversal, one entry
+   per emitted point (num_decoded_points). reconstructed_position is a stub
+   for the upcoming reconstruction/analysis phase and is always zeroed. */
+typedef struct prc_vertex_analysis_s
+{
+    float original_position[3];
+    float reconstructed_position[3];  /* stub: always {0,0,0} this phase */
+    uint32_t chain_index;
+    uint32_t chain_offset;
+} prc_vertex_analysis;
+
+/* analysis_out may be NULL to skip analysis capture entirely; when non-NULL
+   it receives a caller-owned (prc_free) array of *analysis_count_out
+   (== out->num_decoded_points) entries. */
+int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
+    const uint32_t *face_indices, double tolerance_mm,
+    prc_encode_traversal_result *out,
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out);
+
+void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
+
+/* Step C1: per-triangle normal reversal bits for the must_recalculate_normals
+   path. input_normals is 3 doubles per DEDUPLICATED mesh position
+   (mesh->num_positions entries) -- the caller must have already reduced any
+   per-original-vertex normals down to one per deduplicated position -- or NULL
+   to request all-zero reversal bits. The returned array (traversal order,
+   trav->edge_status_array_size entries) is owned by the caller (prc_free). */
+int prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *input_normals,
+    uint8_t **normal_is_reversed_out);
+
+/* Step C2: supplied-normals encoding. corner_normals is 9 doubles per input
+   mesh triangle (3 per corner, aligned with mesh->tri_indices order), so the
+   same position can carry different normals on different triangles. Outputs
+   the quantized normal_angle_array (2 entries per decode event) and the
+   per-vertex-state normal_binary_data bit array (one 0/1 byte per bit) the
+   decoder's non-planar path consumes; both are owned by the caller. */
+int prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
+    const prc_encode_traversal_result *trav, const double *corner_normals,
+    int32_t **normal_angle_array_out, uint32_t *normal_angle_count_out,
+    uint8_t **normal_binary_data_out, uint32_t *normal_binary_data_size_out);
+
+/* Step E: emit the complete PRC_TYPE_TESS_3D_Compressed bitstream (without
+   the type tag, which the caller-side dispatcher owns) into an initialized
+   prc_bit_write_state. Exactly one of the two normal-data sets applies:
+   must_recalculate_normals != 0 selects the C1 fields, 0 selects the C2
+   fields. is_face_planar (C2 only, ignored otherwise) is a caller-owned
+   array of face_count entries (face_count == max(triangle_face_array)+1),
+   or NULL to mark every face non-planar (this write facility's own
+   encoder never detects/uses the planar-face shortcut for freshly
+   generated content, so its one caller always passes NULL here --
+   this parameter exists for diagnostics re-encoding a real file's
+   already-decoded per-face planarity, which must be reproduced exactly
+   to keep that file's own normal_angle_array/normal_binary_data valid). */
+int prc_write_compress_tess_to_stream(prc_context *ctx, prc_bit_write_state *state,
+    const prc_encode_traversal_result *trav, double tolerance_mm,
+    const uint8_t *normal_is_reversed_c1, double crease_angle_degrees,
+    const int32_t *normal_angle_array, uint32_t normal_angle_array_count,
+    const uint8_t *normal_binary_data, uint32_t normal_binary_data_size,
+    uint8_t must_recalculate_normals, const uint8_t *is_face_planar);
+
+/* Full orchestration (Steps A through E) for one PRC_TYPE_TESS_3D_Compressed
+   tessellation entry, from raw caller-supplied geometry straight to bits:
+   preprocess (dedup + degenerate removal) -> traversal -> normal encoding
+   (C2 supplied-normals if `normals` is non-NULL, else C1 recalculated) ->
+   bitstream emission. Mirrors prc_write_tess_3d's input shape exactly
+   (same positions/normals/indices/face-group fields) so the two encoders
+   are interchangeable from the caller's side -- only the wire format and
+   these two extra parameters (tolerance, crease_angle_degrees; both only
+   meaningful for the encoder's own quantization/weld and C1's flat-normal
+   reconstruction) differ. face_tri_counts/num_faces may be NULL/0 to treat
+   the whole entry as one face. */
+int prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
+    const double *positions, uint32_t num_positions,
+    const double *normals, uint32_t num_normals,
+    const uint32_t *tri_indices, const uint32_t *norm_indices, uint32_t num_triangles,
+    const uint32_t *face_tri_counts, uint32_t num_faces,
+    prc_write_tolerance tolerance, double crease_angle_degrees);
+
+#endif

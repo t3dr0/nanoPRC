@@ -318,7 +318,14 @@ prc_api_helper_set_tri_style(prc_context *ctx,
 
     if (new_state == PRC_INTERNAL_API_STYLE_SET_FROM_TESS)
     {
-        line_style_index = tess->triangle_styles[triangle_count];
+        /* triangle_styles is NULL whenever the compressed tessellation
+           carries no per-triangle style data at all (line_attribute_array
+           also NULL in that case -- e.g. every file this write facility
+           produces, which never emits per-triangle styles). -1 is this
+           codebase's existing "no style" sentinel (see
+           prc_internal_api_get_style's style_index < 0 default-material
+           path below), so fall back to it instead of dereferencing NULL. */
+        line_style_index = (tess->triangle_styles != NULL) ? tess->triangle_styles[triangle_count] : -1;
         file_style_index = tess_file_style_index;
     }
     else if (new_state == PRC_INTERNAL_API_STYLE_SET_FROM_REF_DATA)

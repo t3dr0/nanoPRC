@@ -291,6 +291,16 @@ prc_parse_ri(prc_context *ctx, prc_bit_state *bit_state, prc_ri *data, int depth
         return code;
     }
 
+#if DEBUG_TREE
+    DEBUG_LOG("RepresentationItem: representation_type=%u biased_index_local_coordinate_system=%u "
+        "biased_index_tessellation=%u biased_index_of_line_style=%u name.same=%u name=\"%s\"\n",
+        data->representation_type, data->item_content.biased_index_local_coordinate_system,
+        data->item_content.biased_index_tessellation,
+        data->item_content.base.graphics_content.biased_index_of_line_style,
+        data->item_content.base.base.name.same,
+        data->item_content.base.base.name.same ? "" : (data->item_content.base.base.name.name.string ? data->item_content.base.base.name.name.string : "(null)"));
+#endif
+
     switch (data->representation_type)
     {
     case PRC_TYPE_RI_RepresentationalItem:
@@ -1822,6 +1832,21 @@ prc_parse_product_occurrence(prc_context *ctx, prc_bit_state *bit_state, prc_asm
 
     data->style_inheritance.has_any_inheritance = 0;
 
+#if DEBUG_TREE
+    DEBUG_LOG("ProductOccurrence: attribute_count=%u name.same=%u name=\"%s\" "
+        "biased_layer_index=%u biased_index_of_line_style=%u has_entity_ref=%u "
+        "biased_index_part=%u biased_index_prototype=%u "
+        "num_child_occ=%u product_behavior=%u has_transform=%u entity_ref_count=%u "
+        "number_of_views=%u\n",
+        data->base.base.attribute_data.attribute_count, data->base.base.name.same,
+        data->base.base.name.same ? "" : (data->base.base.name.name.string ? data->base.base.name.name.string : "(null)"),
+        data->base.graphics_content.biased_layer_index, data->base.graphics_content.biased_index_of_line_style,
+        data->base.graphics_content.has_entity_ref,
+        data->references_product_occurrence.biased_index_part, data->references_product_occurrence.biased_index_prototype,
+        data->references_product_occurrence.number_of_child_product_occurrences,
+        data->product_behavior, data->has_transform, data->entity_ref_count, data->number_of_views);
+#endif
+
     return 0;
 }
 
@@ -1910,6 +1935,19 @@ prc_parse_parts(prc_context *ctx, prc_bit_state *bit_state, prc_asm_parts_defini
     }
 
     data->style_inheritance.has_any_inheritance = 0;
+
+#if DEBUG_TREE
+    DEBUG_LOG("PartDefinition: attribute_count=%u name.same=%u name=\"%s\" "
+        "biased_layer_index=%u biased_index_of_line_style=%u has_entity_ref=%u "
+        "bbox_min=(%f,%f,%f) bbox_max=(%f,%f,%f) num_rep_items=%u number_views=%u\n",
+        data->base.base.attribute_data.attribute_count, data->base.base.name.same,
+        data->base.base.name.same ? "" : (data->base.base.name.name.string ? data->base.base.name.name.string : "(null)"),
+        data->base.graphics_content.biased_layer_index, data->base.graphics_content.biased_index_of_line_style,
+        data->base.graphics_content.has_entity_ref,
+        data->bounding_box.minimum_corner.x, data->bounding_box.minimum_corner.y, data->bounding_box.minimum_corner.z,
+        data->bounding_box.maximum_corner.x, data->bounding_box.maximum_corner.y, data->bounding_box.maximum_corner.z,
+        data->num_rep_items, data->number_views);
+#endif
 
     return 0;
 }
