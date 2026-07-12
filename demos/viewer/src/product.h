@@ -88,6 +88,17 @@ public:
     constexpr Product *renderCompanion() const { return _renderCompanion; }
     constexpr const Material *materials() const { return _material; }
     constexpr uint32_t numMaterials() const { return _numMaterials; }
+    constexpr const MeshSpec *meshes() const { return _meshes; }
+    constexpr uint32_t numMeshes() const { return _numMeshes; }
+    constexpr const std::vector<prc_api_vertex> &cpuVertices() const { return _cpuVertices; }
+    constexpr const std::vector<unsigned int> &cpuIndices() const { return _cpuIndices; }
+    bool hasCpuPickData() const { return !_cpuVertices.empty() && !_cpuIndices.empty(); }
+
+     /* CPU-side pick buffers are optional and may be disabled by compile-time
+         tessellation-size limits to cap memory usage for large files. */
+     static bool cpuPickStorageLimited();
+     static uint64_t cpuPickStoredBytes();
+     static uint32_t cpuPickSkippedProductCount();
 
     void attach(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, Graphics2D &textRenderer);
     void attachTextContent(prc_context *ctx, prc_api_data data, const prc_api_tess *tess, Graphics2D &textRenderer);
@@ -149,6 +160,10 @@ private:
     uint32_t _numMaterials; /* Each face can have its own material. */
 
     Material *_textMaterial;
+
+    /* CPU copies for debug picking/introspection. */
+    std::vector<prc_api_vertex> _cpuVertices;
+    std::vector<unsigned int> _cpuIndices;
 
     Vector4 _bbox_min;
     Vector4 _bbox_max;
