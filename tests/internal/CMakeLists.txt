@@ -55,3 +55,26 @@ target_include_directories(verify_tess_positions PRIVATE tests)
 add_executable(splice_tess_field tests/internal/splice_tess_field.c)
 target_link_libraries(splice_tess_field prc_static)
 target_include_directories(splice_tess_field PRIVATE tests)
+
+add_executable(verify_manifold_real tests/internal/verify_manifold_real.c)
+target_link_libraries(verify_manifold_real prc_static)
+target_include_directories(verify_manifold_real PRIVATE tests)
+
+add_executable(verify_manifold_pdf tests/internal/verify_manifold_pdf.c)
+target_link_libraries(verify_manifold_pdf prc_static)
+target_include_directories(verify_manifold_pdf PRIVATE tests)
+
+add_executable(detect_tess_spikes tests/internal/detect_tess_spikes.c)
+target_link_libraries(detect_tess_spikes prc_static)
+target_include_directories(detect_tess_spikes PRIVATE tests)
+
+add_executable(dump_raw_tess_arrays tests/internal/dump_raw_tess_arrays.c)
+target_link_libraries(dump_raw_tess_arrays prc_static)
+target_include_directories(dump_raw_tess_arrays PRIVATE tests)
+add_executable(prc_to_pdf tests/internal/prc_to_pdf.c)
+target_link_libraries(prc_to_pdf prc_static)
+target_include_directories(prc_to_pdf PRIVATE tests)
+
+add_executable(reauthor_tess_pdf tests/internal/reauthor_tess_pdf.c)
+target_link_libraries(reauthor_tess_pdf prc_static)
+target_include_directories(reauthor_tess_pdf PRIVATE tests)
