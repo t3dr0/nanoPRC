@@ -129,6 +129,14 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
     for (i = 0; i < num_positions * 3; i++)
         if (prc_bitwrite_double(ctx, s, positions[i]) != 0) goto fail;
 
+    /* has_faces: the analogy to the compressed writer's e48cdfb bug #3 (set
+       FALSE there, since that facility never emits exact B-Rep geometry)
+       turned out not to transfer here -- three independently-produced
+       real-world uncompressed PRC files (ElevationMeshIS_ePRC.pdf,
+       xml-sample-wrl_ePRC.pdf, xml-sample-iv_ePRC.pdf; see
+       dump_uncompressed_tess_fields.c) all write has_faces=TRUE for
+       PRC_TYPE_TESS_3D despite presumably having the same "no real B-Rep"
+       property this facility does. Matching real-producer convention. */
     if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;                          /* has_faces */
     if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;                          /* has_loops */
     if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;                          /* must_calculate_normals */
