@@ -278,11 +278,22 @@ int main(int argc, char **argv)
            owns the actual geometry -- and at least one real reader (Acrobat)
            silently shows a blank model tree for the flat, single-node case
            (see teapot_write.c's identical fix, same root cause). Wrap the
-           leaf under a bare assembly root here too. */
+           leaf under a bare assembly root here too.
+
+           Diffing five real, independently-produced, Acrobat-confirmed-
+           working uncompressed PDFs (ElevationMeshIS_ePRC.pdf,
+           xml-sample-{wrl,iv,3ds}_ePRC.pdf, Teapot_ePRC.pdf) via
+           dump_tree_fields.c found every intermediate product level, all
+           the way down to the leaf, also owns its own part -- even an
+           empty one (num_rep_items == 0) -- not just the leaf. This root
+           node had none at all before (has_empty_part == 0 by default);
+           set it to match that shape and test whether it's what Acrobat's
+           tree panel actually needs. */
         memset(&root, 0, sizeof(root));
         root.children = &leaf_ptr;
         root.num_children = 1;
         root.name = part_name;
+        root.has_empty_part = 1;
 
         code = prc_api_write_prc_buffer(ctx, "nanoPRC-reauthor", &root, &wtess, 1, &prc_buf, &prc_buf_size);
         if (code < 0)

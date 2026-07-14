@@ -98,11 +98,18 @@ typedef struct prc_vertex_analysis_s
 
 /* analysis_out may be NULL to skip analysis capture entirely; when non-NULL
    it receives a caller-owned (prc_free) array of *analysis_count_out
-   (== out->num_decoded_points) entries. */
+   (== out->num_decoded_points) entries. tri_reversed may be NULL (no
+   triangle reversed, prior behavior unchanged) or mesh->num_triangles
+   entries (mesh order): when tri_reversed[t] is set, the traversal swaps
+   which physical edge of triangle t it treats as "right" vs "left" to
+   mirror the decoder's prc_set_left_right_edge_indices swap for a
+   reversed triangle, so a caller that later encodes normals with rev[k]
+   matching tri_reversed can safely mark growing triangles reversed too. */
 int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
     prc_encode_traversal_result *out,
-    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out);
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
+    const uint8_t *tri_reversed);
 
 void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
 
