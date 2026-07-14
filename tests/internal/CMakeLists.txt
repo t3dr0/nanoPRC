@@ -91,3 +91,7 @@ target_include_directories(dump_tree_fields PRIVATE tests)
 add_executable(census_tess tests/internal/census_tess.c)
 target_link_libraries(census_tess prc_static)
 target_include_directories(census_tess PRIVATE tests)
+
+add_executable(check_vertex_normal_variance tests/internal/check_vertex_normal_variance.c)
+target_link_libraries(check_vertex_normal_variance prc_static)
+target_include_directories(check_vertex_normal_variance PRIVATE tests)
