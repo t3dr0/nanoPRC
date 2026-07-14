@@ -6,10 +6,22 @@
    verify_manifold_pdf.c) and re-authors it as a brand-new, fully self-
    contained, single-part PRC file (fresh tree/schema, no cross-file-
    structure references at all) using the write facility's
-   PRC_API_WRITE_TESS_KIND_TRIANGLES path (see prc_api.h's own note on
-   why: PRC_API_WRITE_TESS_KIND_COMPRESSED has a separate, already-known
-   unresolved encoder bug independent of anything investigated here), then
-   wraps it in a minimal PDF via prc_api_pdf_embed_prc.
+   PRC_API_WRITE_TESS_KIND_COMPRESSED path, then wraps it in a minimal PDF
+   via prc_api_pdf_embed_prc.
+
+   Kind history: originally used PRC_API_WRITE_TESS_KIND_TRIANGLES (see
+   prc_api.h's own note on why: COMPRESSED had a separate, already-known
+   encoder bug against an independent, non-Acrobat ground-truth reader).
+   TRIANGLES output turned out to have its own, different problem: Acrobat
+   specifically (not PDF-XChange, not nanoPRC's own viewer, not that
+   independent reader) showed a blank model tree for it, and neither an
+   assembly/part tree-shape fix nor an explicit Default view nor correcting
+   has_faces resolved it -- with no genuine real-world uncompressed-PRC file
+   available locally to diff against, further guessing had no oracle to
+   check against. Switched to COMPRESSED, which teapot_write.c's own
+   Acrobat-verified output already demonstrates works in Acrobat; its
+   separate known bug is against a different reader and may not manifest
+   for this tool's simple single-part/single-face-group case.
 
    WHY IT EXISTS: A raw single-file-structure slice of a real multi-file-
    structure assembly (e.g. one produced by extracting a single fs from a
@@ -32,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
+#include <math.h>
 #include "prc_api.h"
 
 int main(int argc, char **argv)
@@ -54,13 +67,15 @@ int main(int argc, char **argv)
     double bbox_min[3] = { DBL_MAX, DBL_MAX, DBL_MAX };
     double bbox_max[3] = { -DBL_MAX, -DBL_MAX, -DBL_MAX };
 
+    prc_api_write_tess_kind_t write_kind = PRC_API_WRITE_TESS_KIND_COMPRESSED;
     if (argc < 4)
     {
-        printf("usage: %s <input.pdf_or_prc> <tess_index> <output.pdf> [part_name]\n", argv[0]);
+        printf("usage: %s <input.pdf_or_prc> <tess_index> <output.pdf> [part_name] [kind=compressed|triangles]\n", argv[0]);
         return 2;
     }
     target_index = (uint32_t)atoi(argv[2]);
     if (argc >= 5) part_name = argv[4];
+    if (argc >= 6 && strcmp(argv[5], "triangles") == 0) write_kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
 
     ctx = prc_api_new_context(NULL);
     if (ctx == NULL) { printf("context creation failed\n"); return 1; }
@@ -96,13 +111,22 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Pull positions/normals straight from the decoded vertex buffer, and
-       expand every face's graphic primitives into a flat triangle list --
-       same technique as verify_manifold_pdf.c/detect_tess_spikes.c. */
+    /* Pull positions/normals and expand every face's graphic primitives
+       into a flat triangle list -- same technique as verify_manifold_pdf.c/
+       detect_tess_spikes.c for the COMPRESSED case (one shared vertex
+       buffer, primitive indices are already global). TRIANGLES is
+       different: each face has its OWN face_vertices buffer (prc_api_face's
+       own comment: "Only valid in the PRC_API_TESS_3D case"), and a
+       primitive's indices are local to that face -- concatenate every
+       face's vertices into one combined array and remap each face's
+       primitive indices by its running offset, same technique
+       demos/viewer/src/product.cpp uses ("Offset the primitive.indices by
+       the vertex_offset of the face"). */
     {
         prc_api_tess_vertex_buffer *vb = (tess.type == PRC_API_TESS_3D_Compressed) ? &tess.tess_vertices : NULL;
         uint32_t face_limit = vb ? 1 : tess.num_faces;
         uint32_t f, v;
+        uint32_t *face_vertex_offset = NULL; /* TRIANGLES case only */
 
         if (vb != NULL)
         {
@@ -125,10 +149,46 @@ int main(int argc, char **argv)
                 if (positions[v*3+2] > bbox_max[2]) bbox_max[2] = positions[v*3+2];
             }
         }
+        else
+        {
+            uint32_t running = 0;
+            face_vertex_offset = (uint32_t *)malloc(sizeof(uint32_t) * (face_limit ? face_limit : 1));
+            for (f = 0; f < face_limit; f++)
+                running += (uint32_t)tess.tess_faces[f].face_vertices.num_vertices;
+            num_positions = running;
+            positions = (double *)malloc(sizeof(double) * 3 * (num_positions ? num_positions : 1));
+            normals = (double *)malloc(sizeof(double) * 3 * (num_positions ? num_positions : 1));
+
+            running = 0;
+            for (f = 0; f < face_limit; f++)
+            {
+                prc_api_tess_vertex_buffer *fvb = &tess.tess_faces[f].face_vertices;
+                uint32_t nv = (uint32_t)fvb->num_vertices;
+                face_vertex_offset[f] = running;
+                for (v = 0; v < nv; v++)
+                {
+                    uint32_t gi = running + v;
+                    positions[gi*3+0] = fvb->vertices[v].position[0];
+                    positions[gi*3+1] = fvb->vertices[v].position[1];
+                    positions[gi*3+2] = fvb->vertices[v].position[2];
+                    normals[gi*3+0] = fvb->vertices[v].normal[0];
+                    normals[gi*3+1] = fvb->vertices[v].normal[1];
+                    normals[gi*3+2] = fvb->vertices[v].normal[2];
+                    if (positions[gi*3+0] < bbox_min[0]) bbox_min[0] = positions[gi*3+0];
+                    if (positions[gi*3+1] < bbox_min[1]) bbox_min[1] = positions[gi*3+1];
+                    if (positions[gi*3+2] < bbox_min[2]) bbox_min[2] = positions[gi*3+2];
+                    if (positions[gi*3+0] > bbox_max[0]) bbox_max[0] = positions[gi*3+0];
+                    if (positions[gi*3+1] > bbox_max[1]) bbox_max[1] = positions[gi*3+1];
+                    if (positions[gi*3+2] > bbox_max[2]) bbox_max[2] = positions[gi*3+2];
+                }
+                running += nv;
+            }
+        }
 
         for (f = 0; f < face_limit; f++)
         {
             prc_api_face *face = &tess.tess_faces[f];
+            uint32_t voff = (vb == NULL) ? face_vertex_offset[f] : 0;
             uint32_t p;
             for (p = 0; p < face->num_graphic_primitives; p++)
             {
@@ -139,7 +199,7 @@ int main(int argc, char **argv)
 
 #define APPEND_TRI(a,b,c) do { \
                     if (num_triangles*3 + 3 > tri_cap) { tri_cap = tri_cap ? tri_cap*2 : 4096; tri_indices = (uint32_t *)realloc(tri_indices, sizeof(uint32_t)*tri_cap); } \
-                    tri_indices[num_triangles*3+0] = (a); tri_indices[num_triangles*3+1] = (b); tri_indices[num_triangles*3+2] = (c); \
+                    tri_indices[num_triangles*3+0] = (a) + voff; tri_indices[num_triangles*3+1] = (b) + voff; tri_indices[num_triangles*3+2] = (c) + voff; \
                     num_triangles++; \
                 } while (0)
 
@@ -166,6 +226,7 @@ int main(int argc, char **argv)
 #undef APPEND_TRI
             }
         }
+        free(face_vertex_offset);
     }
 
     printf("Decoded %u positions, %u triangles from tess %u\n", num_positions, num_triangles, target_index);
@@ -175,12 +236,18 @@ int main(int argc, char **argv)
         prc_api_write_tessellation wtess;
         prc_api_write_rep_item rep_item;
         prc_api_write_node leaf;
+        prc_api_write_node *leaf_ptr = &leaf;
+        prc_api_write_node root;
         uint32_t face_tri_counts = num_triangles;
         uint8_t *prc_buf = NULL;
         size_t prc_buf_size = 0;
 
         memset(&wtess, 0, sizeof(wtess));
-        wtess.kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
+        wtess.kind = write_kind;
+        /* tolerance/crease_angle_degrees left at their memset(0) defaults
+           (relative 1e-6 / 30 degrees) -- crease_angle is moot anyway since
+           normals are supplied below, not recalculated. Ignored entirely
+           by the TRIANGLES path. */
         wtess.positions = positions;
         wtess.num_positions = num_positions;
         wtess.normals = normals;
@@ -204,7 +271,20 @@ int main(int argc, char **argv)
         leaf.name = part_name;
         leaf.part_name = part_name;
 
-        code = prc_api_write_prc_buffer(ctx, "nanoPRC-reauthor", &leaf, &wtess, 1, &prc_buf, &prc_buf_size);
+        /* A part attached directly to the tree root (this tool's original
+           behavior) matches nothing in the format's own parsing rules, but
+           real-world PRC producers consistently model even a single-part
+           scene as TWO levels -- a bare assembly root with one child that
+           owns the actual geometry -- and at least one real reader (Acrobat)
+           silently shows a blank model tree for the flat, single-node case
+           (see teapot_write.c's identical fix, same root cause). Wrap the
+           leaf under a bare assembly root here too. */
+        memset(&root, 0, sizeof(root));
+        root.children = &leaf_ptr;
+        root.num_children = 1;
+        root.name = part_name;
+
+        code = prc_api_write_prc_buffer(ctx, "nanoPRC-reauthor", &root, &wtess, 1, &prc_buf, &prc_buf_size);
         if (code < 0)
         {
             printf("prc_api_write_prc_buffer failed: %d\n", code);
@@ -212,7 +292,38 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        code = prc_api_pdf_embed_prc(ctx, argv[3], prc_buf, prc_buf_size, NULL);
+        /* Also give Acrobat an explicit "Default" view (matching
+           teapot_write.c) rather than relying on a NULL-options reader
+           fallback -- cheap, and removes one more variable from the
+           Acrobat-blank-scene comparison. */
+        {
+            prc_pdf_view_spec view;
+            prc_pdf_write_options pdf_opts;
+            double center[3], extent[3], diag_len;
+            int a;
+
+            for (a = 0; a < 3; a++) center[a] = 0.5 * (bbox_min[a] + bbox_max[a]);
+            for (a = 0; a < 3; a++) extent[a] = bbox_max[a] - bbox_min[a];
+            diag_len = sqrt(extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]);
+            if (diag_len < 1e-6) diag_len = 1.0;
+
+            memset(&view, 0, sizeof(view));
+            view.name = "Default";
+            view.eye[0] = center[0] + diag_len * 1.0;
+            view.eye[1] = center[1] - diag_len * 1.3;
+            view.eye[2] = center[2] + diag_len * 0.7;
+            view.target[0] = center[0];
+            view.target[1] = center[1];
+            view.target[2] = center[2];
+            view.up[0] = 0.0; view.up[1] = 0.0; view.up[2] = 1.0;
+            view.is_default = 1;
+
+            memset(&pdf_opts, 0, sizeof(pdf_opts));
+            pdf_opts.views = &view;
+            pdf_opts.num_views = 1;
+
+            code = prc_api_pdf_embed_prc(ctx, argv[3], prc_buf, prc_buf_size, &pdf_opts);
+        }
         if (code < 0)
         {
             printf("prc_api_pdf_embed_prc failed: %d\n", code);
