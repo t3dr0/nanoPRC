@@ -65,61 +65,10 @@
 #include <string.h>
 #include <math.h>
 #include "prc_api.h"
+#include "tess_spike_common.h"
 
-#define MAX_NEIGHBORS 8
-
-typedef struct { uint32_t a, b, tri; } edge_rec;
-
-typedef struct
-{
-    uint32_t tess_index;
-    uint32_t tri_index;
-    double ratio;
-    double own_max_edge;
-    double local_median;
-    double global_median;
-    double global_ratio;
-    int flagged_by_global;
-    float v0[3], v1[3], v2[3];
-} spike_candidate;
-
-static int
-edge_rec_cmp(const void *pa, const void *pb)
-{
-    const edge_rec *a = (const edge_rec *)pa;
-    const edge_rec *b = (const edge_rec *)pb;
-    if (a->a != b->a) return (a->a < b->a) ? -1 : 1;
-    if (a->b != b->b) return (a->b < b->b) ? -1 : 1;
-    return (a->tri < b->tri) ? -1 : (a->tri > b->tri ? 1 : 0);
-}
-
-static int
-double_cmp(const void *pa, const void *pb)
-{
-    double a = *(const double *)pa, b = *(const double *)pb;
-    return (a < b) ? -1 : (a > b ? 1 : 0);
-}
-
-static double
-spike_severity(const spike_candidate *c)
-{
-    return (c->ratio > c->global_ratio) ? c->ratio : c->global_ratio;
-}
-
-static int
-spike_cmp(const void *pa, const void *pb)
-{
-    double sa = spike_severity((const spike_candidate *)pa);
-    double sb = spike_severity((const spike_candidate *)pb);
-    return (sa < sb) ? 1 : (sa > sb ? -1 : 0);
-}
-
-static double
-edge_len(const float *p0, const float *p1)
-{
-    double dx = p0[0] - p1[0], dy = p0[1] - p1[1], dz = p0[2] - p1[2];
-    return sqrt(dx*dx + dy*dy + dz*dz);
-}
+#define MAX_NEIGHBORS TESS_SPIKE_MAX_NEIGHBORS
+typedef tess_spike_candidate spike_candidate;
 
 int main(int argc, char **argv)
 {
@@ -190,14 +139,47 @@ int main(int argc, char **argv)
             uint32_t tri_count = 0, tri_cap = 0;
             prc_api_tess_vertex_buffer *vb = (tess->type == PRC_API_TESS_3D_Compressed)
                 ? &tess->tess_vertices : NULL;
+            prc_api_vertex *combined_verts = NULL; /* TRIANGLES case only, freed below */
+            uint32_t *face_vertex_offset = NULL;   /* TRIANGLES case only */
             uint32_t f;
             /* Same face_limit=1-for-compressed workaround as verify_manifold_pdf.c
                (all triangles live in face_index 0 for compressed tessellations). */
             uint32_t face_limit = vb ? 1 : tess->num_faces;
 
+            /* TRIANGLES tessellations have no single shared vertex buffer --
+               each face carries its own face_vertices (prc_api_face's own
+               comment: "Only valid in the PRC_API_TESS_3D case"). Concatenate
+               them and remap each face's primitive indices by its running
+               offset -- same technique reauthor_tess_pdf.c and
+               demos/viewer/src/product.cpp use. Without this, this whole
+               tool silently scanned zero triangles for every uncompressed
+               tessellation in a file, which is how a real spike-covered
+               TRIANGLES part (the turbine's Outer_Engine_Cover) went
+               undetected by this tool despite it claiming TRIANGLES support
+               in its own header comment. */
+            if (vb == NULL)
+            {
+                uint32_t running = 0, v;
+                face_vertex_offset = (uint32_t *)malloc(sizeof(uint32_t) * (face_limit ? face_limit : 1));
+                for (f = 0; f < face_limit; f++)
+                    running += (uint32_t)tess->tess_faces[f].face_vertices.num_vertices;
+                combined_verts = (prc_api_vertex *)malloc(sizeof(prc_api_vertex) * (running ? running : 1));
+                running = 0;
+                for (f = 0; f < face_limit; f++)
+                {
+                    prc_api_tess_vertex_buffer *fvb = &tess->tess_faces[f].face_vertices;
+                    uint32_t nv = (uint32_t)fvb->num_vertices;
+                    face_vertex_offset[f] = running;
+                    for (v = 0; v < nv; v++)
+                        combined_verts[running + v] = fvb->vertices[v];
+                    running += nv;
+                }
+            }
+
             for (f = 0; f < face_limit; f++)
             {
                 prc_api_face *face = &tess->tess_faces[f];
+                uint32_t voff = (vb == NULL) ? face_vertex_offset[f] : 0;
                 uint32_t p;
                 for (p = 0; p < face->num_graphic_primitives; p++)
                 {
@@ -211,9 +193,9 @@ int main(int argc, char **argv)
                         for (idx = 0; idx + 3 <= prim.num_indices; idx += 3)
                         {
                             if (tri_count + 3 > tri_cap) { tri_cap = tri_cap ? tri_cap * 2 : 1024; tri = (uint32_t *)realloc(tri, sizeof(uint32_t) * tri_cap); }
-                            tri[tri_count++] = prim.indices[idx+0];
-                            tri[tri_count++] = prim.indices[idx+1];
-                            tri[tri_count++] = prim.indices[idx+2];
+                            tri[tri_count++] = prim.indices[idx+0] + voff;
+                            tri[tri_count++] = prim.indices[idx+1] + voff;
+                            tri[tri_count++] = prim.indices[idx+2] + voff;
                         }
                     }
                     else if (prim.type == PRC_API_FAN)
@@ -221,9 +203,9 @@ int main(int argc, char **argv)
                         for (idx = 1; idx + 1 < prim.num_indices; idx++)
                         {
                             if (tri_count + 3 > tri_cap) { tri_cap = tri_cap ? tri_cap * 2 : 1024; tri = (uint32_t *)realloc(tri, sizeof(uint32_t) * tri_cap); }
-                            tri[tri_count++] = prim.indices[0];
-                            tri[tri_count++] = prim.indices[idx];
-                            tri[tri_count++] = prim.indices[idx+1];
+                            tri[tri_count++] = prim.indices[0] + voff;
+                            tri[tri_count++] = prim.indices[idx] + voff;
+                            tri[tri_count++] = prim.indices[idx+1] + voff;
                         }
                     }
                     else if (prim.type == PRC_API_STRIP)
@@ -233,83 +215,36 @@ int main(int argc, char **argv)
                             if (tri_count + 3 > tri_cap) { tri_cap = tri_cap ? tri_cap * 2 : 1024; tri = (uint32_t *)realloc(tri, sizeof(uint32_t) * tri_cap); }
                             if (idx % 2 == 0)
                             {
-                                tri[tri_count++] = prim.indices[idx+0];
-                                tri[tri_count++] = prim.indices[idx+1];
-                                tri[tri_count++] = prim.indices[idx+2];
+                                tri[tri_count++] = prim.indices[idx+0] + voff;
+                                tri[tri_count++] = prim.indices[idx+1] + voff;
+                                tri[tri_count++] = prim.indices[idx+2] + voff;
                             }
                             else
                             {
-                                tri[tri_count++] = prim.indices[idx+1];
-                                tri[tri_count++] = prim.indices[idx+0];
-                                tri[tri_count++] = prim.indices[idx+2];
+                                tri[tri_count++] = prim.indices[idx+1] + voff;
+                                tri[tri_count++] = prim.indices[idx+0] + voff;
+                                tri[tri_count++] = prim.indices[idx+2] + voff;
                             }
                         }
                     }
                 }
             }
 
-            if (tri_count >= 9 && vb != NULL)
+            if (tri_count >= 9)
             {
                 uint32_t ntri = tri_count / 3;
-                edge_rec *edges = (edge_rec *)malloc(sizeof(edge_rec) * tri_count);
-                uint32_t e = 0, t;
+                uint32_t t;
                 double *max_edge = (double *)malloc(sizeof(double) * ntri);
                 double *min_edge = (double *)malloc(sizeof(double) * ntri);
                 uint32_t (*neighbors)[MAX_NEIGHBORS] = malloc(sizeof(uint32_t) * ntri * MAX_NEIGHBORS);
                 uint32_t *neighbor_count = (uint32_t *)calloc(ntri, sizeof(uint32_t));
-                prc_api_vertex *verts = vb->vertices;
+                prc_api_vertex *verts = vb ? vb->vertices : combined_verts;
+                double global_median;
 
                 total_tris_scanned += ntri;
 
-                for (t = 0; t < ntri; t++)
-                {
-                    uint32_t i0 = tri[t*3+0], i1 = tri[t*3+1], i2 = tri[t*3+2];
-                    double l0 = edge_len(verts[i0].position, verts[i1].position);
-                    double l1 = edge_len(verts[i1].position, verts[i2].position);
-                    double l2 = edge_len(verts[i2].position, verts[i0].position);
-                    double mx = l0 > l1 ? l0 : l1; if (l2 > mx) mx = l2;
-                    double mn = l0 < l1 ? l0 : l1; if (l2 < mn) mn = l2;
-                    max_edge[t] = mx;
-                    min_edge[t] = mn;
-
-                    {
-                        uint32_t pairs[3][2] = { {i0,i1}, {i1,i2}, {i2,i0} };
-                        int pe;
-                        for (pe = 0; pe < 3; pe++)
-                        {
-                            uint32_t a = pairs[pe][0], b = pairs[pe][1];
-                            edges[e].a = (a < b) ? a : b;
-                            edges[e].b = (a < b) ? b : a;
-                            edges[e].tri = t;
-                            e++;
-                        }
-                    }
-                }
-                qsort(edges, e, sizeof(edge_rec), edge_rec_cmp);
-                {
-                    uint32_t run_start = 0, i2;
-                    for (i2 = 1; i2 <= e; i2++)
-                    {
-                        if (i2 == e || edges[i2].a != edges[run_start].a || edges[i2].b != edges[run_start].b)
-                        {
-                            uint32_t run_len = i2 - run_start;
-                            uint32_t p1, p2;
-                            for (p1 = run_start; p1 < i2; p1++)
-                            {
-                                for (p2 = p1 + 1; p2 < i2; p2++)
-                                {
-                                    uint32_t t1 = edges[p1].tri, t2 = edges[p2].tri;
-                                    if (neighbor_count[t1] < MAX_NEIGHBORS)
-                                        neighbors[t1][neighbor_count[t1]++] = t2;
-                                    if (neighbor_count[t2] < MAX_NEIGHBORS)
-                                        neighbors[t2][neighbor_count[t2]++] = t1;
-                                }
-                            }
-                            (void)run_len;
-                            run_start = i2;
-                        }
-                    }
-                }
+                tess_spike_compute_edge_lengths(tri, ntri, verts, max_edge, min_edge);
+                tess_spike_build_adjacency(tri, ntri, neighbors, neighbor_count);
 
                 /* Per-tessellation GLOBAL median, in addition to the per-triangle
                    LOCAL (1-ring neighbor) median above. A contiguous run/cluster of
@@ -318,38 +253,17 @@ int main(int argc, char **argv)
                    fanning out from one point) are locally self-consistent -- their
                    immediate neighbors are also bad, so the local ratio stays near 1
                    -- but stand out clearly against the tessellation's overall scale. */
-                {
-                    double *sorted_all = (double *)malloc(sizeof(double) * ntri);
-                    double global_median;
-                    memcpy(sorted_all, max_edge, sizeof(double) * ntri);
-                    qsort(sorted_all, ntri, sizeof(double), double_cmp);
-                    global_median = sorted_all[ntri / 2];
-                    free(sorted_all);
+                global_median = tess_spike_global_median(max_edge, ntri);
 
                 for (t = 0; t < ntri; t++)
                 {
-                    double sample[MAX_NEIGHBORS];
-                    uint32_t nc = neighbor_count[t], si;
-                    double local_median = 0.0;
-                    double ratio = 0.0;
-                    double global_ratio = (global_median > 0.0) ? max_edge[t] / global_median : 0.0;
-                    int by_local = 0, by_global = 0;
+                    double ratio, local_median, global_ratio;
+                    int by_global;
+                    int flagged = tess_spike_evaluate(t, max_edge, neighbors, neighbor_count,
+                        global_median, ratio_threshold, global_ratio_threshold,
+                        &ratio, &local_median, &global_ratio, &by_global);
 
-                    if (nc > 0)
-                    {
-                        for (si = 0; si < nc; si++)
-                            sample[si] = max_edge[neighbors[t][si]];
-                        qsort(sample, nc, sizeof(double), double_cmp);
-                        local_median = sample[nc / 2];
-                        if (local_median > 0.0)
-                        {
-                            ratio = max_edge[t] / local_median;
-                            by_local = (ratio > ratio_threshold);
-                        }
-                    }
-                    by_global = (global_ratio > global_ratio_threshold);
-
-                    if (by_local || by_global)
+                    if (flagged)
                     {
                         uint32_t i0 = tri[t*3+0], i1 = tri[t*3+1], i2 = tri[t*3+2];
                         if (num_candidates >= cand_cap)
@@ -371,14 +285,14 @@ int main(int argc, char **argv)
                         num_candidates++;
                     }
                 }
-                }
 
-                free(edges);
                 free(max_edge);
                 free(min_edge);
                 free(neighbors);
                 free(neighbor_count);
             }
+            free(combined_verts);
+            free(face_vertex_offset);
             free(tri);
         }
     }
@@ -387,7 +301,7 @@ int main(int argc, char **argv)
         (unsigned long long)total_tris_scanned, totalTesselations);
     printf("Spike candidates (ratio > %.2f): %u\n\n", ratio_threshold, num_candidates);
 
-    qsort(candidates, num_candidates, sizeof(spike_candidate), spike_cmp);
+    qsort(candidates, num_candidates, sizeof(spike_candidate), tess_spike_cmp);
 
     {
         uint32_t n = num_candidates < top_n ? num_candidates : top_n;
