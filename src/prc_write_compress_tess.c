@@ -1483,15 +1483,17 @@ prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
             rev[k] = (uint8_t)(dot_val > 0.0);
             /* A set bit makes the decoder swap its left/right edge handling
                for this triangle's grow pushes, which the already-emitted
-               traversal arrays assumed never happens; refuse to build a
-               stream the decoder would walk differently. */
+               traversal arrays assumed never happens -- the encoder's own
+               grow-step point/basis math doesn't yet produce correct point
+               data to pair with a reversed bit on a growing triangle (see
+               the longer comment above on mesh->num_components). Rather
+               than discard every OTHER triangle's data-driven bit over
+               this one triangle, leave this triangle at the calloc
+               default (0) -- same as the no-input-normals case -- and
+               keep going; its decoded normal sign may end up wrong, but
+               its decoded position/topology stays correct either way. */
             if (rev[k] && trav->edge_status_array[k] != 0)
-            {
-                prc_free(ctx, rev);
-                prc_error(ctx, PRC_ERROR_INTERNAL,
-                    "prc_encode_normals_c1: normals reverse a growing triangle (unsupported)\n");
-                return PRC_ERROR_INTERNAL;
-            }
+                rev[k] = 0;
         }
     }
     *normal_is_reversed_out = rev;
@@ -2336,11 +2338,40 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
                Rather than fail the whole entry over it, fall back to C1
                (decoder-reconstructed normals from geometry): every real
                mesh has SOME valid encoding, and reconstructed-but-rendered
-               beats exact-but-rejected. */
+               beats exact-but-rejected.
+
+               C1's input_normals contract wants one normal per DEDUPLICATED
+               mesh position (mesh.num_positions entries), not per corner --
+               reduce the corner_normals we already built for the failed C2
+               attempt down to a per-position average before it's freed, so
+               C1 can pick a data-driven reversal bit per triangle instead of
+               defaulting every triangle to "never reversed" (which produced
+               an essentially arbitrary decoded sign per triangle). */
+            double *vertex_normals = (double *)prc_calloc(ctx,
+                (size_t)mesh.num_positions * 3, sizeof(double));
+
+            if (vertex_normals != NULL)
+            {
+                for (k = 0; k < mesh.num_triangles; k++)
+                {
+                    uint32_t c;
+                    for (c = 0; c < 3; c++)
+                    {
+                        uint32_t v = mesh.tri_indices[(size_t)k * 3 + c];
+                        const double *cn = &corner_normals[((size_t)k * 3 + c) * 3];
+
+                        vertex_normals[(size_t)v * 3 + 0] += cn[0];
+                        vertex_normals[(size_t)v * 3 + 1] += cn[1];
+                        vertex_normals[(size_t)v * 3 + 2] += cn[2];
+                    }
+                }
+            }
+
             prc_free(ctx, corner_normals);
             corner_normals = NULL;
             must_recalculate_normals = 1u;
-            code = prc_encode_normals_c1(ctx, &mesh, &trav, NULL, &rev);
+            code = prc_encode_normals_c1(ctx, &mesh, &trav, vertex_normals, &rev);
+            prc_free(ctx, vertex_normals);
         }
     }
     else
