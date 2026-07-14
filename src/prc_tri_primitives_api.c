@@ -46,26 +46,53 @@ uint32_t
 prc_api_helper_get_biased_file_index_from_unique_id(prc_context *ctx, prc_api_data data,
     prc_unique_id unique_id);
 
-/* Helper function in search edge list for edges. We only search the triangle one
-   indices obviously */
-static prc_internal_api_edge*
-prc_internal_api_find_edge(prc_internal_api_edge_list *edge_list, uint32_t index1, uint32_t index2)
+/* Hashed edge lookup so that prc_internal_api_build_edge_list is O(n) instead of
+   O(n^2) for large meshes. Mirrors prc_compressed_tess_hash_edge_key/
+   prc_compressed_tess_find_open_edge_hashed in prc_decode_compressed_tess.c. */
+static uint32_t
+prc_internal_api_hash_edge_key(uint32_t index1, uint32_t index2, uint32_t mask)
 {
-    size_t k;
-    prc_internal_api_edge *edge;
+    uint32_t min_index = (index1 < index2) ? index1 : index2;
+    uint32_t max_index = (index1 < index2) ? index2 : index1;
+    uint32_t hash = (min_index * 73856093u) ^ (max_index * 19349663u);
+    return hash & mask;
+}
 
-    for (k = 0; k < edge_list->num_edges; k++)
+static void
+prc_internal_api_hash_insert_edge(uint32_t *hash_heads, uint32_t *hash_next,
+    uint32_t hash_mask, uint32_t index1, uint32_t index2, uint32_t edge_index)
+{
+    uint32_t bucket = prc_internal_api_hash_edge_key(index1, index2, hash_mask);
+    hash_next[edge_index] = hash_heads[bucket];
+    hash_heads[bucket] = edge_index;
+}
+
+/* Find an unmatched edge candidate (num_triangles == 1) in the hashed edge buckets.
+   We only search the triangle one indices obviously */
+static prc_internal_api_edge*
+prc_internal_api_find_open_edge_hashed(prc_internal_api_edge_list *edge_list,
+    uint32_t *hash_heads, uint32_t *hash_next, uint32_t hash_mask,
+    uint32_t index1, uint32_t index2)
+{
+    uint32_t bucket = prc_internal_api_hash_edge_key(index1, index2, hash_mask);
+    uint32_t edge_index = hash_heads[bucket];
+
+    while (edge_index != UINT32_MAX)
     {
-        edge = &edge_list->edge[k];
-        if (edge->num_triangles == 2)
-            continue; /* This edge already has a partner. We are looking for singles */
-        if ((edge->tri_one_edge_indices[0] == index1 &&
-             edge->tri_one_edge_indices[1] == index2) ||
-            (edge->tri_one_edge_indices[0] == index2 &&
-             edge->tri_one_edge_indices[1] == index1))
+        prc_internal_api_edge *edge = &edge_list->edge[edge_index];
+
+        if (edge->num_triangles != 2)
         {
-            return edge;
+            if ((edge->tri_one_edge_indices[0] == index1 &&
+                 edge->tri_one_edge_indices[1] == index2) ||
+                (edge->tri_one_edge_indices[0] == index2 &&
+                 edge->tri_one_edge_indices[1] == index1))
+            {
+                return edge;
+            }
         }
+
+        edge_index = hash_next[edge_index];
     }
     return NULL;
 }
@@ -203,6 +230,10 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
     prc_internal_api_edge *edge;
     prc_internal_api_edge_list *edge_list;
     uint32_t indices_offset; /* Offset into the indices array for the triangle */
+    uint32_t *hash_heads = NULL;
+    uint32_t *hash_next = NULL;
+    uint32_t hash_capacity = 1;
+    uint32_t hash_mask;
 
     /* indices_offset is needed so that when a vertex split occurs we can find
        where in the indices the triangle occurred and update its indice so that
@@ -230,6 +261,34 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
         prc_free(ctx, edge_list);
         return PRC_API_ERROR_MEMORY;
     }
+
+    /* Hash table over edge keys so edge lookups below are O(1) average instead
+       of an O(num_edges) linear scan (which made this function O(num_triangles^2)
+       on large meshes). hash_heads[bucket] is the index of the most recently
+       inserted edge in that bucket, chained via hash_next[]. */
+    while (hash_capacity < (num_triangles * 6 + 1))
+    {
+        hash_capacity <<= 1;
+        if (hash_capacity == 0)
+        {
+            hash_capacity = 1;
+            break;
+        }
+    }
+    hash_mask = hash_capacity - 1;
+
+    hash_heads = (uint32_t *)prc_calloc(ctx, hash_capacity, sizeof(uint32_t));
+    hash_next = (uint32_t *)prc_calloc(ctx, edge_list->capacity, sizeof(uint32_t));
+    if (hash_heads == NULL || hash_next == NULL)
+    {
+        prc_free(ctx, hash_heads);
+        prc_free(ctx, hash_next);
+        prc_free(ctx, edge_list->edge);
+        prc_free(ctx, edge_list);
+        return PRC_API_ERROR_MEMORY;
+    }
+    for (k = 0; k < hash_capacity; k++)
+        hash_heads[k] = UINT32_MAX;
 
 #if 0
     /* Verify that all indices are within the valid API vertex range.
@@ -272,20 +331,55 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
 
         indices_offset = k * 3;
 
-        /* Now search through the existing edge list to see if any of these edges
-           are already present */
+        /* Now search through the hashed edge buckets to see if any of these
+           edges are already present */
         /* Edge 0-1 */
-        edge = prc_internal_api_find_edge(edge_list, indices[0], indices[1]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[0], indices[1]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[0], indices[1], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+        }
 
         /* Edge 0-2 */
-        edge = prc_internal_api_find_edge(edge_list, indices[0], indices[2]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[0], indices[2]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[0], indices[2], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+        }
 
         /* Edge 1-2 */
-        edge = prc_internal_api_find_edge(edge_list, indices[1], indices[2]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[1], indices[2]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[1], indices[2], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+        }
     }
+    prc_free(ctx, hash_heads);
+    prc_free(ctx, hash_next);
     uncompressed_data->edge_list = edge_list;
     return 0;
 }
