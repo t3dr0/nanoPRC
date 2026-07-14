@@ -16,7 +16,16 @@
 
    HOW: usage: census_tess.exe <input.pdf> [min_vertices=0] -- only prints
    tessellations with at least min_vertices vertices, to cut the output
-   down to plausible candidates for a large/distinctive part. */
+   down to plausible candidates for a large/distinctive part.
+
+   KNOWN LIMITATION, FIXED: originally only read tess.tess_vertices, which
+   is populated exclusively for PRC_API_TESS_3D_Compressed -- for
+   PRC_API_TESS_3D (uncompressed/"TRIANGLES") tessellations, per-vertex
+   data instead lives per-face in tess.tess_faces[f].face_vertices, so
+   every TRIANGLES-type tessellation silently censused as num_vertices=0.
+   Fixed the same way detect_tess_spikes.c and reauthor_tess_pdf.c already
+   were: sum each face's own face_vertices.num_vertices for the TRIANGLES
+   case instead of reading tess_vertices directly. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,13 +83,27 @@ int main(int argc, char **argv)
 
         if (tess.type == PRC_API_TESS_3D_Compressed || tess.type == PRC_API_TESS_3D)
         {
+            size_t num_vertices;
+
             for (j = 0; j < tess.num_faces; j++)
                 prc_api_get_tessellation_vertices(ctx, data, model_tree, k, j, tess.tess_faces + j, &tess);
 
-            if (tess.tess_vertices.num_vertices >= min_vertices)
+            if (tess.type == PRC_API_TESS_3D_Compressed)
+            {
+                num_vertices = tess.tess_vertices.num_vertices;
+            }
+            else
+            {
+                /* TRIANGLES: vertices live per-face, not in tess.tess_vertices. */
+                num_vertices = 0;
+                for (j = 0; j < tess.num_faces; j++)
+                    num_vertices += tess.tess_faces[j].face_vertices.num_vertices;
+            }
+
+            if (num_vertices >= min_vertices)
             {
                 printf("tess=%u type=%s num_faces=%u num_vertices=%zu\n",
-                    k, type_name, nFaces, tess.tess_vertices.num_vertices);
+                    k, type_name, nFaces, num_vertices);
             }
         }
         free(tess.tess_faces);
