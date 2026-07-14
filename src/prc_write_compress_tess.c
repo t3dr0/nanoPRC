@@ -15,6 +15,7 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "prc_write_compress_tess.h"
@@ -1130,6 +1131,21 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
             ret = code;
             goto fail;
         }
+        /* PRC_TRACE_REVERSED / PRC_TRACE_NORMALS: env-var gated stderr tracing
+           (same zero-cost-when-unset convention as prc_decode_compressed_tess.c's
+           PRC_DEBUG_DISABLE_* hooks), added to compare compressed-tessellation
+           encode vs. decode triangle-by-triangle -- see
+           ISO-SPEC/compressed-write-normal-sign-bug.md for what this diagnoses
+           and how to read its output. The matching read-side prints live in
+           prc_decode_compressed_tess.c. */
+        if (getenv("PRC_TRACE_REVERSED") != NULL)
+        {
+            fprintf(stderr, "ENC k=%u tri=%u mv=(%u,%u,%u) idx=(%d,%d,%d) edge_status=%u P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
+                emitted, cur, mv[0], mv[1], mv[2], idx[0], idx[1], idx[2], out->edge_status_array[emitted],
+                st.decoded_pos[idx[0]].x, st.decoded_pos[idx[0]].y, st.decoded_pos[idx[0]].z,
+                st.decoded_pos[idx[1]].x, st.decoded_pos[idx[1]].y, st.decoded_pos[idx[1]].z,
+                st.decoded_pos[idx[2]].x, st.decoded_pos[idx[2]].y, st.decoded_pos[idx[2]].z);
+        }
         emitted++;
     }
 
@@ -1871,6 +1887,14 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
                         goto fail;
                     }
                 }
+            }
+            if (getenv("PRC_TRACE_NORMALS") != NULL)
+            {
+                prc_vec3 pos = prc_encode_decoded_vec(trav, idx[c]);
+                fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)\n",
+                    k, c, idx[c], t->tri_reversed, t->x_reversed, t->y_reversed, t->theta_q, t->phi_q,
+                    visit_normals[visit].x, visit_normals[visit].y, visit_normals[visit].z,
+                    assigned.x, assigned.y, assigned.z, pos.x, pos.y, pos.z);
             }
             if (c == 0)
                 corner0_decoded = assigned;

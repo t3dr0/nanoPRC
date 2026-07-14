@@ -43,6 +43,16 @@ long prc_debug_orient_flip_total_count = 0;
 long prc_debug_index_swap_triggered_count = 0;
 long prc_debug_index_swap_total_count = 0;
 
+/* PRC_TRACE_REVERSED / PRC_TRACE_NORMALS: env-var gated stderr tracing (same
+   convention as above), added to compare compressed-tessellation encode vs.
+   decode triangle-by-triangle -- see ISO-SPEC/compressed-write-normal-sign-bug.md
+   for what this was built to diagnose and how to read its output. Zero
+   behavioral change and effectively zero cost when unset (a single getenv
+   check per triangle/corner); the matching write-side prints live in
+   prc_write_compress_tess.c. g_trace_tri_idx threads the enclosing triangle
+   index into prc_decode_normal, which doesn't otherwise receive it. */
+static uint32_t g_trace_tri_idx = 0;
+
 static void
 prc_debug_hooks_init(void)
 {
@@ -1258,6 +1268,16 @@ prc_decode_normal(prc_context *ctx, prc_tess_3d_compressed *data,
     DEBUG_LOG("normal_state->normals_vertex_count = %d\n", normal_state->normals_vertex_count);
     DEBUG_LOG("Normal: [%.17f %.17f %.17f]\n", vertex_normal.x, vertex_normal.y, vertex_normal.z);
 
+    if (getenv("PRC_TRACE_NORMALS") != NULL)
+    {
+        fprintf(stderr, "DECNORM tri=%u vidx=%u rev=%u xrev=%u yrev=%u theta=%.6f phi=%.6f normal=(%.6f,%.6f,%.6f) P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
+            g_trace_tri_idx, normal_state->normals_vertex_count, tri_reversed, x_reversed, y_reversed, theta, phi,
+            vertex_normal.x, vertex_normal.y, vertex_normal.z,
+            treated_tri->points[0].x, treated_tri->points[0].y, treated_tri->points[0].z,
+            treated_tri->points[1].x, treated_tri->points[1].y, treated_tri->points[1].z,
+            treated_tri->points[2].x, treated_tri->points[2].y, treated_tri->points[2].z);
+    }
+
 #if VERTEX_DEBUG
     if (debug_tess)
     {
@@ -1399,6 +1419,8 @@ prc_handle_normal_calculation(prc_context *ctx, prc_tess_3d_compressed *data,
     uint8_t has_multiple_normals, is_a_reference, is_reversed, x_is_reversed;
     uint8_t y_is_reversed;
     uint32_t norm_index;
+
+    g_trace_tri_idx = triangle_index; /* PRC_TRACE_REVERSED instrumentation only */
 
     /* We need to check if this face is planar based upon the triangle index
        and the arrays in data */
@@ -2472,6 +2494,18 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
          /* k - 1 since we are looking at the previous treated triangle */
          edge_count = prc_set_left_right_edge_indices(ctx, data, k - 1, &treated_tri,
                                     &treated_details, normals_vertex);
+
+         if (getenv("PRC_TRACE_REVERSED") != NULL)
+         {
+             fprintf(stderr, "DEC k=%u reversed=%d treated_index=(%d,%d,%d) right=(%d,%d) left=(%d,%d) P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
+                 k - 1, treated_tri.normal_was_reversed,
+                 treated_tri.treated_index[0], treated_tri.treated_index[1], treated_tri.treated_index[2],
+                 treated_tri.right_edge.edge_treatement_x, treated_tri.right_edge.edge_treatement_y,
+                 treated_tri.left_edge.edge_treatement_x, treated_tri.left_edge.edge_treatement_y,
+                 treated_tri.points[0].x, treated_tri.points[0].y, treated_tri.points[0].z,
+                 treated_tri.points[1].x, treated_tri.points[1].y, treated_tri.points[1].z,
+                 treated_tri.points[2].x, treated_tri.points[2].y, treated_tri.points[2].z);
+         }
 
         /* Any treated edges must be added to the edge_list structure */
         if (edge_count < 2)
