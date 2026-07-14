@@ -912,6 +912,15 @@ typedef struct prc_api_write_node_s
     double bbox_min[3];
     double bbox_max[3];
 
+    /** 1 to attach a part definition to this node even though
+        num_rep_items == 0 (an empty part -- zero representation items,
+        but still a real part entity a reader's model tree can show).
+        Ignored if num_rep_items > 0, since that already implies a part.
+        Real-world PRC producers commonly attach an empty part at every
+        intermediate assembly level down to the leaf, not just the leaf
+        itself; set this to match that shape. */
+    uint8_t has_empty_part;
+
     /** Name of this node's product occurrence, as shown in a reader's
         model tree (e.g. Adobe Reader/Acrobat's "Model Tree" panel), or
         NULL for an unnamed occurrence (readers typically fall back to a
