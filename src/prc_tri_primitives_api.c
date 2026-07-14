@@ -4846,14 +4846,13 @@ compressed_failure:
         break;
     case PRC_TYPE_TESS_3D_Wire:
     {
-        /* TODO we need to split the vertex colors if colors have been defined
-           in terms of line segments and not vertices */
         prc_tess_3d_wire *tess =
             file_struct->tessellation->tess[tess_index].tess_3d_wire;
         uint32_t num_vertices = tess->tessellation_coordinates.number_of_coordinates / 3;
         float *vertex_colors = NULL;
         prc_internal_api_wire *wire = NULL;
         uint32_t wire_capacity = 0;
+        uint32_t num_vertex_colors = 0;
 
         /* Lets allocate the space for the vertices */
         vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, num_vertices, sizeof(prc_api_vertex));
@@ -4875,10 +4874,9 @@ compressed_failure:
             prc_copy_internal_graph_style_to_api(ctx, wire_style, &api_tess->tess_material);
         }
 
-        /* Lets set the vertex locations. */
         if (tess->has_vertex_colors)
         {
-            uint32_t num_vertex_colors = tess->vertex_color_count;
+            num_vertex_colors = tess->vertex_color_count;
             vertex_colors = (float *)prc_calloc(ctx, num_vertex_colors * 4, sizeof(float));
             if (vertex_colors == NULL)
             {
@@ -4892,39 +4890,91 @@ compressed_failure:
                 &tess->vertex_color_data.color_data, tess->vertex_color_data.is_rgba,
                 vertex_colors);
         }
+
+        /* Positions, and a default color for every vertex (the same fallback
+           used when there's no per-vertex color data at all: the wire's own
+           style tint, or white). tess->vertex_color_count is a count of
+           *wire-index entries actually visited by wire_elements* (see
+           prc_parse_tess_3d_wire), not of raw positions -- a closed or
+           multi-element wire can revisit the same position more than once,
+           or a position can be unreferenced by any element, so vertex_colors
+           cannot be indexed by raw position index k. Filling every vertex
+           with this default first, then overwriting only the positions
+           actually referenced by wire_elements below, keeps any unreferenced
+           position sane instead of reading uninitialized/out-of-bounds data. */
         for (k = 0; k < num_vertices; k++)
         {
             vertex_out->vertices[k].position[0] = tess->tessellation_coordinates.coordinates[k * 3];
             vertex_out->vertices[k].position[1] = tess->tessellation_coordinates.coordinates[k * 3 + 1];
             vertex_out->vertices[k].position[2] = tess->tessellation_coordinates.coordinates[k * 3 + 2];
 
-            /* Lets first set the color of the vertices if we have that data */
-            /* Need to set the color of the vertices */
-            if (tess->has_vertex_colors)
+            if (wire_style != NULL)
             {
-                vertex_out->vertices[k].color[0] = vertex_colors[k * 4];
-                vertex_out->vertices[k].color[1] = vertex_colors[k * 4 + 1];
-                vertex_out->vertices[k].color[2] = vertex_colors[k * 4 + 2];
-                vertex_out->vertices[k].color[3] = vertex_colors[k * 4 + 3];
+                vertex_out->vertices[k].color[0] = wire_style->tint[0];
+                vertex_out->vertices[k].color[1] = wire_style->tint[1];
+                vertex_out->vertices[k].color[2] = wire_style->tint[2];
+                vertex_out->vertices[k].color[3] = wire_style->tint[3];
             }
             else
             {
-                /* We should have a style */
-                prc_internal_graph_style *wire_style = (prc_internal_graph_style*) api_tess->reserved2;
-                if (wire_style != NULL)
+                /* Default to white wires */
+                vertex_out->vertices[k].color[0] = 1.0;
+                vertex_out->vertices[k].color[1] = 1.0;
+                vertex_out->vertices[k].color[2] = 1.0;
+                vertex_out->vertices[k].color[3] = 1.0;
+            }
+        }
+
+        /* Distribute the decoded colors to the vertices they actually belong
+           to, walking wire_elements in exactly the order prc_parse_tess_3d_wire
+           counted them in (per-element, per-index, plus one extra trailing
+           entry per closing element) -- the only order that keeps color_idx
+           aligned with vertex_colors. wire_indexes[] values are coordinate
+           offsets (already seen divided by 3 elsewhere in this function, e.g.
+           the wire-primitive index copies below), not vertex indices
+           directly. A closing element's extra color entry has no
+           corresponding wire index -- it's the color of the implicit closing
+           segment back to the element's start, which has no home in a
+           per-vertex color model, so it's applied to that start vertex (the
+           closest reasonable per-vertex approximation) and otherwise just
+           consumed to keep later elements' colors aligned. */
+        if (tess->has_vertex_colors && tess->number_of_wire_indexes > 0)
+        {
+            uint32_t e, color_idx = 0;
+
+            for (e = 0; e < tess->number_of_wire_elements; e++)
+            {
+                prc_tess_3d_wire_element *elem = &tess->wire_elements[e];
+
+                for (j = 0; j < elem->number_of_wire_indexes; j++)
                 {
-                    vertex_out->vertices[k].color[0] = wire_style->tint[0];
-                    vertex_out->vertices[k].color[1] = wire_style->tint[1];
-                    vertex_out->vertices[k].color[2] = wire_style->tint[2];
-                    vertex_out->vertices[k].color[3] = wire_style->tint[3];
+                    uint32_t vidx = elem->wire_indexes[j] / 3;
+
+                    if (color_idx < num_vertex_colors && vidx < num_vertices)
+                    {
+                        vertex_out->vertices[vidx].color[0] = vertex_colors[color_idx * 4];
+                        vertex_out->vertices[vidx].color[1] = vertex_colors[color_idx * 4 + 1];
+                        vertex_out->vertices[vidx].color[2] = vertex_colors[color_idx * 4 + 2];
+                        vertex_out->vertices[vidx].color[3] = vertex_colors[color_idx * 4 + 3];
+                    }
+                    color_idx++;
                 }
-                else
+
+                if (elem->is_connected & PRC_3DWIRETESSDATA_IsClosing)
                 {
-                    /* Default to white wires */
-                    vertex_out->vertices[k].color[0] = 1.0;
-                    vertex_out->vertices[k].color[1] = 1.0;
-                    vertex_out->vertices[k].color[2] = 1.0;
-                    vertex_out->vertices[k].color[3] = 1.0;
+                    if (color_idx < num_vertex_colors && elem->number_of_wire_indexes > 0)
+                    {
+                        uint32_t start_vidx = elem->wire_indexes[0] / 3;
+
+                        if (start_vidx < num_vertices)
+                        {
+                            vertex_out->vertices[start_vidx].color[0] = vertex_colors[color_idx * 4];
+                            vertex_out->vertices[start_vidx].color[1] = vertex_colors[color_idx * 4 + 1];
+                            vertex_out->vertices[start_vidx].color[2] = vertex_colors[color_idx * 4 + 2];
+                            vertex_out->vertices[start_vidx].color[3] = vertex_colors[color_idx * 4 + 3];
+                        }
+                    }
+                    color_idx++;
                 }
             }
         }
