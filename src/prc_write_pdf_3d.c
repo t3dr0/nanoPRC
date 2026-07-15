@@ -23,12 +23,19 @@
      Page        <</Type/Page /Parent <Pages ref> /MediaBox[0 0 W H]
                    /Annots[<Annot ref>]>>            -- no /Contents needed;
                                                          confirmed optional
-     3D stream   <</Type/3D /Subtype/PRC /VA[<View ref> ...] /Length N>>
+     3D stream   <</Type/3D /Subtype/PRC /Resources<</Names[]>>
+                   /VA[<View ref> ...] /Length N>>
                  stream ... raw PRC bytes ... endstream
                                                       -- /VA: indirect refs
                                                          to 3DView objects,
                                                          omitted entirely if
-                                                         no views given
+                                                         no views given.
+                                                         /Resources<</Names[]>>
+                                                         present, identically,
+                                                         on all five real
+                                                         %PDF-1.7 references
+                                                         (see the /3DA comment
+                                                         below for which)
      3DView      <</Type/3DView /XN(name) /C2W[12 numbers] /CO d>>
                                                       -- no /IN: cube.pdf's
                                                          real views never
@@ -41,13 +48,32 @@
                                                          not one or the other
      Annot       <</Type/Annot /Subtype/3D /Rect[x0 y0 x1 y1] /P <Page ref>
                    /3DD <3D stream ref> /3DV <default View ref> /3DI true
-                   /3DA<</A/PO/D/PC/DIS/I/NP false/TB true/Transparent true>>
+                   /3DA<</A/PV/AIS/L/D/PI/DIS/L/NP false/TB true>>
                    /AP<</N <Appearance ref>>> /BS <BorderStyle ref>
                    /Border[0 0 0] /Contents(...) /NM(...) /UID(1)>>
                                                       -- /3DA copied verbatim
-                                                         from cube.pdf's
-                                                         known-good values;
-                                                         /UID is a fixed
+                                                         from five real,
+                                                         independently-
+                                                         produced, Acrobat-
+                                                         confirmed-working
+                                                         %PDF-1.7 files
+                                                         (ElevationMeshIS_ePRC.pdf,
+                                                         xml-sample-{wrl,iv,3ds}_ePRC.pdf,
+                                                         Teapot_ePRC.pdf), not
+                                                         cube.pdf -- cube.pdf
+                                                         declares %PDF-1.6 and
+                                                         includes /Transparent
+                                                         true, a PDF-2.0-only
+                                                         key (ISO 32000-2 Table
+                                                         310) invalid in a
+                                                         %PDF-1.7 file (which is
+                                                         what this writer
+                                                         declares, and what all
+                                                         five real references
+                                                         declare too); the five
+                                                         real files' /3DA has no
+                                                         /Transparent key at
+                                                         all. /UID is a fixed
                                                          placeholder, cube.pdf
                                                          has one too
      Appearance  <</Type/XObject /Subtype/Form /BBox[0 0 w h]
@@ -355,9 +381,15 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     }
 
     /* 3D stream: /Type/3D /Subtype/PRC, raw PRC bytes, no PDF-level
-       compression (each PRC section is already zlib-deflated). */
+       compression (each PRC section is already zlib-deflated). /Resources
+       <</Names[]>> (an empty named-resources dict, not the geometry itself)
+       is present, identically, on all five real, independently-produced,
+       Acrobat-confirmed-working reference files this writer's structure is
+       otherwise based on (ElevationMeshIS_ePRC.pdf, xml-sample-
+       {wrl,iv,3ds}_ePRC.pdf, Teapot_ePRC.pdf) -- included here to match,
+       even though this writer never populates any named resources. */
     if (prc_pdf_begin_obj(ctx, &w, stream_num) != 0) goto io_fail;
-    if (fprintf(fid, "<</Type/3D/Subtype/PRC") < 0) goto io_fail;
+    if (fprintf(fid, "<</Type/3D/Subtype/PRC/Resources<</Names[]>>") < 0) goto io_fail;
     if (options->num_views > 0)
     {
         if (fprintf(fid, "/VA[") < 0) goto io_fail;
@@ -404,30 +436,29 @@ prc_write_pdf_3d_annotation(prc_context *ctx, const char *pdf_path,
     if (fprintf(fid, "<</S/S/Type/Border/W 0>>") < 0) goto io_fail;
     if (prc_pdf_end_obj(ctx, &w) != 0) goto io_fail;
 
-    /* Annotation. /3DA activation values based on a real, working 3D
-       annotation (examples/cube.pdf): activate on page open, deactivate
-       on page close, hide the navigation panel, show the toolbar,
-       /Transparent true. An earlier version of this code omitted
-       /Transparent, reasoning that it's a PDF-2.0-only key (ISO 32000-2
-       Table 310) and therefore a version mismatch in a %PDF-1.7 file --
-       but examples/cube.pdf itself declares %PDF-1.6 and includes
-       /Transparent true, and is the proven-working reference file used
-       throughout this codebase, directly contradicting that theory. The
-       real-world rejection observed when this was tested previously was
-       during the same investigation that also had several other, since-
-       fixed compressed-tessellation content bugs active simultaneously;
-       that test's conclusion was confounded and is superseded by matching
-       cube.pdf's real structure exactly. /UID is a stable per-annotation
-       identifier some readers use for revision tracking; cube.pdf has one
-       (an arbitrary-looking numeric string), so a fixed placeholder is
-       written here too rather than omitting the key entirely. */
+    /* Annotation. /3DA activation values based on five real, independently-
+       produced, Acrobat-confirmed-working %PDF-1.7 files (ElevationMeshIS_
+       ePRC.pdf, xml-sample-{wrl,iv,3ds}_ePRC.pdf, Teapot_ePRC.pdf): activate
+       on page visible, deactivate on page invisible, both instantiation
+       states "live", hide the navigation panel, show the toolbar. No
+       /Transparent key -- an earlier version of this code included it,
+       reasoning that examples/cube.pdf (a %PDF-1.6 file) has it too so it
+       must be safe; that reasoning doesn't hold once actually compared
+       against real %PDF-1.7 output (this writer's own declared version):
+       /Transparent is a PDF-2.0-only key (ISO 32000-2 Table 310), invalid
+       in a 1.7 file, and none of the five real 1.7 references use it at
+       all -- cube.pdf being 1.6 is exactly why its inclusion there doesn't
+       generalize. /UID is a stable per-annotation identifier some readers
+       use for revision tracking; cube.pdf has one (an arbitrary-looking
+       numeric string), so a fixed placeholder is written here too rather
+       than omitting the key entirely. */
     if (prc_pdf_begin_obj(ctx, &w, annot_num) != 0) goto io_fail;
     if (fprintf(fid, "<</Type/Annot/Subtype/3D/Rect[%.2f %.2f %.2f %.2f]/P %u 0 R",
                 rect_x0, rect_y0, rect_x1, rect_y1, page_num) < 0) goto io_fail;
     if (fprintf(fid, "/3DD %u 0 R", stream_num) < 0) goto io_fail;
     if (options->num_views > 0)
         if (fprintf(fid, "/3DV %u 0 R", view_nums[default_view_index]) < 0) goto io_fail;
-    if (fprintf(fid, "/3DI true/3DA<</A/PO/D/PC/DIS/I/NP false/TB true/Transparent true>>") < 0) goto io_fail;
+    if (fprintf(fid, "/3DI true/3DA<</A/PV/AIS/L/D/PI/DIS/L/NP false/TB true>>") < 0) goto io_fail;
     if (fprintf(fid, "/AP<</N %u 0 R>>/BS %u 0 R/Border[0 0 0]/Contents", appearance_num, border_style_num) < 0) goto io_fail;
     prc_pdf_write_escaped_string(&w, "3D Model");
     if (fprintf(fid, "/NM") < 0) goto io_fail;

@@ -237,6 +237,8 @@ int main(int argc, char **argv)
         prc_api_write_rep_item rep_item;
         prc_api_write_node leaf;
         prc_api_write_node *leaf_ptr = &leaf;
+        prc_api_write_node intermediate;
+        prc_api_write_node *intermediate_ptr = &intermediate;
         prc_api_write_node root;
         uint32_t face_tri_counts = num_triangles;
         uint8_t *prc_buf = NULL;
@@ -271,29 +273,31 @@ int main(int argc, char **argv)
         leaf.name = part_name;
         leaf.part_name = part_name;
 
-        /* A part attached directly to the tree root (this tool's original
-           behavior) matches nothing in the format's own parsing rules, but
-           real-world PRC producers consistently model even a single-part
-           scene as TWO levels -- a bare assembly root with one child that
-           owns the actual geometry -- and at least one real reader (Acrobat)
-           silently shows a blank model tree for the flat, single-node case
-           (see teapot_write.c's identical fix, same root cause). Wrap the
-           leaf under a bare assembly root here too.
+        /* Three non-Model levels -- root [no part] -> intermediate [empty
+           part] -> leaf [real part] -- confirmed (2026-07-15, blank-tree
+           evidence matrix row 19, ISO-SPEC/blanktree-matrix-evidence-
+           table.md) to be the actual fix for Acrobat's blank model
+           tree/canvas on OPEN-topology TRIANGLES meshes. A single empty
+           part directly on the root (this tool's PREVIOUS fix attempt,
+           `root.has_empty_part = 1` with root->leaf as a flat two-level
+           tree) was insufficient by itself -- rows 13/14 still failed with
+           that shape. Row 19 isolated the working structure by inserting
+           exactly one more container level above the empty-part node,
+           matching the deeper trees real, independently-produced PRC
+           producers use (dump_tree_fields.c on ElevationMeshIS_ePRC.pdf/
+           xml-sample-{wrl,iv,3ds}_ePRC.pdf/Teapot_ePRC.pdf: every
+           intermediate level down to the leaf owns its own part, even an
+           empty one, and there's more than one such level). */
+        memset(&intermediate, 0, sizeof(intermediate));
+        intermediate.children = &leaf_ptr;
+        intermediate.num_children = 1;
+        intermediate.name = part_name;
+        intermediate.has_empty_part = 1;
 
-           Diffing five real, independently-produced, Acrobat-confirmed-
-           working uncompressed PDFs (ElevationMeshIS_ePRC.pdf,
-           xml-sample-{wrl,iv,3ds}_ePRC.pdf, Teapot_ePRC.pdf) via
-           dump_tree_fields.c found every intermediate product level, all
-           the way down to the leaf, also owns its own part -- even an
-           empty one (num_rep_items == 0) -- not just the leaf. This root
-           node had none at all before (has_empty_part == 0 by default);
-           set it to match that shape and test whether it's what Acrobat's
-           tree panel actually needs. */
         memset(&root, 0, sizeof(root));
-        root.children = &leaf_ptr;
+        root.children = &intermediate_ptr;
         root.num_children = 1;
         root.name = part_name;
-        root.has_empty_part = 1;
 
         code = prc_api_write_prc_buffer(ctx, "nanoPRC-reauthor", &root, &wtess, 1, &prc_buf, &prc_buf_size);
         if (code < 0)

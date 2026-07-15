@@ -1,6 +1,21 @@
 /* INTERNAL DEVELOPMENT TOOL -- not part of the permanent test suite, not
    registered with CTest, no exit-code contract to keep stable.
 
+   *** KNOWN BUG, DO NOT TRUST OUTPUT UNTIL FIXED ***: this tool's regenerated
+   model section is built via the plain prc_write_model_file_to_stream, which
+   hardcodes nanoPRC's own PRC_WRITE_FILE_STRUCT_UID0 constant as its far
+   reference to "which file structure this model belongs to" -- but this
+   tool always keeps the REAL file's main header untouched, which declares a
+   DIFFERENT (the real file's own) file-structure UID. The two silently
+   mismatch, which is exactly the failure class prc_write_model_file_to_
+   stream's own doc comment already describes ("can not find FileStructure").
+   Confirmed via matrix_blank_tree.c (see ISO-SPEC/blanktree-matrix-evidence-
+   table.md): fixing this (threading the real file's own fs_uid through
+   prc_write_model_file_to_stream_ex instead) turned previously-"failing"
+   Acrobat/PDF-XChange results into working ones for equivalent content. Any
+   "Acrobat blank tree" conclusion drawn from this tool's prior output should
+   be treated as invalid until re-tested with the same fix applied here.
+
    WHAT: Takes a REAL, independently-produced, complete raw .prc file and
    rebuilds it keeping the file-struct-header, tessellation, geometry,
    extra_geometry, and model-file sections byte-for-byte identical, but
@@ -32,9 +47,16 @@
    facility's own schema never declares the extension, matching what its
    tree writer assumes) while still testing schema/tree content against a
    reader using REAL tessellation/geometry/model-file sections alongside
-   them. This was the test that cleared schema+tree as a matched pair
-   (real tessellation/geometry/model-file + our schema+tree opened
-   correctly in Acrobat).
+   them.
+
+   Also regenerates the model-file section to match root_biased_index --
+   see splice_tree_section.c's header comment for why keeping the real
+   model-file section (with its own, potentially different, root_index)
+   invalidates the test. An earlier version of this tool that kept the
+   real model-file section reported "schema+tree as a matched pair opened
+   correctly in Acrobat"; that conclusion did not survive re-verification
+   after the root_index confound was found and fixed elsewhere, and should
+   be treated as stale until re-confirmed with this corrected version.
 
    LIMITATIONS: Only handles single-file-structure inputs. The coupling
    between schema and tree this tool works around means it cannot isolate
@@ -106,9 +128,9 @@ int main(int argc, char **argv)
     uint32_t i;
     size_t header_prefix_len;
     size_t section_off_table_byte_pos;
-    prc_bit_write_state schema_s, tree_s;
-    uint8_t *schema_comp = NULL, *tree_comp = NULL;
-    size_t schema_comp_len = 0, tree_comp_len = 0;
+    prc_bit_write_state schema_s, tree_s, model_s;
+    uint8_t *schema_comp = NULL, *tree_comp = NULL, *model_comp = NULL;
+    size_t schema_comp_len = 0, tree_comp_len = 0, model_comp_len = 0;
     uint32_t *new_section_offsets;
     uint32_t new_start_offset, new_end_offset;
     size_t new_total_size;
@@ -121,7 +143,7 @@ int main(int argc, char **argv)
 
     if (argc < 3)
     {
-        printf("usage: %s <real_input.prc> <output.prc>\n", argv[0]);
+        printf("usage: %s <real_input.prc> <output.prc> [output.pdf]\n", argv[0]);
         return 2;
     }
 
@@ -218,6 +240,24 @@ int main(int argc, char **argv)
     }
     printf("Generated replacement tree section: %zu bytes compressed, root_biased_index=%u\n", tree_comp_len, root_biased_index);
 
+    /* Regenerate the model-file section too, self-consistently matching
+       root_biased_index -- see the header comment for why this matters. */
+    memset(&model_s, 0, sizeof(model_s));
+    if (prc_bitwrite_init(ctx, &model_s, 256) != 0) { printf("model bitwrite_init failed\n"); return 1; }
+    if (prc_write_model_file_to_stream(ctx, &model_s, NULL, root_biased_index, 1) != 0)
+    {
+        printf("prc_write_model_file_to_stream failed\n");
+        prc_api_print_error_stack(ctx);
+        return 1;
+    }
+    if (prc_bitwrite_flush(ctx, &model_s) != 0) { printf("model bitwrite_flush failed\n"); return 1; }
+    if (prc_write_deflate(ctx, model_s.buf, model_s.byte_pos, &model_comp, &model_comp_len) != 0)
+    {
+        printf("model prc_write_deflate failed\n");
+        return 1;
+    }
+    printf("Generated replacement model section: %zu bytes compressed, root_index=%u\n", model_comp_len, root_biased_index);
+
     /* Rebuild section_offsets: [0]=same (file-struct-header start), [1]=same
        (schema start), [2] = section_offsets[1] + our schema_comp_len (tree
        start), [3] = [2] + our tree_comp_len (tess start), then every later
@@ -231,8 +271,11 @@ int main(int argc, char **argv)
         int32_t delta = (int32_t)new_section_offsets[3] - (int32_t)section_offsets[3];
         for (i = 4; i < section_count; i++)
             new_section_offsets[i] = (uint32_t)((int32_t)section_offsets[i] + delta);
+        /* start_offset (model section start) shifts like every later
+           section, but end_offset is now determined by OUR regenerated
+           model section's own length, not a shift of the real one's. */
         new_start_offset = (uint32_t)((int32_t)start_offset + delta);
-        new_end_offset = (uint32_t)((int32_t)end_offset + delta);
+        new_end_offset = new_start_offset + (uint32_t)model_comp_len;
     }
     new_total_size = (size_t)new_end_offset;
 
@@ -252,8 +295,10 @@ int main(int argc, char **argv)
     memcpy(out_buf + new_section_offsets[1], schema_comp, schema_comp_len);
     /* our new tree section */
     memcpy(out_buf + new_section_offsets[2], tree_comp, tree_comp_len);
-    /* every remaining real section (tessellation, geometry, extra_geometry, model-file), unchanged content, shifted position */
-    memcpy(out_buf + new_section_offsets[3], buf + section_offsets[3], end_offset - section_offsets[3]);
+    /* real tessellation/geometry/extra_geometry, unchanged content, shifted position */
+    memcpy(out_buf + new_section_offsets[3], buf + section_offsets[3], start_offset - section_offsets[3]);
+    /* our new model-file section, NOT the real one */
+    memcpy(out_buf + new_start_offset, model_comp, model_comp_len);
 
     out_fid = fopen(argv[2], "wb");
     if (out_fid == NULL) { printf("failed to open output %s\n", argv[2]); return 1; }
@@ -262,10 +307,48 @@ int main(int argc, char **argv)
 
     printf("Wrote %s (%zu bytes)\n", argv[2], new_total_size);
 
+    /* Optional PDF embed with an explicit, generously-sized Default view --
+       prc_to_pdf.exe's NULL-options embed omits /3DV entirely, which a
+       separate test earlier in this investigation showed can matter. This
+       tool doesn't decode the real geometry it keeps byte-for-byte, so
+       there's no real bbox to frame exactly; a large fixed volume is used
+       instead, generous enough to contain any reasonably-scaled test mesh
+       rather than requiring per-file tuning. */
+    if (argc >= 4)
+    {
+        prc_pdf_view_spec view;
+        prc_pdf_write_options pdf_opts;
+        int code;
+
+        memset(&view, 0, sizeof(view));
+        view.name = "Default";
+        view.eye[0] = 100.0; view.eye[1] = -130.0; view.eye[2] = 70.0;
+        view.target[0] = 0.0; view.target[1] = 0.0; view.target[2] = 0.0;
+        view.up[0] = 0.0; view.up[1] = 0.0; view.up[2] = 1.0;
+        view.is_default = 1;
+
+        memset(&pdf_opts, 0, sizeof(pdf_opts));
+        pdf_opts.views = &view;
+        pdf_opts.num_views = 1;
+
+        code = prc_api_pdf_embed_prc(ctx, argv[3], out_buf, new_total_size, &pdf_opts);
+        if (code < 0)
+        {
+            printf("prc_api_pdf_embed_prc failed: %d\n", code);
+            prc_api_print_error_stack(ctx);
+        }
+        else
+        {
+            printf("Wrote %s (with explicit Default view)\n", argv[3]);
+        }
+    }
+
     prc_free(ctx, schema_comp);
     prc_free(ctx, tree_comp);
+    prc_free(ctx, model_comp);
     prc_bitwrite_release(ctx, &schema_s);
     prc_bitwrite_release(ctx, &tree_s);
+    prc_bitwrite_release(ctx, &model_s);
     prc_write_global_tables_free(ctx, &tables);
     prc_api_release_context(ctx);
     free(section_offsets);

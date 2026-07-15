@@ -204,6 +204,15 @@ prc_write_rep_item_entry(prc_context *ctx, prc_bit_write_state *s, const prc_wri
     return 0;
 }
 
+/* A node owns a part entity if it has real geometry (num_rep_items > 0) or
+   was explicitly asked for an otherwise-empty one (has_empty_part) -- see
+   prc_api_write_node's own doc comment for why the latter exists. */
+static uint8_t
+prc_write_node_has_part(const prc_write_tree_node *node)
+{
+    return (uint8_t)(node->num_rep_items > 0 || node->has_empty_part);
+}
+
 static int
 prc_write_part(prc_context *ctx, prc_bit_write_state *s, const prc_write_tree_node *node,
     uint32_t biased_style_index)
@@ -301,7 +310,7 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
         return PRC_ERROR_MEMORY;
 
     for (i = 0; i < flat.count; i++)
-        if (flat.order[i]->num_rep_items > 0)
+        if (prc_write_node_has_part(flat.order[i]))
             parts_count++;
 
     if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_ASM_FileStructureTree) != 0) goto fail;
@@ -309,7 +318,7 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
 
     if (prc_bitwrite_uint32(ctx, s, parts_count) != 0) goto fail;
     for (i = 0; i < flat.count; i++)
-        if (flat.order[i]->num_rep_items > 0)
+        if (prc_write_node_has_part(flat.order[i]))
             if (prc_write_part(ctx, s, flat.order[i], default_biased_style_index) != 0) goto fail;
 
     if (prc_bitwrite_uint32(ctx, s, flat.count) != 0) goto fail;
@@ -318,7 +327,7 @@ prc_write_tree_to_stream(prc_context *ctx, prc_bit_write_state *s,
         for (i = 0; i < flat.count; i++)
         {
             uint32_t biased_part_index = 0;
-            if (flat.order[i]->num_rep_items > 0)
+            if (prc_write_node_has_part(flat.order[i]))
             {
                 part_cursor++;
                 biased_part_index = part_cursor;
