@@ -46,26 +46,53 @@ uint32_t
 prc_api_helper_get_biased_file_index_from_unique_id(prc_context *ctx, prc_api_data data,
     prc_unique_id unique_id);
 
-/* Helper function in search edge list for edges. We only search the triangle one
-   indices obviously */
-static prc_internal_api_edge*
-prc_internal_api_find_edge(prc_internal_api_edge_list *edge_list, uint32_t index1, uint32_t index2)
+/* Hashed edge lookup so that prc_internal_api_build_edge_list is O(n) instead of
+   O(n^2) for large meshes. Mirrors prc_compressed_tess_hash_edge_key/
+   prc_compressed_tess_find_open_edge_hashed in prc_decode_compressed_tess.c. */
+static uint32_t
+prc_internal_api_hash_edge_key(uint32_t index1, uint32_t index2, uint32_t mask)
 {
-    size_t k;
-    prc_internal_api_edge *edge;
+    uint32_t min_index = (index1 < index2) ? index1 : index2;
+    uint32_t max_index = (index1 < index2) ? index2 : index1;
+    uint32_t hash = (min_index * 73856093u) ^ (max_index * 19349663u);
+    return hash & mask;
+}
 
-    for (k = 0; k < edge_list->num_edges; k++)
+static void
+prc_internal_api_hash_insert_edge(uint32_t *hash_heads, uint32_t *hash_next,
+    uint32_t hash_mask, uint32_t index1, uint32_t index2, uint32_t edge_index)
+{
+    uint32_t bucket = prc_internal_api_hash_edge_key(index1, index2, hash_mask);
+    hash_next[edge_index] = hash_heads[bucket];
+    hash_heads[bucket] = edge_index;
+}
+
+/* Find an unmatched edge candidate (num_triangles == 1) in the hashed edge buckets.
+   We only search the triangle one indices obviously */
+static prc_internal_api_edge*
+prc_internal_api_find_open_edge_hashed(prc_internal_api_edge_list *edge_list,
+    uint32_t *hash_heads, uint32_t *hash_next, uint32_t hash_mask,
+    uint32_t index1, uint32_t index2)
+{
+    uint32_t bucket = prc_internal_api_hash_edge_key(index1, index2, hash_mask);
+    uint32_t edge_index = hash_heads[bucket];
+
+    while (edge_index != UINT32_MAX)
     {
-        edge = &edge_list->edge[k];
-        if (edge->num_triangles == 2)
-            continue; /* This edge already has a partner. We are looking for singles */
-        if ((edge->tri_one_edge_indices[0] == index1 &&
-             edge->tri_one_edge_indices[1] == index2) ||
-            (edge->tri_one_edge_indices[0] == index2 &&
-             edge->tri_one_edge_indices[1] == index1))
+        prc_internal_api_edge *edge = &edge_list->edge[edge_index];
+
+        if (edge->num_triangles != 2)
         {
-            return edge;
+            if ((edge->tri_one_edge_indices[0] == index1 &&
+                 edge->tri_one_edge_indices[1] == index2) ||
+                (edge->tri_one_edge_indices[0] == index2 &&
+                 edge->tri_one_edge_indices[1] == index1))
+            {
+                return edge;
+            }
         }
+
+        edge_index = hash_next[edge_index];
     }
     return NULL;
 }
@@ -203,6 +230,10 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
     prc_internal_api_edge *edge;
     prc_internal_api_edge_list *edge_list;
     uint32_t indices_offset; /* Offset into the indices array for the triangle */
+    uint32_t *hash_heads = NULL;
+    uint32_t *hash_next = NULL;
+    uint32_t hash_capacity = 1;
+    uint32_t hash_mask;
 
     /* indices_offset is needed so that when a vertex split occurs we can find
        where in the indices the triangle occurred and update its indice so that
@@ -230,6 +261,34 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
         prc_free(ctx, edge_list);
         return PRC_API_ERROR_MEMORY;
     }
+
+    /* Hash table over edge keys so edge lookups below are O(1) average instead
+       of an O(num_edges) linear scan (which made this function O(num_triangles^2)
+       on large meshes). hash_heads[bucket] is the index of the most recently
+       inserted edge in that bucket, chained via hash_next[]. */
+    while (hash_capacity < (num_triangles * 6 + 1))
+    {
+        hash_capacity <<= 1;
+        if (hash_capacity == 0)
+        {
+            hash_capacity = 1;
+            break;
+        }
+    }
+    hash_mask = hash_capacity - 1;
+
+    hash_heads = (uint32_t *)prc_calloc(ctx, hash_capacity, sizeof(uint32_t));
+    hash_next = (uint32_t *)prc_calloc(ctx, edge_list->capacity, sizeof(uint32_t));
+    if (hash_heads == NULL || hash_next == NULL)
+    {
+        prc_free(ctx, hash_heads);
+        prc_free(ctx, hash_next);
+        prc_free(ctx, edge_list->edge);
+        prc_free(ctx, edge_list);
+        return PRC_API_ERROR_MEMORY;
+    }
+    for (k = 0; k < hash_capacity; k++)
+        hash_heads[k] = UINT32_MAX;
 
 #if 0
     /* Verify that all indices are within the valid API vertex range.
@@ -272,20 +331,55 @@ prc_internal_api_build_edge_list(prc_context *ctx, uint32_t num_triangles,
 
         indices_offset = k * 3;
 
-        /* Now search through the existing edge list to see if any of these edges
-           are already present */
+        /* Now search through the hashed edge buckets to see if any of these
+           edges are already present */
         /* Edge 0-1 */
-        edge = prc_internal_api_find_edge(edge_list, indices[0], indices[1]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[0], indices[1]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[0], indices[1], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_01, indices_offset);
+        }
 
         /* Edge 0-2 */
-        edge = prc_internal_api_find_edge(edge_list, indices[0], indices[2]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[0], indices[2]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[0], indices[2], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_02, indices_offset);
+        }
 
         /* Edge 1-2 */
-        edge = prc_internal_api_find_edge(edge_list, indices[1], indices[2]);
-        prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+        edge = prc_internal_api_find_open_edge_hashed(edge_list, hash_heads, hash_next,
+            hash_mask, indices[1], indices[2]);
+        if (edge == NULL)
+        {
+            uint32_t new_edge_index = edge_list->num_edges;
+            prc_internal_api_set_edge(edge_list, NULL, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+            prc_internal_api_hash_insert_edge(hash_heads, hash_next, hash_mask,
+                indices[1], indices[2], new_edge_index);
+        }
+        else
+        {
+            prc_internal_api_set_edge(edge_list, edge, indices, PRC_INTERNAL_API_EDGE_12, indices_offset);
+        }
     }
+    prc_free(ctx, hash_heads);
+    prc_free(ctx, hash_next);
     uncompressed_data->edge_list = edge_list;
     return 0;
 }
@@ -4846,14 +4940,13 @@ compressed_failure:
         break;
     case PRC_TYPE_TESS_3D_Wire:
     {
-        /* TODO we need to split the vertex colors if colors have been defined
-           in terms of line segments and not vertices */
         prc_tess_3d_wire *tess =
             file_struct->tessellation->tess[tess_index].tess_3d_wire;
         uint32_t num_vertices = tess->tessellation_coordinates.number_of_coordinates / 3;
         float *vertex_colors = NULL;
         prc_internal_api_wire *wire = NULL;
         uint32_t wire_capacity = 0;
+        uint32_t num_vertex_colors = 0;
 
         /* Lets allocate the space for the vertices */
         vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx, num_vertices, sizeof(prc_api_vertex));
@@ -4875,10 +4968,9 @@ compressed_failure:
             prc_copy_internal_graph_style_to_api(ctx, wire_style, &api_tess->tess_material);
         }
 
-        /* Lets set the vertex locations. */
         if (tess->has_vertex_colors)
         {
-            uint32_t num_vertex_colors = tess->vertex_color_count;
+            num_vertex_colors = tess->vertex_color_count;
             vertex_colors = (float *)prc_calloc(ctx, num_vertex_colors * 4, sizeof(float));
             if (vertex_colors == NULL)
             {
@@ -4892,39 +4984,91 @@ compressed_failure:
                 &tess->vertex_color_data.color_data, tess->vertex_color_data.is_rgba,
                 vertex_colors);
         }
+
+        /* Positions, and a default color for every vertex (the same fallback
+           used when there's no per-vertex color data at all: the wire's own
+           style tint, or white). tess->vertex_color_count is a count of
+           *wire-index entries actually visited by wire_elements* (see
+           prc_parse_tess_3d_wire), not of raw positions -- a closed or
+           multi-element wire can revisit the same position more than once,
+           or a position can be unreferenced by any element, so vertex_colors
+           cannot be indexed by raw position index k. Filling every vertex
+           with this default first, then overwriting only the positions
+           actually referenced by wire_elements below, keeps any unreferenced
+           position sane instead of reading uninitialized/out-of-bounds data. */
         for (k = 0; k < num_vertices; k++)
         {
             vertex_out->vertices[k].position[0] = tess->tessellation_coordinates.coordinates[k * 3];
             vertex_out->vertices[k].position[1] = tess->tessellation_coordinates.coordinates[k * 3 + 1];
             vertex_out->vertices[k].position[2] = tess->tessellation_coordinates.coordinates[k * 3 + 2];
 
-            /* Lets first set the color of the vertices if we have that data */
-            /* Need to set the color of the vertices */
-            if (tess->has_vertex_colors)
+            if (wire_style != NULL)
             {
-                vertex_out->vertices[k].color[0] = vertex_colors[k * 4];
-                vertex_out->vertices[k].color[1] = vertex_colors[k * 4 + 1];
-                vertex_out->vertices[k].color[2] = vertex_colors[k * 4 + 2];
-                vertex_out->vertices[k].color[3] = vertex_colors[k * 4 + 3];
+                vertex_out->vertices[k].color[0] = wire_style->tint[0];
+                vertex_out->vertices[k].color[1] = wire_style->tint[1];
+                vertex_out->vertices[k].color[2] = wire_style->tint[2];
+                vertex_out->vertices[k].color[3] = wire_style->tint[3];
             }
             else
             {
-                /* We should have a style */
-                prc_internal_graph_style *wire_style = (prc_internal_graph_style*) api_tess->reserved2;
-                if (wire_style != NULL)
+                /* Default to white wires */
+                vertex_out->vertices[k].color[0] = 1.0;
+                vertex_out->vertices[k].color[1] = 1.0;
+                vertex_out->vertices[k].color[2] = 1.0;
+                vertex_out->vertices[k].color[3] = 1.0;
+            }
+        }
+
+        /* Distribute the decoded colors to the vertices they actually belong
+           to, walking wire_elements in exactly the order prc_parse_tess_3d_wire
+           counted them in (per-element, per-index, plus one extra trailing
+           entry per closing element) -- the only order that keeps color_idx
+           aligned with vertex_colors. wire_indexes[] values are coordinate
+           offsets (already seen divided by 3 elsewhere in this function, e.g.
+           the wire-primitive index copies below), not vertex indices
+           directly. A closing element's extra color entry has no
+           corresponding wire index -- it's the color of the implicit closing
+           segment back to the element's start, which has no home in a
+           per-vertex color model, so it's applied to that start vertex (the
+           closest reasonable per-vertex approximation) and otherwise just
+           consumed to keep later elements' colors aligned. */
+        if (tess->has_vertex_colors && tess->number_of_wire_indexes > 0)
+        {
+            uint32_t e, color_idx = 0;
+
+            for (e = 0; e < tess->number_of_wire_elements; e++)
+            {
+                prc_tess_3d_wire_element *elem = &tess->wire_elements[e];
+
+                for (j = 0; j < elem->number_of_wire_indexes; j++)
                 {
-                    vertex_out->vertices[k].color[0] = wire_style->tint[0];
-                    vertex_out->vertices[k].color[1] = wire_style->tint[1];
-                    vertex_out->vertices[k].color[2] = wire_style->tint[2];
-                    vertex_out->vertices[k].color[3] = wire_style->tint[3];
+                    uint32_t vidx = elem->wire_indexes[j] / 3;
+
+                    if (color_idx < num_vertex_colors && vidx < num_vertices)
+                    {
+                        vertex_out->vertices[vidx].color[0] = vertex_colors[color_idx * 4];
+                        vertex_out->vertices[vidx].color[1] = vertex_colors[color_idx * 4 + 1];
+                        vertex_out->vertices[vidx].color[2] = vertex_colors[color_idx * 4 + 2];
+                        vertex_out->vertices[vidx].color[3] = vertex_colors[color_idx * 4 + 3];
+                    }
+                    color_idx++;
                 }
-                else
+
+                if (elem->is_connected & PRC_3DWIRETESSDATA_IsClosing)
                 {
-                    /* Default to white wires */
-                    vertex_out->vertices[k].color[0] = 1.0;
-                    vertex_out->vertices[k].color[1] = 1.0;
-                    vertex_out->vertices[k].color[2] = 1.0;
-                    vertex_out->vertices[k].color[3] = 1.0;
+                    if (color_idx < num_vertex_colors && elem->number_of_wire_indexes > 0)
+                    {
+                        uint32_t start_vidx = elem->wire_indexes[0] / 3;
+
+                        if (start_vidx < num_vertices)
+                        {
+                            vertex_out->vertices[start_vidx].color[0] = vertex_colors[color_idx * 4];
+                            vertex_out->vertices[start_vidx].color[1] = vertex_colors[color_idx * 4 + 1];
+                            vertex_out->vertices[start_vidx].color[2] = vertex_colors[color_idx * 4 + 2];
+                            vertex_out->vertices[start_vidx].color[3] = vertex_colors[color_idx * 4 + 3];
+                        }
+                    }
+                    color_idx++;
                 }
             }
         }

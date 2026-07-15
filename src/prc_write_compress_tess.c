@@ -15,6 +15,7 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include "prc_write_compress_tess.h"
@@ -432,6 +433,13 @@ typedef struct
     uint32_t chain_offset;    /* points created so far within the current chain */
     prc_vertex_analysis *analysis; /* NULL unless the caller requested capture */
     prc_encode_traversal_result *out;
+    /* mesh.num_triangles entries, mesh order; NULL == no triangle reversed.
+       tri_reversed[t] mirrors the decoder's prc_set_left_right_edge_indices:
+       when true, triangle t's right/left edge roles (and therefore which
+       edge's basis/grow-op gets pushed as "right" vs "left") are swapped
+       relative to the un-reversed convention below, so encoder and decoder
+       agree on which physical edge each edge_status_array bit refers to. */
+    const uint8_t *tri_reversed;
 } prc_encode_state;
 
 /* Chain bookkeeping only this phase: reconstructed_position stays zeroed
@@ -851,9 +859,14 @@ prc_encode_grow_triangle(prc_encode_state *st, const prc_encode_grow_op *op,
 /* Decide the just-emitted triangle's edge status bits and push its growable
    edges (right first, then left -- the decoder's LIFO push order).
 
-   Scope decision (traversal-only session): normals are not encoded yet, so
-   every triangle is treated as normal_was_reversed == 0 and only the
-   un-swapped branch of the decoder's prc_set_left_right_edge_indices applies.
+   When st->tri_reversed[tri] is set, this mirrors the decoder's
+   prc_set_left_right_edge_indices: the decoder swaps its own right/left
+   edge role assignment for a reversed triangle, so we swap which physical
+   edge (idx1-idx2 vs idx0-idx2) we treat as "right"/slot-0 (pushed first,
+   bit 0) vs "left"/slot-1 (pushed second, bit 1) to match. Swapping the
+   slot CONTENTS up front, before the rest of this function (which always
+   treats slot 0 as "right, processed/pushed first"), makes the remainder
+   of the function correct unchanged for both cases.
 
    An edge is growable only if its neighbor exists, is unvisited AND has no
    grow op already pending on the stack. Never re-pushing a pending triangle
@@ -865,7 +878,8 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
 {
     uint8_t bits[2];
     uint32_t e;
-    /* [0] = right edge (idx1, idx2, apex idx0), [1] = left edge (idx0, idx2, apex idx1) */
+    /* [0] = right edge (idx1, idx2, apex idx0), [1] = left edge (idx0, idx2, apex idx1)
+       -- for an un-reversed triangle; see the reversed-swap below. */
     int32_t ex[2], ey[2], ez[2];
     uint32_t ma[2], mb[2];
     int code;
@@ -881,6 +895,18 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
     ez[1] = idx[1];
     ma[1] = mv[0];
     mb[1] = mv[2];
+
+    if (st->tri_reversed != NULL && st->tri_reversed[tri])
+    {
+        int32_t ti;
+        uint32_t tm;
+
+        ti = ex[0]; ex[0] = ex[1]; ex[1] = ti;
+        ti = ey[0]; ey[0] = ey[1]; ey[1] = ti;
+        ti = ez[0]; ez[0] = ez[1]; ez[1] = ti;
+        tm = ma[0]; ma[0] = ma[1]; ma[1] = tm;
+        tm = mb[0]; mb[0] = mb[1]; mb[1] = tm;
+    }
 
     for (e = 0; e < 2; e++)
     {
@@ -948,7 +974,8 @@ int
 prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
     prc_encode_traversal_result *out,
-    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out)
+    prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
+    const uint8_t *tri_reversed)
 {
     prc_encode_state st;
     uint32_t i, num_tris, num_pos;
@@ -994,6 +1021,7 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     st.origin.y = out->origin[1];
     st.origin.z = out->origin[2];
     st.out = out;
+    st.tri_reversed = tri_reversed;
 
     /* Every emitted point is a distinct deduplicated mesh vertex, so
        num_pos triples bounds point_array; 3 reference-bit slots and 3
@@ -1129,6 +1157,21 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
         {
             ret = code;
             goto fail;
+        }
+        /* PRC_TRACE_REVERSED / PRC_TRACE_NORMALS: env-var gated stderr tracing
+           (same zero-cost-when-unset convention as prc_decode_compressed_tess.c's
+           PRC_DEBUG_DISABLE_* hooks), added to compare compressed-tessellation
+           encode vs. decode triangle-by-triangle -- see
+           ISO-SPEC/compressed-write-normal-sign-bug.md for what this diagnoses
+           and how to read its output. The matching read-side prints live in
+           prc_decode_compressed_tess.c. */
+        if (getenv("PRC_TRACE_REVERSED") != NULL)
+        {
+            fprintf(stderr, "ENC k=%u tri=%u mv=(%u,%u,%u) idx=(%d,%d,%d) edge_status=%u P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
+                emitted, cur, mv[0], mv[1], mv[2], idx[0], idx[1], idx[2], out->edge_status_array[emitted],
+                st.decoded_pos[idx[0]].x, st.decoded_pos[idx[0]].y, st.decoded_pos[idx[0]].z,
+                st.decoded_pos[idx[1]].x, st.decoded_pos[idx[1]].y, st.decoded_pos[idx[1]].z,
+                st.decoded_pos[idx[2]].x, st.decoded_pos[idx[2]].y, st.decoded_pos[idx[2]].z);
         }
         emitted++;
     }
@@ -1467,15 +1510,17 @@ prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
             rev[k] = (uint8_t)(dot_val > 0.0);
             /* A set bit makes the decoder swap its left/right edge handling
                for this triangle's grow pushes, which the already-emitted
-               traversal arrays assumed never happens; refuse to build a
-               stream the decoder would walk differently. */
+               traversal arrays assumed never happens -- the encoder's own
+               grow-step point/basis math doesn't yet produce correct point
+               data to pair with a reversed bit on a growing triangle (see
+               the longer comment above on mesh->num_components). Rather
+               than discard every OTHER triangle's data-driven bit over
+               this one triangle, leave this triangle at the calloc
+               default (0) -- same as the no-input-normals case -- and
+               keep going; its decoded normal sign may end up wrong, but
+               its decoded position/topology stays correct either way. */
             if (rev[k] && trav->edge_status_array[k] != 0)
-            {
-                prc_free(ctx, rev);
-                prc_error(ctx, PRC_ERROR_INTERNAL,
-                    "prc_encode_normals_c1: normals reverse a growing triangle (unsupported)\n");
-                return PRC_ERROR_INTERNAL;
-            }
+                rev[k] = 0;
         }
     }
     *normal_is_reversed_out = rev;
@@ -1872,6 +1917,14 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
                     }
                 }
             }
+            if (getenv("PRC_TRACE_NORMALS") != NULL)
+            {
+                prc_vec3 pos = prc_encode_decoded_vec(trav, idx[c]);
+                fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)\n",
+                    k, c, idx[c], t->tri_reversed, t->x_reversed, t->y_reversed, t->theta_q, t->phi_q,
+                    visit_normals[visit].x, visit_normals[visit].y, visit_normals[visit].z,
+                    assigned.x, assigned.y, assigned.z, pos.x, pos.y, pos.z);
+            }
             if (c == 0)
                 corner0_decoded = assigned;
         }
@@ -2212,6 +2265,51 @@ prc_encode_preprocess_free(prc_context *ctx, prc_encode_mesh *m)
     m->num_components = 0;
 }
 
+/* For every triangle in trav (traversal order), test whether its supplied
+   (vertex_normals-averaged) normal disagrees with its traversal-assigned
+   winding -- using the traversal's OWN decoded positions/point order, the
+   same basis the decoder will actually reconstruct from, not the caller's
+   original mesh vertex order (see prc_write_compress_tess_entry's caller
+   comment for why that distinction matters). Returns a freshly-allocated
+   mesh.num_triangles-entry array (mesh order, via triangle_mesh_order), or
+   NULL on allocation failure. */
+static uint8_t *
+prc_encode_compute_tri_reversed(prc_context *ctx, const prc_encode_traversal_result *trav,
+    const double *vertex_normals, uint32_t num_triangles)
+{
+    uint8_t *out;
+    uint32_t k;
+
+    out = (uint8_t *)prc_calloc(ctx, num_triangles, sizeof(uint8_t));
+    if (out == NULL)
+        return NULL;
+
+    for (k = 0; k < trav->edge_status_array_size; k++)
+    {
+        const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
+        prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
+        prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
+        prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
+        prc_vec3 e1, e2, raw_cross, avg;
+        uint32_t c;
+
+        prc_vec_sub(P1, P0, &e1);
+        prc_vec_sub(P2, P0, &e2);
+        prc_vec_cross(e1, e2, &raw_cross);
+
+        avg.x = avg.y = avg.z = 0.0;
+        for (c = 0; c < 3; c++)
+        {
+            const double *n = &vertex_normals[(size_t)trav->point_mesh_vertex[idx[c]] * 3];
+            avg.x += n[0] / 3.0;
+            avg.y += n[1] / 3.0;
+            avg.z += n[2] / 3.0;
+        }
+        out[trav->triangle_mesh_order[k]] = (uint8_t)(prc_vec_dot_product(avg, raw_cross) > 0.0);
+    }
+    return out;
+}
+
 int
 prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     const double *positions, uint32_t num_positions,
@@ -2225,6 +2323,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     uint32_t *orig_face_id = NULL;      /* num_triangles entries, ORIGINAL (pre-preprocess) order */
     uint32_t *face_indices_post = NULL; /* mesh.num_triangles entries, POST-preprocess order */
     double *corner_normals = NULL;      /* mesh.num_triangles * 9, POST-preprocess order */
+    uint8_t *tri_reversed = NULL;       /* mesh.num_triangles entries, POST-preprocess (mesh) order */
     uint8_t *rev = NULL;
     int32_t *angles = NULL;
     uint8_t *bin = NULL;
@@ -2278,10 +2377,6 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             face_indices_post[k] = orig_face_id[mesh.tri_orig_index[k]];
     }
 
-    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL);
-    if (code != 0) goto cleanup;
-    trav_ready = 1;
-
     must_recalculate_normals = (normals == NULL) ? 1u : 0u;
     if (!must_recalculate_normals)
     {
@@ -2302,6 +2397,22 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
                 memcpy(&corner_normals[((size_t)k * 3 + c) * 3], &normals[(size_t)nidx * 3], 3 * sizeof(double));
             }
         }
+    }
+
+    /* First (baseline) pass: every triangle treated as non-reversed, exactly
+       as before this fix. This is needed regardless of the eventual outcome
+       to get the traversal's OWN decoded positions/vertex order for the
+       sign test below -- a grown triangle's first two vertices are assigned
+       in ascending DECODER POINT INDEX order (see prc_encode_grow_triangle),
+       which is generally NOT the caller's original per-triangle vertex
+       order, so the sign test must use trav's own order, not mesh.tri_indices
+       directly. */
+    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL, NULL);
+    if (code != 0) goto cleanup;
+    trav_ready = 1;
+
+    if (!must_recalculate_normals)
+    {
         code = prc_encode_normals_c2(ctx, &mesh, &trav, corner_normals, &angles, &acount, &bin, &bsize);
         if (code != 0)
         {
@@ -2312,11 +2423,87 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
                Rather than fail the whole entry over it, fall back to C1
                (decoder-reconstructed normals from geometry): every real
                mesh has SOME valid encoding, and reconstructed-but-rendered
-               beats exact-but-rejected. */
+               beats exact-but-rejected.
+
+               C1's sign test wants one normal per DEDUPLICATED mesh
+               position (mesh.num_positions entries), not per corner --
+               reduce the corner_normals we already built for the failed C2
+               attempt down to a per-position average before it's freed. */
+            double *vertex_normals = (double *)prc_calloc(ctx,
+                (size_t)mesh.num_positions * 3, sizeof(double));
+
+            if (vertex_normals != NULL)
+            {
+                for (k = 0; k < mesh.num_triangles; k++)
+                {
+                    uint32_t c;
+                    for (c = 0; c < 3; c++)
+                    {
+                        uint32_t v = mesh.tri_indices[(size_t)k * 3 + c];
+                        const double *cn = &corner_normals[((size_t)k * 3 + c) * 3];
+
+                        vertex_normals[(size_t)v * 3 + 0] += cn[0];
+                        vertex_normals[(size_t)v * 3 + 1] += cn[1];
+                        vertex_normals[(size_t)v * 3 + 2] += cn[2];
+                    }
+                }
+            }
+
             prc_free(ctx, corner_normals);
             corner_normals = NULL;
             must_recalculate_normals = 1u;
-            code = prc_encode_normals_c1(ctx, &mesh, &trav, NULL, &rev);
+
+            if (vertex_normals == NULL)
+            {
+                /* Allocation failure: degrade to the pre-fix behavior
+                   (all-zero reversal bits) rather than fail the whole
+                   entry over a diagnostic-quality improvement. */
+                code = prc_encode_normals_c1(ctx, &mesh, &trav, NULL, &rev);
+            }
+            else
+            {
+                /* Compute tri_reversed from the baseline traversal (every
+                   triangle non-reversed), then rebuild the traversal once
+                   more with it applied. NOT iterated further: reversing a
+                   triangle changes stack push order (edge_status_array's
+                   bit0/bit1 IS the wire-format push order -- CR-14f), which
+                   reshuffles downstream point-index assignment for a large
+                   fraction of the mesh, not a small local correction.
+                   Empirically (verified via a temporary diff-count probe on
+                   turbine tess 902, removed after measuring): iterating this
+                   does NOT converge -- roughly half of all 8868 triangles'
+                   reversed bits flip on every single pass, with no fixed
+                   point found even after 10 rebuilds, and the result at any
+                   arbitrary cutoff was no better (sometimes worse) than
+                   this single correction pass. One pass from the unbiased
+                   baseline is the reproducible, principled choice here. */
+                tri_reversed = prc_encode_compute_tri_reversed(ctx, &trav, vertex_normals, mesh.num_triangles);
+                prc_free(ctx, vertex_normals);
+                if (tri_reversed == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+                    ret = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
+
+                prc_encode_traversal_free(ctx, &trav);
+                trav_ready = 0;
+                code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm,
+                    &trav, NULL, NULL, tri_reversed);
+                if (code != 0) goto cleanup;
+                trav_ready = 1;
+
+                rev = (uint8_t *)prc_malloc(ctx, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
+                if (rev == NULL)
+                {
+                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+                    ret = PRC_ERROR_MEMORY;
+                    goto cleanup;
+                }
+                for (k = 0; k < trav.edge_status_array_size; k++)
+                    rev[k] = tri_reversed[trav.triangle_mesh_order[k]];
+                code = 0;
+            }
         }
     }
     else
@@ -2333,6 +2520,7 @@ cleanup:
     if (orig_face_id != NULL) prc_free(ctx, orig_face_id);
     if (face_indices_post != NULL) prc_free(ctx, face_indices_post);
     if (corner_normals != NULL) prc_free(ctx, corner_normals);
+    if (tri_reversed != NULL) prc_free(ctx, tri_reversed);
     if (rev != NULL) prc_free(ctx, rev);
     if (angles != NULL) prc_free(ctx, angles);
     if (bin != NULL) prc_free(ctx, bin);

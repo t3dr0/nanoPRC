@@ -64,13 +64,14 @@ add_executable(verify_manifold_pdf tests/internal/verify_manifold_pdf.c)
 target_link_libraries(verify_manifold_pdf prc_static)
 target_include_directories(verify_manifold_pdf PRIVATE tests)
 
-add_executable(detect_tess_spikes tests/internal/detect_tess_spikes.c)
+add_executable(detect_tess_spikes tests/internal/detect_tess_spikes.c tests/internal/tess_spike_common.c)
 target_link_libraries(detect_tess_spikes prc_static)
 target_include_directories(detect_tess_spikes PRIVATE tests)
 
 add_executable(dump_raw_tess_arrays tests/internal/dump_raw_tess_arrays.c)
 target_link_libraries(dump_raw_tess_arrays prc_static)
 target_include_directories(dump_raw_tess_arrays PRIVATE tests)
+
 add_executable(prc_to_pdf tests/internal/prc_to_pdf.c)
 target_link_libraries(prc_to_pdf prc_static)
 target_include_directories(prc_to_pdf PRIVATE tests)
@@ -78,3 +79,19 @@ target_include_directories(prc_to_pdf PRIVATE tests)
 add_executable(reauthor_tess_pdf tests/internal/reauthor_tess_pdf.c)
 target_link_libraries(reauthor_tess_pdf prc_static)
 target_include_directories(reauthor_tess_pdf PRIVATE tests)
+
+add_executable(dump_uncompressed_tess_fields tests/internal/dump_uncompressed_tess_fields.c)
+target_link_libraries(dump_uncompressed_tess_fields prc_static)
+target_include_directories(dump_uncompressed_tess_fields PRIVATE tests)
+
+add_executable(dump_tree_fields tests/internal/dump_tree_fields.c)
+target_link_libraries(dump_tree_fields prc_static)
+target_include_directories(dump_tree_fields PRIVATE tests)
+
+add_executable(census_tess tests/internal/census_tess.c)
+target_link_libraries(census_tess prc_static)
+target_include_directories(census_tess PRIVATE tests)
+
+add_executable(check_vertex_normal_variance tests/internal/check_vertex_normal_variance.c)
+target_link_libraries(check_vertex_normal_variance prc_static)
+target_include_directories(check_vertex_normal_variance PRIVATE tests)
