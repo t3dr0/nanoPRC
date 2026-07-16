@@ -35,14 +35,40 @@
    decoded geometry (multiple face groups, degenerate triangles, disconnected
    components, etc.) is still unaccounted for.
 
-   HOW: usage: standalone_grid_triangles.exe <output.prc> <N> [output.pdf]
+   HOW: usage: standalone_grid_triangles.exe <output.prc> <N> [output.pdf] [mustcalc] [flattree]
+   [roundup|rounddown|roundzero]
    N is the grid side length; produces N*N positions, 2*(N-1)*(N-1)
    triangles. E.g. N=100 -> 10000 positions, 19602 triangles (close to
-   turbine tess 902's scale); N=175 -> ~30000 triangles (close to tess 901). */
+   turbine tess 902's scale); N=175 -> ~30000 triangles (close to tess 901).
+
+   UPDATE 2026-07-15 (six-agent meta-analysis plan item #2a): passing
+   "mustcalc" as the 4th argument switches this tool from real per-vertex
+   normals (norm_indices != NULL) to must_calculate_normals=1 (no stored
+   normals at all, crease_angle=45 degrees) -- the untested convention
+   ElevationMeshIS_ePRC.pdf/xml-sample-wrl_ePRC.pdf (real, Acrobat-working
+   oracles) use and nanoPRC's writer could not previously emit at all. Row
+   22a (N=10, real per-vertex normals) is CONFIRMED FAILING in Acrobat
+   (10x reopen-determinism-checked); this mode isolates whether the missing
+   must_calculate_normals convention, not scale or tree shape, is what
+   Acrobat actually requires.
+
+   UPDATE 2026-07-16: passing "flattree" as a 5th argument switches from the
+   row-19 tree shape to a SHALLOW 2-level tree (Model -> root [HAS the real
+   part directly, rep_items attached there] -> one nested empty part) --
+   matching the tree shape found in a real, independently-produced,
+   Acrobat-CONFIRMED-WORKING file (libPRC/asymptote's own harness output,
+   `25_libprc_N70_mustcalc.pdf`, see blanktree-matrix-evidence-table.md's
+   row 25) at the exact N=70/9522-triangle scale where THIS tool's row-19
+   tree shape fails even with must_calculate_normals=1 (row 23c). Directly
+   tests whether row-19's "needs an empty-part CONTAINER between the
+   part-less root and the real part" mechanism is right, or whether
+   (as libPRC's shallower working tree suggests) less nesting is what
+   actually matters. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <fenv.h>
 #include "prc_api.h"
 #include "prc_context.h"
 
@@ -57,11 +83,16 @@ int main(int argc, char **argv)
     uint32_t face_tri_counts[1];
     uint32_t x, y, t;
     const char *out_pdf = NULL;
+    int mustcalc = 0;
+    int flattree = 0;
+    int round_mode = FE_TONEAREST; /* default */
+    int arg_i;
     prc_api_write_tessellation tess;
     prc_api_write_rep_item rep_item;
-    prc_api_write_node part_node, intermediate, root;
+    prc_api_write_node part_node, intermediate, root, nested;
     prc_api_write_node *part_node_ptr;
     prc_api_write_node *intermediate_ptr;
+    prc_api_write_node *nested_ptr;
     double bbox_min[3], bbox_max[3];
 
     if (argc < 3)
@@ -72,6 +103,21 @@ int main(int argc, char **argv)
     n = (uint32_t)atoi(argv[2]);
     if (n < 2) { printf("N must be >= 2\n"); return 2; }
     if (argc >= 4) out_pdf = argv[3];
+    for (arg_i = 4; arg_i < argc; arg_i++)
+    {
+        if (strcmp(argv[arg_i], "mustcalc") == 0) mustcalc = 1;
+        if (strcmp(argv[arg_i], "flattree") == 0) flattree = 1;
+        /* 2026-07-16 addition: FPU rounding mode for the position/normal
+           computation -- tests whether a specific ULP-level bit pattern in
+           the computed doubles (not the encoding algorithm, already
+           exhaustively ruled out elsewhere) is what trips Acrobat, per
+           user suggestion. Defaults to FE_TONEAREST (IEEE754/normal libm
+           behavior) when omitted, so existing invocations are unaffected. */
+        if (strcmp(argv[arg_i], "roundup") == 0) round_mode = FE_UPWARD;
+        if (strcmp(argv[arg_i], "rounddown") == 0) round_mode = FE_DOWNWARD;
+        if (strcmp(argv[arg_i], "roundzero") == 0) round_mode = FE_TOWARDZERO;
+    }
+    fesetround(round_mode);
 
     /* A gently-curved surface (a shallow sine wave), not a flat plane, so
        real per-vertex normals actually vary -- structurally closer to real
@@ -142,6 +188,19 @@ int main(int argc, char **argv)
     tess.num_triangles = num_triangles;
     tess.face_tri_counts = face_tri_counts;
     tess.num_faces = 1;
+    if (mustcalc)
+    {
+        /* must_calculate_normals=1: no stored normals at all, matching the
+           real-oracle convention (see file header comment). crease_angle=45
+           degrees matches ElevationMeshIS_ePRC.pdf's own stored value; this
+           mesh is genuinely curved (unlike the degenerate crease_angle=0
+           tetrahedron oracle) so a non-trivial crease angle is meaningful. */
+        tess.normals = NULL;
+        tess.num_normals = 0;
+        tess.norm_indices = NULL;
+        tess.must_calculate_normals = 1;
+        tess.crease_angle_degrees = 45.0;
+    }
 
     memset(&rep_item, 0, sizeof(rep_item));
     rep_item.kind = PRC_API_WRITE_RI_SURFACE;
@@ -162,20 +221,44 @@ int main(int argc, char **argv)
     part_node.name = "grid_body";
     part_node.part_name = "grid_faces";
 
-    /* Row-19 tree shape: root [no part] -> intermediate [empty part] ->
-       leaf [real part] -- see the file header comment's 2026-07-15 update. */
-    part_node_ptr = &part_node;
-    memset(&intermediate, 0, sizeof(intermediate));
-    intermediate.children = &part_node_ptr;
-    intermediate.num_children = 1;
-    intermediate.name = "grid_scene";
-    intermediate.has_empty_part = 1;
+    if (flattree)
+    {
+        /* Shallow tree matching libPRC's own real, Acrobat-working output:
+           Model -> root [HAS the real part directly, rep_items attached
+           here] -> nested [one further empty part, no children]. No
+           part-less container above the real part at all. */
+        memset(&nested, 0, sizeof(nested));
+        nested.has_empty_part = 1;
+        nested.name = "grid_nested";
 
-    intermediate_ptr = &intermediate;
-    memset(&root, 0, sizeof(root));
-    root.children = &intermediate_ptr;
-    root.num_children = 1;
-    root.name = "grid";
+        nested_ptr = &nested;
+        memset(&root, 0, sizeof(root));
+        root.rep_items = &rep_item;
+        root.num_rep_items = 1;
+        root.bbox_min[0] = bbox_min[0]; root.bbox_min[1] = bbox_min[1]; root.bbox_min[2] = bbox_min[2];
+        root.bbox_max[0] = bbox_max[0]; root.bbox_max[1] = bbox_max[1]; root.bbox_max[2] = bbox_max[2];
+        root.name = "root";
+        root.part_name = "grid_faces";
+        root.children = &nested_ptr;
+        root.num_children = 1;
+    }
+    else
+    {
+        /* Row-19 tree shape: root [no part] -> intermediate [empty part] ->
+           leaf [real part] -- see the file header comment's 2026-07-15 update. */
+        part_node_ptr = &part_node;
+        memset(&intermediate, 0, sizeof(intermediate));
+        intermediate.children = &part_node_ptr;
+        intermediate.num_children = 1;
+        intermediate.name = "grid_scene";
+        intermediate.has_empty_part = 1;
+
+        intermediate_ptr = &intermediate;
+        memset(&root, 0, sizeof(root));
+        root.children = &intermediate_ptr;
+        root.num_children = 1;
+        root.name = "grid";
+    }
 
     ctx = prc_api_new_context(NULL);
     if (ctx == NULL) { printf("context creation failed\n"); return 1; }
@@ -185,7 +268,8 @@ int main(int argc, char **argv)
         size_t prc_buf_size = 0;
         FILE *out;
 
-        printf("Encoding %u positions, %u triangles (N=%u)...\n", num_positions, num_triangles, n);
+        printf("Encoding %u positions, %u triangles (N=%u, %s)...\n", num_positions, num_triangles, n,
+            mustcalc ? "must_calculate_normals=1" : "real per-vertex normals");
         code = prc_api_write_prc_buffer(ctx, "nanoPRC", &root, &tess, 1, &prc_buf, &prc_buf_size);
         if (code != 0)
         {

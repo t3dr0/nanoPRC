@@ -37,9 +37,11 @@
    file around it instead.
 
    HOW: usage: reauthor_tess_pdf.exe <input.pdf_or_prc> <tess_index>
-   <output.pdf> [part_name]. <tess_index> is the public-API tessellation
-   index (0-based, matching e.g. verify_manifold_pdf.c/scan_prc.c's own
-   numbering for the same input file). */
+   <output.pdf> [part_name] [kind=compressed|triangles] [mustcalc].
+   <tess_index> is the public-API tessellation index (0-based, matching
+   e.g. verify_manifold_pdf.c/scan_prc.c's own numbering for the same input
+   file). kind must be "triangles" for "mustcalc" to have any effect --
+   see standalone_grid_triangles.c's 2026-07-15 header update for why. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,14 +70,16 @@ int main(int argc, char **argv)
     double bbox_max[3] = { -DBL_MAX, -DBL_MAX, -DBL_MAX };
 
     prc_api_write_tess_kind_t write_kind = PRC_API_WRITE_TESS_KIND_COMPRESSED;
+    int mustcalc = 0;
     if (argc < 4)
     {
-        printf("usage: %s <input.pdf_or_prc> <tess_index> <output.pdf> [part_name] [kind=compressed|triangles]\n", argv[0]);
+        printf("usage: %s <input.pdf_or_prc> <tess_index> <output.pdf> [part_name] [kind=compressed|triangles] [mustcalc]\n", argv[0]);
         return 2;
     }
     target_index = (uint32_t)atoi(argv[2]);
     if (argc >= 5) part_name = argv[4];
     if (argc >= 6 && strcmp(argv[5], "triangles") == 0) write_kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
+    if (argc >= 7 && strcmp(argv[6], "mustcalc") == 0) mustcalc = 1;
 
     ctx = prc_api_new_context(NULL);
     if (ctx == NULL) { printf("context creation failed\n"); return 1; }
@@ -259,6 +263,19 @@ int main(int argc, char **argv)
         wtess.num_triangles = num_triangles;
         wtess.face_tri_counts = &face_tri_counts;
         wtess.num_faces = 1;
+        if (mustcalc)
+        {
+            /* must_calculate_normals=1: drop the decoded normals entirely,
+               matching the real-oracle convention (see
+               standalone_grid_triangles.c's own comment) -- the reader
+               recomputes per-vertex normals from geometry + crease_angle.
+               TRIANGLES-only; enforced by prc_write_tess_3d itself. */
+            wtess.normals = NULL;
+            wtess.num_normals = 0;
+            wtess.norm_indices = NULL;
+            wtess.must_calculate_normals = 1;
+            wtess.crease_angle_degrees = 45.0;
+        }
 
         memset(&rep_item, 0, sizeof(rep_item));
         rep_item.kind = PRC_API_WRITE_RI_SURFACE;

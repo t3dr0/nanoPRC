@@ -35,7 +35,8 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
     const double *normals, uint32_t num_normals,
     const uint32_t *tri_indices, const uint32_t *norm_indices,
     uint32_t num_triangles,
-    const uint32_t *face_tri_counts, uint32_t num_faces)
+    const uint32_t *face_tri_counts, uint32_t num_faces,
+    int must_calculate_normals, double crease_angle_degrees)
 {
     uint32_t *global_idx = NULL;
     uint32_t *face_start = NULL;
@@ -50,6 +51,12 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
         face_tri_counts == NULL || num_faces == 0)
     {
         prc_error(ctx, PRC_ERROR_INTERNAL, "prc_write_tess_3d: invalid arguments\n");
+        return PRC_ERROR_INTERNAL;
+    }
+    if (must_calculate_normals && norm_indices != NULL)
+    {
+        prc_error(ctx, PRC_ERROR_INTERNAL,
+            "prc_write_tess_3d: must_calculate_normals is incompatible with supplied norm_indices\n");
         return PRC_ERROR_INTERNAL;
     }
     check_sum = 0;
@@ -69,7 +76,7 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
         goto cleanup;
     }
 
-    if (norm_indices == NULL)
+    if (norm_indices == NULL && !must_calculate_normals)
     {
         face_normals = (double *)prc_malloc(ctx, sizeof(double) * 3 * num_faces);
         if (face_normals == NULL)
@@ -114,6 +121,15 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
                     global_idx[global_count++] = tri_indices[(size_t)t * 3 + c] * 3;
                 }
             }
+            else if (must_calculate_normals)
+            {
+                /* Per spec, when must_calculate_normals is set the normal
+                   index half of each pair is omitted entirely -- the array
+                   holds bare position indices (see prc_adjust_offsets in
+                   prc_parse_tess.c, the read-side counterpart of this). */
+                for (c = 0; c < 3; c++)
+                    global_idx[global_count++] = tri_indices[(size_t)t * 3 + c] * 3;
+            }
             else
             {
                 global_idx[global_count++] = f * 3;
@@ -139,9 +155,19 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
        property this facility does. Matching real-producer convention. */
     if (prc_bitwrite_bit(ctx, s, 1) != 0) goto fail;                          /* has_faces */
     if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;                          /* has_loops */
-    if (prc_bitwrite_bit(ctx, s, 0) != 0) goto fail;                          /* must_calculate_normals */
+    if (prc_bitwrite_bit(ctx, s, must_calculate_normals ? 1 : 0) != 0) goto fail; /* must_calculate_normals */
 
-    if (norm_indices != NULL)
+    if (must_calculate_normals)
+    {
+        /* normal_recalculation_flags=0, matching xml-sample-wrl_ePRC.pdf's
+           real-producer convention (see dump_uncompressed_tess_fields
+           output). crease_angle is stored as raw degrees -- the read side
+           (prc_parse_tess.c) multiplies by PI/180 itself. */
+        if (prc_bitwrite_uint8(ctx, s, 0) != 0) goto fail;                    /* normal_recalculation_flags */
+        if (prc_bitwrite_double(ctx, s, crease_angle_degrees) != 0) goto fail; /* crease_angle */
+        if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;                   /* number_of_normal_coordinates */
+    }
+    else if (norm_indices != NULL)
     {
         if (prc_bitwrite_uint32(ctx, s, num_normals * 3) != 0) goto fail;
         for (i = 0; i < num_normals * 3; i++)
@@ -167,7 +193,7 @@ prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
         if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;                   /* size_of_line_attributes */
         if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;                   /* start_of_wire_data */
         if (prc_bitwrite_uint32(ctx, s, 0) != 0) goto fail;                   /* size_of_sizes_wire */
-        if (prc_bitwrite_uint32(ctx, s, norm_indices != NULL ?
+        if (prc_bitwrite_uint32(ctx, s, (norm_indices != NULL || must_calculate_normals) ?
                 (uint32_t)PRC_FACETESSDATA_Triangle : (uint32_t)PRC_FACETESSDATA_TriangleOneNormal) != 0)
             goto fail;                                                       /* used_entities_flag */
         if (prc_bitwrite_uint32(ctx, s, face_start[f]) != 0) goto fail;       /* start_triangulated */

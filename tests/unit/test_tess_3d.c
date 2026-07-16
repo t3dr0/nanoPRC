@@ -28,6 +28,7 @@
 #include "prc_data.h"
 #include "prc_write_tess_3d.h"
 #include "prc_parse_tess.h"
+#include "prc_parse_common.h"
 
 /* Mirrors the (static, so not reusable directly) prc_release_tess_3d /
    prc_release_tess_face in prc_release.c -- frees exactly the fields this
@@ -91,7 +92,7 @@ test_flat_quad_exact(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 256), 0);
     PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 4, normals, 4,
-        tris, norm_idx, 2, face_tri_counts, 1), 0);
+        tris, norm_idx, 2, face_tri_counts, 1, 0, 0.0), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -178,7 +179,7 @@ test_multi_face_counts(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 512), 0);
     PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 18, normals, 18,
-        tris, norm_idx, 6, face_tri_counts, 3), 0);
+        tris, norm_idx, 6, face_tri_counts, 3, 0, 0.0), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -229,7 +230,7 @@ test_no_normals_one_normal_path(prc_context *ctx)
 
     PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
     PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 3, NULL, 0,
-        tris, NULL, 1, face_tri_counts, 1), 0);
+        tris, NULL, 1, face_tri_counts, 1, 0, 0.0), 0);
     PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
 
     prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
@@ -260,6 +261,60 @@ test_no_normals_one_normal_path(prc_context *ctx)
     prc_bitwrite_release(ctx, &w);
 }
 
+/* must_calculate_normals=1: no normal data stored at all, position-only
+   triangulated_index_array, PRC_FACETESSDATA_Triangle -- the real-producer
+   convention confirmed via dump_uncompressed_tess_fields.c on
+   xml-sample-wrl_ePRC.pdf/ElevationMeshIS_ePRC.pdf (normal_recalculation_
+   flags=0, crease_angle stored as raw degrees). */
+static void
+test_must_calculate_normals(prc_context *ctx)
+{
+    double positions[3 * 3] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0
+    };
+    uint32_t tris[3] = { 0, 1, 2 };
+    uint32_t face_tri_counts[1] = { 1 };
+    prc_bit_write_state w;
+    prc_bit_state r;
+    prc_tess_3d *parsed = NULL;
+    int code;
+
+    printf("  sub-case: must_calculate_normals=1, no stored normals\n");
+
+    PRC_ASSERT_EQ(prc_bitwrite_init(ctx, &w, 128), 0);
+    PRC_ASSERT_EQ(prc_write_tess_3d(ctx, &w, positions, 3, NULL, 0,
+        tris, NULL, 1, face_tri_counts, 1, 1, 45.0), 0);
+    PRC_ASSERT_EQ(prc_bitwrite_flush(ctx, &w), 0);
+
+    prc_init_bit_state(ctx, &r, w.buf, w.byte_pos);
+    code = prc_parse_tess_3d(ctx, &r, &parsed);
+    if (code < 0)
+        prc_print_error_stack(ctx);
+    PRC_ASSERT_EQ(code, 0);
+    PRC_ASSERT_NOT_NULL(parsed);
+
+    PRC_ASSERT_EQ(parsed->must_calculate_normals, 1);
+    PRC_ASSERT_EQ(parsed->normal_recalculation_flags, 0);
+    PRC_ASSERT(fabs(parsed->crease_angle - 45.0 * PRC_PI / 180.0) < 1e-12);
+    PRC_ASSERT_EQ(parsed->number_of_normal_coordinates, 0);
+
+    PRC_ASSERT_EQ(parsed->number_of_face_tessellation, 1);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].used_entities_flag, PRC_FACETESSDATA_Triangle);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].triangulateddata[0], 1);
+
+    /* Position-only layout (no interleaved normal index): [pos0*3, pos1*3, pos2*3] */
+    PRC_ASSERT_EQ(parsed->number_of_triangulated_indicies, 3);
+    PRC_ASSERT_EQ(parsed->face_tessellation_data[0].start_triangulated, 0);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[0] / 3, tris[0]);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[1] / 3, tris[1]);
+    PRC_ASSERT_EQ(parsed->triangulated_index_array[2] / 3, tris[2]);
+
+    free_parsed_tess_3d(ctx, parsed);
+    prc_bitwrite_release(ctx, &w);
+}
+
 int
 main(void)
 {
@@ -273,6 +328,7 @@ main(void)
     test_flat_quad_exact(ctx);
     test_multi_face_counts(ctx);
     test_no_normals_one_normal_path(ctx);
+    test_must_calculate_normals(ctx);
 
     prc_release_context(ctx);
 

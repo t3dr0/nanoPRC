@@ -127,3 +127,7 @@ target_include_directories(experiment_mustcalc_quad PRIVATE tests)
 add_executable(standalone_quad_deeptree tests/internal/standalone_quad_deeptree.c)
 target_link_libraries(standalone_quad_deeptree prc_static)
 target_include_directories(standalone_quad_deeptree PRIVATE tests)
+
+add_executable(bisect_tess_positions tests/internal/bisect_tess_positions.c)
+target_link_libraries(bisect_tess_positions prc_static)
+target_include_directories(bisect_tess_positions PRIVATE tests)
