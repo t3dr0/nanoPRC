@@ -131,3 +131,7 @@ target_include_directories(standalone_quad_deeptree PRIVATE tests)
 add_executable(bisect_tess_positions tests/internal/bisect_tess_positions.c)
 target_link_libraries(bisect_tess_positions prc_static)
 target_include_directories(bisect_tess_positions PRIVATE tests)
+
+add_executable(inspect_position_bits tests/internal/inspect_position_bits.c)
+target_link_libraries(inspect_position_bits prc_static)
+target_include_directories(inspect_position_bits PRIVATE tests)
