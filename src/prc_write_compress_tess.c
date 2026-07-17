@@ -447,7 +447,8 @@ typedef struct
        below, so encoder and decoder agree on which physical edge each
        edge_status_array bit refers to. */
     uint8_t *tri_reversed;
-    const double *real_normals; /* mesh->num_positions entries, 3 doubles each; NULL == disabled */
+    const double *real_normals; /* mesh->num_triangles*9 entries (3 per corner, MESH order,
+                                    same layout as corner_normals); NULL == disabled */
 } prc_encode_state;
 
 /* Chain bookkeeping only this phase: reconstructed_position stays zeroed
@@ -868,31 +869,51 @@ prc_encode_grow_triangle(prc_encode_state *st, const prc_encode_grow_op *op,
    by chain_start or grow_triangle for THIS traversal, not a stale baseline)
    should be marked normal_was_reversed, from the real supplied normal vs.
    the geometric normal derived from its own decoded positions:
-   dot(avg_real_normal, cross(P1-P0,P2-P0)) > 0. Deciding this inline, right
-   here, means it always sees this triangle's true final vertex order rather
-   than one computed from a separate, potentially stale traversal pass. */
+   dot(corner0_real_normal, cross(P1-P0,P2-P0)) > 0. Deciding this inline,
+   right here, means it always sees this triangle's true final vertex order
+   rather than one computed from a separate, potentially stale traversal pass.
+
+   Uses TRAVERSAL corner 0's (idx[0]'s) real supplied normal specifically --
+   not an average over all 3 corners -- to match prc_encode_normals_c2's own
+   rejection check and the decoder's prc_is_normal_reversed_single_normal
+   ("always use the one at V[0]") exactly, rather than a coarser per-position
+   average that generally disagrees with the corner-0-specific test whenever
+   a vertex's incident corners carry different supplied normals (i.e. most
+   real, smooth-shaded meshes) -- that disagreement is what made C2 reject on
+   essentially every real mesh tested before this. real_normals is mesh->
+   num_triangles*9 doubles, 3 per corner, MESH order (mesh->tri_indices
+   alignment) -- the same layout as corner_normals, deliberately not
+   per-deduplicated-position, so the corner-0-specific value can be
+   recovered exactly. mv[0]/cur locate which mesh-order corner of triangle
+   cur is traversal slot 0. */
 static uint8_t
-prc_encode_decide_reversed(const prc_encode_state *st, const int32_t idx[3], const uint32_t mv[3])
+prc_encode_decide_reversed(const prc_encode_state *st, uint32_t cur, const int32_t idx[3], const uint32_t mv[3])
 {
     prc_vec3 P0 = st->decoded_pos[idx[0]];
     prc_vec3 P1 = st->decoded_pos[idx[1]];
     prc_vec3 P2 = st->decoded_pos[idx[2]];
-    prc_vec3 e1, e2, raw_cross, avg;
-    uint32_t c;
+    prc_vec3 e1, e2, raw_cross, n;
+    const double *nd;
+    uint32_t j, corner = 3;
 
     prc_vec_sub(P1, P0, &e1);
     prc_vec_sub(P2, P0, &e2);
     prc_vec_cross(e1, e2, &raw_cross);
 
-    avg.x = avg.y = avg.z = 0.0;
-    for (c = 0; c < 3; c++)
+    for (j = 0; j < 3; j++)
     {
-        const double *n = &st->real_normals[(size_t)mv[c] * 3];
-        avg.x += n[0] / 3.0;
-        avg.y += n[1] / 3.0;
-        avg.z += n[2] / 3.0;
+        if (st->mesh->tri_indices[(size_t)cur * 3 + j] == mv[0])
+            corner = j;
     }
-    return (uint8_t)(prc_vec_dot_product(avg, raw_cross) > 0.0);
+    /* Cannot happen: mv[0] is one of triangle cur's own three mesh vertices
+       by construction (chain_start/grow_triangle only ever assign mv[] from
+       mesh->tri_indices[cur*3..+3]). */
+    if (corner == 3)
+        return 0;
+
+    nd = &st->real_normals[(size_t)cur * 9 + (size_t)corner * 3];
+    n.x = nd[0]; n.y = nd[1]; n.z = nd[2];
+    return (uint8_t)(prc_vec_dot_product(n, raw_cross) > 0.0);
 }
 
 /* Decide the just-emitted triangle's edge status bits and push its growable
@@ -1202,7 +1223,7 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
            then push, in one pass) is the whole point. */
         if (st.real_normals != NULL)
         {
-            st.tri_reversed[cur] = prc_encode_decide_reversed(&st, idx, mv);
+            st.tri_reversed[cur] = prc_encode_decide_reversed(&st, cur, idx, mv);
             out->triangle_reversed[emitted] = st.tri_reversed[cur];
         }
 
@@ -1991,34 +2012,48 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
            (prc_is_normal_reversed_single_normal) and, when set, swaps its
            left/right edge handling for this triangle's grow pushes.
            prc_encode_traversal now decides each triangle's normal_was_reversed
-           bit inline (from real_normals, averaged per deduplicated position)
-           in the SAME pass that builds edge_status_array/push order, so this
-           should no longer disagree with the decoder's own corner-0-specific
-           test below for a growing triangle -- this check is kept as a
-           canary during rollout (not deleted) because the traversal's
-           decision uses a per-POSITION average while this test uses the
-           specific corner-0 DECODED value, and those could in principle
-           differ at a hard crease where a vertex's corners carry very
-           different normals. A hit here would mean the decoder walks this
-           triangle differently than intended -- surface it, don't just log
-           it and continue, until this has been confirmed never to fire on
-           real meshes. */
+           bit inline (prc_encode_decide_reversed, using TRAVERSAL corner 0's
+           specific real supplied normal from real_normals/corner_normals --
+           the same corner-0-specific convention this check uses) in the SAME
+           pass that builds edge_status_array/push order, and prc_encode_edge_status
+           already applied the matching left/right swap for growing triangles
+           -- reversed=1 on a growing triangle is now a fully supported,
+           already-correctly-handled case, NOT something to reject outright
+           (an earlier version of this check predated that support and
+           rejected unconditionally, which is why it rejected on essentially
+           every real mesh's first growing triangle).
+
+           What actually needs checking is DISAGREEMENT: did the traversal's
+           decision (from the RAW real corner-0 normal) come out different
+           from what this test derives (from the round-tripped DECODED
+           corner-0 normal, after the Taylor-angle quantize/reconstruct
+           simulation above)? Those two normally agree exactly, but
+           quantization noise could in principle flip the sign for a
+           triangle whose real normal is very close to perpendicular to its
+           own face -- kept as a canary for that case, not deleted. A hit
+           here means the decoder will walk this triangle's left/right
+           edges opposite to what the wire format's topology arrays assume,
+           a real desync -- surface it, don't just log it and continue,
+           until this has been confirmed never to fire on real meshes. */
         {
             prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
             prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
             prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
             prc_vec3 mid, e1, e2, cross1;
+            uint8_t derived_reversed;
 
             prc_vec_avg(P0, P1, &mid);
             prc_vec_sub(P1, P0, &e1);
             prc_vec_sub(P2, mid, &e2);
             prc_vec_cross(e2, e1, &cross1);
-            if (prc_vec_dot_product(cross1, corner0_decoded) < 0.0 &&
+            derived_reversed = (uint8_t)(prc_vec_dot_product(cross1, corner0_decoded) < 0.0);
+            if (derived_reversed != trav->triangle_reversed[k] &&
                 trav->edge_status_array[k] != 0)
             {
-                fprintf(stderr, "prc_encode_normals_c2: WARNING corner-0 normal disagrees with "
-                    "traversal's own reversed-bit decision on growing triangle %u -- "
-                    "canary check, see comment above\n", k);
+                fprintf(stderr, "prc_encode_normals_c2: WARNING corner-0 DECODED normal's reversed-bit "
+                    "(%u) disagrees with the traversal's own inline decision (%u, from the RAW real "
+                    "normal) on growing triangle %u -- canary check, see comment above\n",
+                    derived_reversed, trav->triangle_reversed[k], k);
                 prc_error(ctx, PRC_ERROR_INTERNAL,
                     "prc_encode_normals_c2: normals reverse a growing triangle (unsupported)\n");
                 goto fail;
@@ -2349,10 +2384,9 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     prc_encode_traversal_result trav;
     uint32_t *orig_face_id = NULL;      /* num_triangles entries, ORIGINAL (pre-preprocess) order */
     uint32_t *face_indices_post = NULL; /* mesh.num_triangles entries, POST-preprocess order */
-    double *corner_normals = NULL;      /* mesh.num_triangles * 9, POST-preprocess order */
-    double *real_normals = NULL;        /* mesh.num_positions * 3, averaged from corner_normals;
-                                            fed into prc_encode_traversal so it can decide each
-                                            triangle's normal_was_reversed bit inline */
+    double *corner_normals = NULL;      /* mesh.num_triangles * 9, POST-preprocess order; also fed
+                                            into prc_encode_traversal as real_normals so it can decide
+                                            each triangle's normal_was_reversed bit inline */
     uint8_t *rev = NULL;
     int32_t *angles = NULL;
     uint8_t *bin = NULL;
@@ -2427,39 +2461,22 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             }
         }
 
-        /* Average down to one normal per deduplicated mesh position so
-           prc_encode_traversal can decide each triangle's normal_was_reversed
-           bit INLINE, during the single traversal pass below, from that
-           triangle's own true final vertex order -- see prc_encode_traversal's
-           header comment for why a precomputed baseline (the old two-pass
-           design) can't do this correctly: reversing a triangle changes push
-           order for everything downstream of it in the traversal, which
-           invalidates a baseline's assumptions for those triangles. Measured
-           on turbine tess 902: 49% of triangles diverged between a baseline-
-           computed value and reality, confirming this isn't a rare edge case. */
-        real_normals = (double *)prc_calloc(ctx, (size_t)mesh.num_positions * 3, sizeof(double));
-        if (real_normals == NULL)
-        {
-            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
-            ret = PRC_ERROR_MEMORY;
-            goto cleanup;
-        }
-        for (k = 0; k < mesh.num_triangles; k++)
-        {
-            uint32_t c;
-            for (c = 0; c < 3; c++)
-            {
-                uint32_t v = mesh.tri_indices[(size_t)k * 3 + c];
-                const double *cn = &corner_normals[((size_t)k * 3 + c) * 3];
-
-                real_normals[(size_t)v * 3 + 0] += cn[0];
-                real_normals[(size_t)v * 3 + 1] += cn[1];
-                real_normals[(size_t)v * 3 + 2] += cn[2];
-            }
-        }
     }
 
-    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL, real_normals);
+    /* corner_normals (mesh order, 9 doubles/triangle -- NULL when
+       must_recalculate_normals) is passed straight through as
+       prc_encode_traversal's real_normals: the inline reversed-bit decision
+       needs TRAVERSAL corner 0's specific real normal, not a blurred
+       per-position average, to agree with prc_encode_normals_c2's own
+       corner-0-specific rejection check below (see prc_encode_decide_reversed's
+       comment) -- see prc_encode_traversal's header comment for why a
+       precomputed baseline (the old two-pass design) can't decide this
+       correctly at all: reversing a triangle changes push order for
+       everything downstream of it in the traversal, invalidating a
+       baseline's assumptions for those triangles. Measured on turbine tess
+       902: 49% of triangles diverged between a baseline-computed value and
+       reality, confirming this isn't a rare edge case. */
+    code = prc_encode_traversal(ctx, &mesh, face_indices_post, mesh.tolerance_mm, &trav, NULL, NULL, corner_normals);
     if (code != 0) goto cleanup;
     trav_ready = 1;
 
@@ -2478,7 +2495,7 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
                beats exact-but-rejected.
 
                The traversal above already decided each triangle's
-               normal_was_reversed bit consistently (using real_normals, in
+               normal_was_reversed bit consistently (using corner_normals, in
                the same single pass that built the topology), so recovering
                rev[] is just reading it back -- no second traversal needed. */
             prc_free(ctx, corner_normals);
@@ -2510,7 +2527,6 @@ cleanup:
     if (orig_face_id != NULL) prc_free(ctx, orig_face_id);
     if (face_indices_post != NULL) prc_free(ctx, face_indices_post);
     if (corner_normals != NULL) prc_free(ctx, corner_normals);
-    if (real_normals != NULL) prc_free(ctx, real_normals);
     if (rev != NULL) prc_free(ctx, rev);
     if (angles != NULL) prc_free(ctx, angles);
     if (bin != NULL) prc_free(ctx, bin);
