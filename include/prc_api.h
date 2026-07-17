@@ -858,8 +858,10 @@ typedef struct prc_api_write_tessellation_s
     /** 3 doubles per normal, or NULL to have the encoder compute a normal
         per face group (see face_tri_counts) instead of using a supplied
         one: TRIANGLES computes one flat normal per face from that face's
-        first triangle; COMPRESSED reconstructs normals from geometry
-        (PRC_TYPE_TESS_3D_Compressed's own "recalculate normals" path). */
+        first triangle (unless must_calculate_normals is set, below);
+        COMPRESSED reconstructs normals from geometry (PRC_TYPE_TESS_3D_
+        Compressed's own "recalculate normals" path). Must be NULL if
+        must_calculate_normals is set. */
     const double *normals;
     uint32_t      num_normals;
     /** 3 vertex indices per triangle (into `positions`). */
@@ -879,13 +881,25 @@ typedef struct prc_api_write_tessellation_s
         (the memset(0) default) resolves to prc_write_tol_relative(1e-6).
         Ignored by TRIANGLES. */
     prc_write_tolerance tolerance;
-    /** COMPRESSED only, and only when `normals` is NULL (recalculated-
-        normals path): the dihedral angle, in degrees, above which the
-        decoder treats an edge as a hard crease instead of smoothing across
-        it. 0 resolves to a default of 30 degrees. Ignored when `normals`
-        is supplied (every corner's normal is then taken exactly as given,
-        regardless of geometric creasing) or when kind is TRIANGLES. */
+    /** COMPRESSED: only when `normals` is NULL (recalculated-normals path):
+        the dihedral angle, in degrees, above which the decoder treats an
+        edge as a hard crease instead of smoothing across it. 0 resolves to
+        a default of 30 degrees. Ignored when `normals` is supplied (every
+        corner's normal is then taken exactly as given, regardless of
+        geometric creasing).
+        TRIANGLES: only when must_calculate_normals is set -- written
+        verbatim (no default substitution) as the stored crease_angle field,
+        which the *reader* applies when recomputing per-vertex normals.
+        Ignored otherwise. */
     double crease_angle_degrees;
+    /** TRIANGLES only: if non-zero, no normal data is written at all
+        (`normals`/`norm_indices` must be NULL) -- the reader recomputes
+        per-vertex normals from geometry and crease_angle_degrees at read
+        time (PRC_TYPE_TESS_3D's own must_calculate_normals convention, the
+        convention real-world producers commonly use for this tessellation
+        type; see src/prc_write_tess_3d.h for the exact wire format).
+        Ignored for COMPRESSED and WIRE. */
+    int must_calculate_normals;
 
     /* --- PRC_API_WRITE_TESS_KIND_WIRE --- */
     const prc_api_write_wire_element *wire_elements;

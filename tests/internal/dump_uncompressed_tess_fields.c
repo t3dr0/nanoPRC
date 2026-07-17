@@ -28,9 +28,19 @@
        position_index*3, the value that actually appears in
        triangulated_index_array for a position reference). Skips the rest
        of the normal dump when used.
+     - --allcoords: prints every tessellation_coordinates value at full
+       (%.17g, bit-exact-roundtrippable) precision, one per line, followed
+       by every triangulated_index_array value, one per line -- for a
+       value-by-value diff between two files' decoded content (as opposed
+       to their raw bits), added for the 2026-07-16 bit-position-tracing
+       phase of the Acrobat blank-tree investigation (see ISO-SPEC/
+       blanktree-matrix-evidence-table.md row 31) to check whether the
+       decoded VALUES genuinely match between two independently-encoded
+       files of the same nominal geometry, before tracing bit-level
+       encoding choices. Skips the rest of the normal dump when used.
 
    HOW: usage: dump_uncompressed_tess_fields.exe <single_fs_input.prc>
-   [range_start range_count] | [--find x y z [tol=0.01]]
+   [range_start range_count] | [--find x y z [tol=0.01]] | [--allcoords]
    Extract a raw .prc first with extract_raw_prc.exe if starting from a
    PDF. */
 #include <stdio.h>
@@ -67,6 +77,7 @@ int main(int argc, char **argv)
 
     uint32_t range_start = 0, range_count = 0; /* optional: print this exact window of triangulated_index_array instead of the default first-60 */
     int find_mode = 0;
+    int allcoords_mode = 0;
     double find_xyz[3] = { 0, 0, 0 };
     double find_tol = 0.01;
     if (argc < 2) { printf("usage: %s <single_fs_input.prc> [range_start range_count] | [--find x y z [tol=0.01]]\n", argv[0]); return 2; }
@@ -77,6 +88,7 @@ int main(int argc, char **argv)
         find_xyz[0] = atof(argv[3]); find_xyz[1] = atof(argv[4]); find_xyz[2] = atof(argv[5]);
         if (argc >= 7) find_tol = atof(argv[6]);
     }
+    else if (argc >= 3 && strcmp(argv[2], "--allcoords") == 0) { allcoords_mode = 1; }
     else if (argc >= 4) { range_start = (uint32_t)strtoul(argv[2], NULL, 10); range_count = (uint32_t)strtoul(argv[3], NULL, 10); }
 
     fid = fopen(argv[1], "rb");
@@ -117,6 +129,7 @@ int main(int argc, char **argv)
             printf("zlib uncompress failed: %d\n", zret);
             return 1;
         }
+        printf("compressed_size %u inflated_size %lu\n", comp_len, (unsigned long)dest_len);
         prc_init_bit_state(ctx, &bit_state, tess_inflated, (size_t)dest_len);
     }
 
@@ -171,6 +184,20 @@ int main(int argc, char **argv)
             }
             printf("total matches: %u\n", nmatches);
             printf("RESULT OK\n");
+            free(section_offsets);
+            free(tess_inflated);
+            free(buf);
+            prc_api_release_context(ctx);
+            return 0;
+        }
+
+        if (allcoords_mode)
+        {
+            uint32_t nc = parsed->tessellation_coordinates.number_of_coordinates;
+            for (k = 0; k < nc; k++)
+                printf("%.17g\n", parsed->tessellation_coordinates.coordinates[k]);
+            for (k = 0; k < parsed->number_of_triangulated_indicies; k++)
+                printf("%u\n", parsed->triangulated_index_array[k]);
             free(section_offsets);
             free(tess_inflated);
             free(buf);

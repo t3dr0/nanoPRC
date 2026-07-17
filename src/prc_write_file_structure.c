@@ -73,7 +73,8 @@ prc_write_tessellation_section_to_stream(prc_context *ctx, prc_bit_write_state *
         {
             if (prc_bitwrite_uint32(ctx, s, PRC_TYPE_TESS_3D) != 0) goto fail;
             if (prc_write_tess_3d(ctx, s, e->positions, e->num_positions, e->normals, e->num_normals,
-                    e->tri_indices, e->norm_indices, e->num_triangles, e->face_tri_counts, e->num_faces) != 0)
+                    e->tri_indices, e->norm_indices, e->num_triangles, e->face_tri_counts, e->num_faces,
+                    e->must_calculate_normals, e->crease_angle_degrees) != 0)
                 goto fail;
         }
         else if (e->kind == PRC_WRITE_TESS_KIND_COMPRESSED)
@@ -129,17 +130,16 @@ fail:
    produced, tessellation-only compressed PRC file (used as a working
    reference specifically because it opens correctly in Acrobat) has SIX
    sections in its file structure's offset table (file-struct-header +
-   five content sections); this write facility only ever produced five
-   (file-struct-header + schema/globals + tree + tessellation + geometry),
-   omitting ExtraGeometry entirely -- matching the pre-existing comment on
-   prc_write_geometry_section_to_stream's caller about "some third-party
-   PRC readers assum[ing] Table 6's fixed section set is always present
-   and misread[ing] a later section's bytes as geometry otherwise". Field
-   order/content mirrors prc_parse_file_extra_geometry exactly (prc_parse_
-   file_structure.c): tag, ContentPRCBase (attribute_count, name), then
-   extra_geom_count -- that parser does NOT consume a trailing user_data
-   stream despite the struct having a user_data field, so this writer
-   doesn't emit one either. */
+   five content sections) -- this write facility matches that: the six-entry
+   offset table (see PRC_WRITE_PRC_FILE_SECTION_COUNT) covers file-struct-
+   header + schema/globals + tree + tessellation + geometry + ExtraGeometry,
+   this function providing the last of those, called from
+   prc_write_prc_buffer alongside prc_write_geometry_section_to_stream.
+   Field order/content mirrors prc_parse_file_extra_geometry exactly
+   (prc_parse_file_structure.c): tag, ContentPRCBase (attribute_count,
+   name), then extra_geom_count -- that parser does NOT consume a trailing
+   user_data stream despite the struct having a user_data field, so this
+   writer doesn't emit one either. */
 int
 prc_write_extra_geometry_section_to_stream(prc_context *ctx, prc_bit_write_state *s)
 {

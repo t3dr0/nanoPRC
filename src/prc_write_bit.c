@@ -332,11 +332,28 @@ prc_acofdoe_find_exponent(unsigned exponent_value)
    pre-built prefix code -- see the acofdoe[] table in prc_double.c), then
    the sign bit, then -- for entries that need one -- the mantissa. Mantissa
    bytes are chosen by directly checking, byte by byte, which of the
-   reader's encodings ("literal byte", "repeat of the immediately preceding
-   byte", or the two tail-fill shortcuts) reconstructs the real target
-   byte(s); this is always correct, though not maximally compact: offsets
-   2-5 and 7 (repeat of a byte further back than the immediately preceding
-   one) are valid per the reader but are never emitted by this encoder. */
+   reader's encodings ("literal byte" or one of the two tail-fill shortcuts)
+   reconstructs the real target byte(s); this is always correct, though not
+   maximally compact: offsets 2-7 (repeat of a byte further back than the
+   immediately preceding one) are valid per the reader but are never emitted
+   by this encoder.
+
+   Deliberately does NOT emit the reader's "offset=1" shortcut (repeat of
+   the single immediately-preceding byte) -- confirmed via a multi-day,
+   bit-position-level bisection investigation (2026-07-16/17, see the
+   Acrobat blank-model-tree TRIANGLES-write investigation notes) to be
+   accepted by this codebase's own reader and by an independent commercial
+   PRC SDK (Interchange3D), yet SILENTLY MISHANDLED by real Adobe Acrobat
+   for at least one real-world value in a way that leaves both the 3D
+   canvas and model tree completely blank with no error -- while every
+   other encoding choice this writer emits (literal bytes, the two bulk
+   tail-fill shortcuts, the acofdoe prefix codes) round-trips through
+   Acrobat correctly. Bisected to a single position in a 4900-position test
+   grid; flipping that one byte's encoding from offset=1 to a literal byte
+   (with everything else unchanged) took the file from Acrobat-blank to
+   Acrobat-working. The mechanism inside Acrobat's own PRC engine was not
+   determined (proprietary, unavailable for inspection) -- avoiding this
+   one shortcut is the confirmed, minimal fix. */
 int
 prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
 {
@@ -437,14 +454,6 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
                     if (prc_bitwrite_uint8(ctx, state, tb[5]) != 0) return -1;
                     break;
                 }
-            }
-
-            if (tb[i] == prev_byte)
-            {
-                if (prc_bitwrite_bit(ctx, state, 0) != 0) return -1;
-                if (prc_bitwrite_uint_variable_bit(ctx, state, 1, 3) != 0) return -1;
-                i++;
-                continue;
             }
 
             if (prc_bitwrite_bit(ctx, state, 1) != 0) return -1;

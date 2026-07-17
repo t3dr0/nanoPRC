@@ -41,12 +41,20 @@ add_executable(splice_schema_tree_tess_section tests/internal/splice_schema_tree
 target_link_libraries(splice_schema_tree_tess_section prc_static)
 target_include_directories(splice_schema_tree_tess_section PRIVATE tests)
 
+add_executable(splice_schema_tree_tess_section_triangles tests/internal/splice_schema_tree_tess_section_triangles.c)
+target_link_libraries(splice_schema_tree_tess_section_triangles prc_static)
+target_include_directories(splice_schema_tree_tess_section_triangles PRIVATE tests)
+
 # Pure byte-level splicer, no nanoPRC linkage needed.
 add_executable(splice_geom_from_real tests/internal/splice_geom_from_real.c)
 
 add_executable(reencode_real_tess tests/internal/reencode_real_tess.c)
 target_link_libraries(reencode_real_tess prc_static)
 target_include_directories(reencode_real_tess PRIVATE tests)
+
+add_executable(reencode_real_tess_triangles tests/internal/reencode_real_tess_triangles.c)
+target_link_libraries(reencode_real_tess_triangles prc_static)
+target_include_directories(reencode_real_tess_triangles PRIVATE tests)
 
 add_executable(verify_tess_positions tests/internal/verify_tess_positions.c)
 target_link_libraries(verify_tess_positions prc_static)
@@ -95,3 +103,35 @@ target_include_directories(census_tess PRIVATE tests)
 add_executable(check_vertex_normal_variance tests/internal/check_vertex_normal_variance.c)
 target_link_libraries(check_vertex_normal_variance prc_static)
 target_include_directories(check_vertex_normal_variance PRIVATE tests)
+
+add_executable(check_schema_extension tests/internal/check_schema_extension.c)
+target_link_libraries(check_schema_extension prc_static)
+target_include_directories(check_schema_extension PRIVATE tests)
+
+add_executable(matrix_blank_tree tests/internal/matrix_blank_tree.c)
+target_link_libraries(matrix_blank_tree prc_static)
+target_include_directories(matrix_blank_tree PRIVATE tests)
+
+add_executable(standalone_tetrahedron_triangles tests/internal/standalone_tetrahedron_triangles.c)
+target_link_libraries(standalone_tetrahedron_triangles prc_static)
+target_include_directories(standalone_tetrahedron_triangles PRIVATE tests)
+
+add_executable(standalone_grid_triangles tests/internal/standalone_grid_triangles.c)
+target_link_libraries(standalone_grid_triangles prc_static)
+target_include_directories(standalone_grid_triangles PRIVATE tests)
+
+add_executable(experiment_mustcalc_quad tests/internal/experiment_mustcalc_quad.c)
+target_link_libraries(experiment_mustcalc_quad prc_static)
+target_include_directories(experiment_mustcalc_quad PRIVATE tests)
+
+add_executable(standalone_quad_deeptree tests/internal/standalone_quad_deeptree.c)
+target_link_libraries(standalone_quad_deeptree prc_static)
+target_include_directories(standalone_quad_deeptree PRIVATE tests)
+
+add_executable(bisect_tess_positions tests/internal/bisect_tess_positions.c)
+target_link_libraries(bisect_tess_positions prc_static)
+target_include_directories(bisect_tess_positions PRIVATE tests)
+
+add_executable(inspect_position_bits tests/internal/inspect_position_bits.c)
+target_link_libraries(inspect_position_bits prc_static)
+target_include_directories(inspect_position_bits PRIVATE tests)

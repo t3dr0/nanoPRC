@@ -27,7 +27,8 @@
    doubles, one face-index array entry per triangle vertex.
 
    positions: 3 doubles per position, num_positions entries.
-   normals/norm_indices: if norm_indices is non-NULL, it supplies 3 normal
+   normals/norm_indices: ignored (must be NULL) if must_calculate_normals is
+     set. Otherwise, if norm_indices is non-NULL, it supplies 3 normal
      indices per triangle (into `normals`, num_normals entries) and every
      triangle is written PRC_FACETESSDATA_Triangle (per-vertex normals). If
      norm_indices is NULL, `normals`/`num_normals` are ignored: one normal is
@@ -38,6 +39,17 @@
    face_tri_counts: num_faces entries; face_tri_counts[f] triangles are
      consumed from tri_indices/norm_indices, in order, for face f. Must sum
      to num_triangles.
+   must_calculate_normals: if non-zero, no normal data is stored at all
+     (number_of_normal_coordinates=0) and every triangle is written
+     PRC_FACETESSDATA_Triangle with a position-only triangulated_index_array
+     entry (no interleaved normal index) -- the reader recomputes per-vertex
+     normals from geometry + crease_angle_degrees. Incompatible with
+     norm_indices != NULL. normal_recalculation_flags is always written as 0,
+     matching the real-producer convention observed in xml-sample-wrl_ePRC.pdf
+     and ElevationMeshIS_ePRC.pdf (see dump_uncompressed_tess_fields.c).
+   crease_angle_degrees: only meaningful when must_calculate_normals is set;
+     the dihedral angle, in degrees, above which the reader treats an edge as
+     a hard crease instead of smoothing across it. Ignored otherwise.
 
    Face-embedded wire indices are out of scope (not written). */
 int prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
@@ -45,6 +57,7 @@ int prc_write_tess_3d(prc_context *ctx, prc_bit_write_state *s,
     const double *normals, uint32_t num_normals,
     const uint32_t *tri_indices, const uint32_t *norm_indices,
     uint32_t num_triangles,
-    const uint32_t *face_tri_counts, uint32_t num_faces);
+    const uint32_t *face_tri_counts, uint32_t num_faces,
+    int must_calculate_normals, double crease_angle_degrees);
 
 #endif

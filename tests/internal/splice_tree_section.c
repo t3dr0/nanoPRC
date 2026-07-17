@@ -1,6 +1,21 @@
 /* INTERNAL DEVELOPMENT TOOL -- not part of the permanent test suite, not
    registered with CTest, no exit-code contract to keep stable.
 
+   *** KNOWN BUG, DO NOT TRUST OUTPUT UNTIL FIXED ***: this tool's regenerated
+   model section is built via the plain prc_write_model_file_to_stream, which
+   hardcodes nanoPRC's own PRC_WRITE_FILE_STRUCT_UID0 constant as its far
+   reference to "which file structure this model belongs to" -- but this
+   tool always keeps the REAL file's main header untouched, which declares a
+   DIFFERENT (the real file's own) file-structure UID. The two silently
+   mismatch, which is exactly the failure class prc_write_model_file_to_
+   stream's own doc comment already describes ("can not find FileStructure").
+   Confirmed via matrix_blank_tree.c (see ISO-SPEC/blanktree-matrix-evidence-
+   table.md): fixing this (threading the real file's own fs_uid through
+   prc_write_model_file_to_stream_ex instead) turned previously-"failing"
+   Acrobat/PDF-XChange results into working ones for equivalent content. Any
+   "Acrobat blank tree" conclusion drawn from this tool's prior output should
+   be treated as invalid until re-tested with the same fix applied here.
+
    WHAT: Takes a REAL, independently-produced, complete raw .prc file and
    rebuilds it keeping the file-struct-header, schema/globals,
    tessellation, geometry, extra_geometry, and model-file sections byte-
@@ -10,13 +25,21 @@
    file's first tessellation entry (biased_index_tessellation=1) and
    carries no style reference (default_biased_style_index=0).
 
-   HOW: usage: splice_tree_section.exe <real_input.prc> <output.prc>. The
-   regenerated tree always has exactly 2 products (root last, biased
-   index 2); this ONLY resolves correctly if the real input file's own
-   model-file root_index also happens to be 2 (true of both reference
-   files this was tested against, by coincidence of their own tree
-   shape -- NOT guaranteed for an arbitrary input; check with scan_prc's
-   DEBUG2 trace first).
+   HOW: usage: splice_tree_section.exe <real_input.prc> <output.prc>
+   [output.pdf]. The regenerated tree always has exactly 2 products (root
+   last, biased index 2). The real file's own model-file section (a
+   SEPARATE section from the tree, addressed via start_offset/end_offset,
+   not section_offset[]) is ALSO regenerated to match -- it carries its
+   own independent root_index reference into the tree's products[] array
+   (see prc_write_model.c's own doc comment), and earlier versions of this
+   tool that kept the real model-file section byte-for-byte produced a
+   silent index mismatch whenever the real file's own tree didn't happen
+   to have exactly 2 products (confirmed via DEBUG2:
+   data->product_occurences[0].root_index in prc_parse_file_structure.c),
+   invalidating any Acrobat-blank-tree conclusion drawn from that
+   configuration -- not a genuine tree-encoding result, just an
+   uncontrolled variable. Regenerating both together, self-consistently,
+   removes that confound entirely.
 
    *** KNOWN INVALID FOR SCHEMA-EXTENDED FILES *** -- this tool's central
    premise (splice only the tree, keep the real schema) turned out to be
@@ -62,9 +85,9 @@ int main(int argc, char **argv)
     uint32_t start_offset, end_offset;
     uint32_t i;
     size_t header_prefix_len; /* everything up to and including section_count */
-    prc_bit_write_state tree_s;
-    uint8_t *tree_comp = NULL;
-    size_t tree_comp_len = 0;
+    prc_bit_write_state tree_s, model_s;
+    uint8_t *tree_comp = NULL, *model_comp = NULL;
+    size_t tree_comp_len = 0, model_comp_len = 0;
     uint32_t *new_section_offsets;
     uint32_t new_start_offset, new_end_offset;
     size_t new_total_size;
@@ -77,7 +100,7 @@ int main(int argc, char **argv)
 
     if (argc < 3)
     {
-        printf("usage: %s <real_input.prc> <output.prc>\n", argv[0]);
+        printf("usage: %s <real_input.prc> <output.prc> [output.pdf]\n", argv[0]);
         return 2;
     }
 
@@ -158,6 +181,24 @@ int main(int argc, char **argv)
     }
     printf("Generated replacement tree section: %zu bytes compressed, root_biased_index=%u\n", tree_comp_len, root_biased_index);
 
+    /* Regenerate the model-file section too, self-consistently matching
+       root_biased_index -- see the header comment for why this matters. */
+    memset(&model_s, 0, sizeof(model_s));
+    if (prc_bitwrite_init(ctx, &model_s, 256) != 0) { printf("model bitwrite_init failed\n"); return 1; }
+    if (prc_write_model_file_to_stream(ctx, &model_s, NULL, root_biased_index, 1) != 0)
+    {
+        printf("prc_write_model_file_to_stream failed\n");
+        prc_api_print_error_stack(ctx);
+        return 1;
+    }
+    if (prc_bitwrite_flush(ctx, &model_s) != 0) { printf("model bitwrite_flush failed\n"); return 1; }
+    if (prc_write_deflate(ctx, model_s.buf, model_s.byte_pos, &model_comp, &model_comp_len) != 0)
+    {
+        printf("model prc_write_deflate failed\n");
+        return 1;
+    }
+    printf("Generated replacement model section: %zu bytes compressed, root_index=%u\n", model_comp_len, root_biased_index);
+
     /* Rebuild section_offsets: [0]=header_prefix (same), [1]=same (schema
        start, unchanged), [2]=same (tree start, unchanged -- schema's END
        doesn't move), [3] = section_offsets[2] + our tree_comp_len (new
@@ -172,8 +213,11 @@ int main(int argc, char **argv)
         int32_t delta = (int32_t)new_section_offsets[3] - (int32_t)section_offsets[3];
         for (i = 4; i < section_count; i++)
             new_section_offsets[i] = (uint32_t)((int32_t)section_offsets[i] + delta);
+        /* start_offset (model section start) shifts like every later
+           section, but end_offset is now determined by OUR regenerated
+           model section's own length, not a shift of the real one's. */
         new_start_offset = (uint32_t)((int32_t)start_offset + delta);
-        new_end_offset = (uint32_t)((int32_t)end_offset + delta);
+        new_end_offset = new_start_offset + (uint32_t)model_comp_len;
     }
     new_total_size = (size_t)new_end_offset;
 
@@ -196,8 +240,10 @@ int main(int argc, char **argv)
     memcpy(out_buf + new_section_offsets[0], buf + section_offsets[0], section_offsets[2] - section_offsets[0]);
     /* our new tree section, at the real tree section's start */
     memcpy(out_buf + new_section_offsets[2], tree_comp, tree_comp_len);
-    /* every remaining real section (tessellation, geometry, extra_geometry, model-file), unchanged content, shifted position */
-    memcpy(out_buf + new_section_offsets[3], buf + section_offsets[3], end_offset - section_offsets[3]);
+    /* real tessellation/geometry/extra_geometry (sections 3..end of section_offsets[]), unchanged content, shifted position */
+    memcpy(out_buf + new_section_offsets[3], buf + section_offsets[3], start_offset - section_offsets[3]);
+    /* our new model-file section, at the (shifted) model section's start -- NOT the real one */
+    memcpy(out_buf + new_start_offset, model_comp, model_comp_len);
 
     out_fid = fopen(argv[2], "wb");
     if (out_fid == NULL) { printf("failed to open output %s\n", argv[2]); return 1; }
@@ -206,8 +252,39 @@ int main(int argc, char **argv)
 
     printf("Wrote %s (%zu bytes)\n", argv[2], new_total_size);
 
+    if (argc >= 4)
+    {
+        prc_pdf_view_spec view;
+        prc_pdf_write_options pdf_opts;
+        int code;
+
+        memset(&view, 0, sizeof(view));
+        view.name = "Default";
+        view.eye[0] = 100.0; view.eye[1] = -130.0; view.eye[2] = 70.0;
+        view.target[0] = 0.0; view.target[1] = 0.0; view.target[2] = 0.0;
+        view.up[0] = 0.0; view.up[1] = 0.0; view.up[2] = 1.0;
+        view.is_default = 1;
+
+        memset(&pdf_opts, 0, sizeof(pdf_opts));
+        pdf_opts.views = &view;
+        pdf_opts.num_views = 1;
+
+        code = prc_api_pdf_embed_prc(ctx, argv[3], out_buf, new_total_size, &pdf_opts);
+        if (code < 0)
+        {
+            printf("prc_api_pdf_embed_prc failed: %d\n", code);
+            prc_api_print_error_stack(ctx);
+        }
+        else
+        {
+            printf("Wrote %s (with explicit Default view)\n", argv[3]);
+        }
+    }
+
     prc_free(ctx, tree_comp);
+    prc_free(ctx, model_comp);
     prc_bitwrite_release(ctx, &tree_s);
+    prc_bitwrite_release(ctx, &model_s);
     prc_api_release_context(ctx);
     free(section_offsets);
     free(new_section_offsets);
