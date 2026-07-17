@@ -728,13 +728,32 @@ prc_parse_graph_picture(prc_context *ctx, prc_bit_state *bit_state, prc_graph_pi
             &header->files[k].x, &header->files[k].y, &header->files[k].n, 0);
         if (stb_output != NULL)
         {
-            header->files[k].raw_image = prc_malloc(ctx, header->files[k].x * header->files[k].y * header->files[k].n);
+            size_t image_size;
+
+            if (header->files[k].x <= 0 || header->files[k].y <= 0 || header->files[k].n <= 0 ||
+                (size_t)header->files[k].x > SIZE_MAX / (size_t)header->files[k].y)
+            {
+                stbi_image_free(stb_output);
+                prc_error(ctx, PRC_ERROR_MEMORY, "Image dimensions overflow in prc_parse_uncomp_file\n");
+                return PRC_ERROR_MEMORY;
+            }
+            image_size = (size_t)header->files[k].x * (size_t)header->files[k].y;
+            if (image_size > SIZE_MAX / (size_t)header->files[k].n)
+            {
+                stbi_image_free(stb_output);
+                prc_error(ctx, PRC_ERROR_MEMORY, "Image dimensions overflow in prc_parse_uncomp_file\n");
+                return PRC_ERROR_MEMORY;
+            }
+            image_size *= (size_t)header->files[k].n;
+
+            header->files[k].raw_image = prc_malloc(ctx, image_size);
             if (header->files[k].raw_image == NULL)
             {
+                stbi_image_free(stb_output);
                 prc_error(ctx, PRC_ERROR_MEMORY, "Failed in prc_parse_uncomp_file\n");
                 return PRC_ERROR_MEMORY;
             }
-            memcpy(header->files[k].raw_image, stb_output, header->files[k].x * header->files[k].y * header->files[k].n);
+            memcpy(header->files[k].raw_image, stb_output, image_size);
             data->num_elements_per_pixel = header->files[k].n;
             stbi_image_free(stb_output);
         }
