@@ -3446,10 +3446,6 @@ prc_api_get_tessellation_vertices(prc_context *ctx, prc_api_data data_in,
         /* Now we must check the single norm textured objects */
         if (face.used_entities_flag & PRC_FACETESSDATA_TriangleOneNormalTextured)
         {
-            code = PRC_ERROR_NOT_IMPLEMENTED;
-            prc_error(ctx, PRC_ERROR_NOT_IMPLEMENTED,
-                "TriangleOneNormalTextured is not implemented in prc_api_get_tessellation_vertices\n");
-            goto uncompressed_failure;
             /* Read number of triangles with one norm and texture */
             prc_internal_api_set_triangles(ctx, face, 1, entities_textured_one_norm,
                                         &face_tessellation_index, &num_indices);
