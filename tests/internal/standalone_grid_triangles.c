@@ -36,7 +36,7 @@
    components, etc.) is still unaccounted for.
 
    HOW: usage: standalone_grid_triangles.exe <output.prc> <N> [output.pdf] [mustcalc] [flattree]
-   [roundup|rounddown|roundzero]
+   [roundup|rounddown|roundzero] [compressed]
    N is the grid side length; produces N*N positions, 2*(N-1)*(N-1)
    triangles. E.g. N=100 -> 10000 positions, 19602 triangles (close to
    turbine tess 902's scale); N=175 -> ~30000 triangles (close to tess 901).
@@ -85,6 +85,7 @@ int main(int argc, char **argv)
     const char *out_pdf = NULL;
     int mustcalc = 0;
     int flattree = 0;
+    int compressed = 0;
     int round_mode = FE_TONEAREST; /* default */
     int arg_i;
     prc_api_write_tessellation tess;
@@ -107,6 +108,16 @@ int main(int argc, char **argv)
     {
         if (strcmp(argv[arg_i], "mustcalc") == 0) mustcalc = 1;
         if (strcmp(argv[arg_i], "flattree") == 0) flattree = 1;
+        /* 2026-07-17 addition: PRC_API_WRITE_TESS_KIND_COMPRESSED instead of
+           TRIANGLES, for scale/robustness stress-testing that write path
+           independently -- see prc_api.h's own doc comment for its two
+           separate, already-known, unrelated-to-Bug-#2 open issues (a
+           per-vertex normal-sign bug, and an independent reader reportedly
+           seeing null/empty geometry for COMPRESSED output). Not compatible
+           with mustcalc (COMPRESSED has its own separate recalculated-
+           normals convention via crease_angle_degrees, orthogonal to this
+           tool's mustcalc flag, which only applies to TRIANGLES). */
+        if (strcmp(argv[arg_i], "compressed") == 0) compressed = 1;
         /* 2026-07-16 addition: FPU rounding mode for the position/normal
            computation -- tests whether a specific ULP-level bit pattern in
            the computed doubles (not the encoding algorithm, already
@@ -178,7 +189,7 @@ int main(int argc, char **argv)
     face_tri_counts[0] = num_triangles;
 
     memset(&tess, 0, sizeof(tess));
-    tess.kind = PRC_API_WRITE_TESS_KIND_TRIANGLES;
+    tess.kind = compressed ? PRC_API_WRITE_TESS_KIND_COMPRESSED : PRC_API_WRITE_TESS_KIND_TRIANGLES;
     tess.positions = positions;
     tess.num_positions = num_positions;
     tess.normals = normals;
