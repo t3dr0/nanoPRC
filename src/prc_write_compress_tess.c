@@ -1064,10 +1064,25 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     }
 
     /* One global origin (the decoder's origin_array): the bbox min corner,
-       used by every chain start and one/two-ref branch. */
-    out->origin[0] = mesh->bbox[0];
-    out->origin[1] = mesh->bbox[1];
-    out->origin[2] = mesh->bbox[2];
+       used by every chain start and one/two-ref branch. Round-tripped
+       through float BEFORE any encoder math uses it, because
+       prc_write_compress_tess_to_stream writes this value as a 32-bit
+       float (prc_bitwrite_float) -- a real decoder can only ever recover
+       that float-precision value, never the full double. Using the
+       untruncated double here made every one of the encoder's own
+       "decoded_pos" predictions systematically wrong relative to what any
+       real decoder reconstructs, by exactly the float round-trip error on
+       whichever component doesn't happen to survive it exactly (confirmed:
+       2.2e-7 on one real repro's X component, 0 on components that do
+       round-trip exactly). Each chain restart re-anchors a fresh grow chain
+       to this same mismatched origin, so the error compounds further with
+       every additional chain a large/fragmented mesh needs -- this was
+       nanoPRC's real "shard corruption on large COMPRESSED meshes" bug
+       (see project memory), invisible on single-chain files because the
+       origin is only ever referenced once there. */
+    out->origin[0] = (double)(float)mesh->bbox[0];
+    out->origin[1] = (double)(float)mesh->bbox[1];
+    out->origin[2] = (double)(float)mesh->bbox[2];
 
     num_tris = mesh->num_triangles;
     num_pos = mesh->num_positions;
