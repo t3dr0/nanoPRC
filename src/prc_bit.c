@@ -1052,18 +1052,22 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
 
             /* Build the tree.  The idea here is to only construct the path to each leaf */
             /* This also creates a linear path through the nodes to make it easy to free */
-            root_node = prc_new_huff_node(ctx);
 
             /* For now assume that we need twice as many nodes as we have for leaves. If could be
                more. If needed we will realloc */
             linear_node_size = 2 * num_leaves;
             linear_nodes = (prc_huff_node**)prc_calloc(ctx, linear_node_size, sizeof(prc_huff_node*));
-            linear_nodes[0] = root_node;
-            linear_node_count = 1;
+            if (linear_nodes == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of linear_nodes\n");
+                return NULL;
+            }
 
+            root_node = prc_new_huff_node(ctx);
             if (root_node == NULL)
             {
                 prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of root_node\n");
+                prc_free(ctx, linear_nodes);
                 return NULL;
             }
 
