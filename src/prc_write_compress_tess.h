@@ -83,6 +83,10 @@ typedef struct prc_encode_traversal_result_s
                                             position, so normal bases derived from these match
                                             the decoder's own basis construction */
     uint32_t  num_decoded_points;
+    uint8_t  *triangle_reversed;         /* 1 per triangle, TRAVERSAL order: the normal_was_reversed
+                                            bit decided inline during traversal from real_normals
+                                            (see prc_encode_traversal); all zero if real_normals
+                                            was NULL. Reindex by triangle_mesh_order for mesh order. */
 } prc_encode_traversal_result;
 
 /* Optional per-decoder-point diagnostics captured during traversal, one entry
@@ -98,18 +102,38 @@ typedef struct prc_vertex_analysis_s
 
 /* analysis_out may be NULL to skip analysis capture entirely; when non-NULL
    it receives a caller-owned (prc_free) array of *analysis_count_out
-   (== out->num_decoded_points) entries. tri_reversed may be NULL (no
-   triangle reversed, prior behavior unchanged) or mesh->num_triangles
-   entries (mesh order): when tri_reversed[t] is set, the traversal swaps
-   which physical edge of triangle t it treats as "right" vs "left" to
-   mirror the decoder's prc_set_left_right_edge_indices swap for a
-   reversed triangle, so a caller that later encodes normals with rev[k]
-   matching tri_reversed can safely mark growing triangles reversed too. */
+   (== out->num_decoded_points) entries.
+
+   real_normals may be NULL (no triangle ever marked reversed, prior
+   behavior unchanged) or mesh->num_positions entries (3 doubles per
+   DEDUPLICATED mesh position -- same shape as prc_encode_normals_c1's
+   input_normals). When non-NULL, each triangle's normal_was_reversed bit is
+   decided INLINE, at the moment its final decoder point-index order
+   (idx[0..2]) is established (chain start or grow step), by comparing the
+   real supplied normal (averaged over the triangle's 3 real_normals
+   entries) against the geometric normal derived from that triangle's own
+   just-assigned decoded positions. This is deliberately
+   NOT a two-pass (baseline-then-rebuild) design: reversing a triangle
+   changes which of its two forward edges is pushed/popped first (see
+   prc_encode_edge_status), which changes traversal order for everything
+   downstream of it, which would invalidate a precomputed array's
+   assumptions for those triangles -- confirmed empirically (measured 49%
+   of triangles diverging between a precomputed baseline and reality on a
+   real mesh). Deciding the bit at the moment idx[] is finalized, in the
+   same single forward pass that establishes idx[] in the first place,
+   has no such staleness: by construction, the bit used to swap left/right
+   for triangle T is always based on T's own real, final vertex order.
+
+   The resulting bit is used exactly like the old tri_reversed[] parameter
+   to swap which physical edge of a triangle is treated as "right" vs
+   "left" (mirroring the decoder's prc_set_left_right_edge_indices swap),
+   and is ALSO returned via out->triangle_reversed so the caller doesn't
+   need a separate post-pass to recover it. */
 int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
     prc_encode_traversal_result *out,
     prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
-    const uint8_t *tri_reversed);
+    const double *real_normals);
 
 void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
 
