@@ -2703,7 +2703,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
                     treated_details.V1, new_point, treated_details.index0,
                     treated_details.index1, new_indice_index,
                     treated_details.normal_index0, treated_details.normal_index1,
-                    0, 0);  /* TODO: Check this  last normal index... */
+                    0, 0);  /* normal_index2 is a placeholder: prc_handle_normal_calculation below unconditionally recomputes it before it's ever read. */
 
                 DEBUG_LOG("Next Pt (was a reference): %d\n", new_indice_index);
                 DEBUG_LOG("    [%.17f %.17f %.17f]\n", new_point.x, new_point.y, new_point.z);
