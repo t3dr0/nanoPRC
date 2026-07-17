@@ -76,6 +76,10 @@ add_executable(detect_tess_spikes tests/internal/detect_tess_spikes.c tests/inte
 target_link_libraries(detect_tess_spikes prc_static)
 target_include_directories(detect_tess_spikes PRIVATE tests)
 
+add_executable(check_grid_radius tests/internal/check_grid_radius.c)
+target_link_libraries(check_grid_radius prc_static)
+target_include_directories(check_grid_radius PRIVATE tests)
+
 add_executable(dump_raw_tess_arrays tests/internal/dump_raw_tess_arrays.c)
 target_link_libraries(dump_raw_tess_arrays prc_static)
 target_include_directories(dump_raw_tess_arrays PRIVATE tests)
