@@ -370,6 +370,15 @@ int main(int argc, char **argv)
     free(positions);
     free(normals);
     free(tri_indices);
+    /* prc_api_release_data walks tess.tess_faces[*] to free its internal
+       sub-allocations (prc_face_internal_face's reserved data, etc.) -- it
+       must run BEFORE freeing the tess_faces array itself (this tool's own
+       raw calloc at the top of main), or that walk reads freed memory. Only
+       manifested as a hard crash on a larger tessellation (tess 901, 26540
+       triangles) under ASan; a smaller one (tess 902) silently read freed-
+       but-not-yet-reused memory without crashing. */
+    prc_api_release_data(ctx, data, &tess, 1, NULL, 0, model_tree);
+    free(tess.tess_faces);
     prc_api_release_context(ctx);
     return 0;
 }

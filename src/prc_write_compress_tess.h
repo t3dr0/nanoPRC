@@ -83,6 +83,10 @@ typedef struct prc_encode_traversal_result_s
                                             position, so normal bases derived from these match
                                             the decoder's own basis construction */
     uint32_t  num_decoded_points;
+    uint8_t  *triangle_reversed;         /* 1 per triangle, TRAVERSAL order: the normal_was_reversed
+                                            bit decided inline during traversal from real_normals
+                                            (see prc_encode_traversal); all zero if real_normals
+                                            was NULL. Reindex by triangle_mesh_order for mesh order. */
 } prc_encode_traversal_result;
 
 /* Optional per-decoder-point diagnostics captured during traversal, one entry
@@ -98,22 +102,49 @@ typedef struct prc_vertex_analysis_s
 
 /* analysis_out may be NULL to skip analysis capture entirely; when non-NULL
    it receives a caller-owned (prc_free) array of *analysis_count_out
-   (== out->num_decoded_points) entries. tri_reversed may be NULL (no
-   triangle reversed, prior behavior unchanged) or mesh->num_triangles
-   entries (mesh order): when tri_reversed[t] is set, the traversal swaps
-   which physical edge of triangle t it treats as "right" vs "left" to
-   mirror the decoder's prc_set_left_right_edge_indices swap for a
-   reversed triangle, so a caller that later encodes normals with rev[k]
-   matching tri_reversed can safely mark growing triangles reversed too. */
+   (== out->num_decoded_points) entries.
+
+   real_normals may be NULL (no triangle ever marked reversed, prior
+   behavior unchanged) or mesh->num_triangles*9 entries (3 doubles per
+   corner, MESH order -- same shape/layout as prc_encode_normals_c2's
+   corner_normals, deliberately NOT one-per-deduplicated-position: the
+   decision needs TRAVERSAL corner 0's specific real normal to match
+   prc_encode_normals_c2's own corner-0-specific rejection check exactly,
+   see prc_encode_decide_reversed's comment for why a coarser per-position
+   average made C2 reject almost every real mesh). When non-NULL, each
+   triangle's normal_was_reversed bit is decided INLINE, at the moment its
+   final decoder point-index order (idx[0..2]) is established (chain start
+   or grow step), by comparing that triangle's corner-0 real supplied normal
+   against the geometric normal derived from its own just-assigned decoded
+   positions. This is deliberately
+   NOT a two-pass (baseline-then-rebuild) design: reversing a triangle
+   changes which of its two forward edges is pushed/popped first (see
+   prc_encode_edge_status), which changes traversal order for everything
+   downstream of it, which would invalidate a precomputed array's
+   assumptions for those triangles -- confirmed empirically (measured 49%
+   of triangles diverging between a precomputed baseline and reality on a
+   real mesh). Deciding the bit at the moment idx[] is finalized, in the
+   same single forward pass that establishes idx[] in the first place,
+   has no such staleness: by construction, the bit used to swap left/right
+   for triangle T is always based on T's own real, final vertex order.
+
+   The resulting bit is used exactly like the old tri_reversed[] parameter
+   to swap which physical edge of a triangle is treated as "right" vs
+   "left" (mirroring the decoder's prc_set_left_right_edge_indices swap),
+   and is ALSO returned via out->triangle_reversed so the caller doesn't
+   need a separate post-pass to recover it. */
 int prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     const uint32_t *face_indices, double tolerance_mm,
     prc_encode_traversal_result *out,
     prc_vertex_analysis **analysis_out, uint32_t *analysis_count_out,
-    const uint8_t *tri_reversed);
+    const double *real_normals);
 
 void prc_encode_traversal_free(prc_context *ctx, prc_encode_traversal_result *out);
 
-/* Step C1: per-triangle normal reversal bits for the must_recalculate_normals
+/* Step C1: geometric-derivation encoding -- no real per-corner normals are
+   stored; the decoder recomputes flat/averaged normals purely from triangle
+   geometry plus a crease-angle threshold (must_recalculate_normals=1 on the
+   wire). This function computes per-triangle normal reversal bits for that
    path. input_normals is 3 doubles per DEDUPLICATED mesh position
    (mesh->num_positions entries) -- the caller must have already reduced any
    per-original-vertex normals down to one per deduplicated position -- or NULL
@@ -123,7 +154,10 @@ int prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
     const prc_encode_traversal_result *trav, const double *input_normals,
     uint8_t **normal_is_reversed_out);
 
-/* Step C2: supplied-normals encoding. corner_normals is 9 doubles per input
+/* Step C2: per-corner supplied-normal encoding -- the caller's real normals
+   are preserved, quantized into compact theta/phi angle codes per corner, so
+   the decoder reconstructs values close to the originals rather than
+   deriving them from geometry. corner_normals is 9 doubles per input
    mesh triangle (3 per corner, aligned with mesh->tri_indices order), so the
    same position can carry different normals on different triangles. Outputs
    the quantized normal_angle_array (2 entries per decode event) and the
