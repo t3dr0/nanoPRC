@@ -1584,12 +1584,28 @@ DecryptFinish(prc_context *ctx, void *cipher_context,
     if (pContext->m_block_offset == 16)
     {
         uint8_t block_buf[16];
+        uint8_t pad;
+        int i;
+
         CRYPT_AESDecrypt(ctx, pContext->aes_ctx, block_buf, pContext->m_block, 16);
-        if (block_buf[15] < 16)
+        pad = block_buf[15];
+        if (pad < 1 || pad > 16)
         {
-            *finish_size = 16 - block_buf[15];
-            memcpy(des, block_buf, *finish_size);
+            prc_free(ctx, pContext);
+            prc_error(ctx, PRC_ERROR_PDF, "Invalid PKCS#7 padding in decrypted PDF stream\n");
+            return PRC_ERROR_PDF;
         }
+        for (i = 16 - pad; i < 16; i++)
+        {
+            if (block_buf[i] != pad)
+            {
+                prc_free(ctx, pContext);
+                prc_error(ctx, PRC_ERROR_PDF, "Invalid PKCS#7 padding in decrypted PDF stream\n");
+                return PRC_ERROR_PDF;
+            }
+        }
+        *finish_size = 16 - pad;
+        memcpy(des, block_buf, *finish_size);
     }
     prc_free(ctx, pContext);
     return 0;
