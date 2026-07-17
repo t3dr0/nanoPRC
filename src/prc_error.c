@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include <assert.h>
 #include "../include/prc_context.h"
 
 prc_exception*
@@ -46,10 +45,11 @@ prc_vferror(prc_context *ctx, int code, const char *file, int line, const char *
     prc_exception *new_except = prc_calloc(ctx, 1, sizeof(prc_exception));
     if (new_except == NULL)
     {
-        /* Things have really run off the rails! */
+        /* Things have really run off the rails! The error being reported is
+           already lost to OOM; don't also crash the host process. */
         prc_print_error_stack(ctx);
         printf("Failure to allocate exeception, catastrophic failure!\n");
-        assert(0);
+        return;
     }
 
     snprintf(buffer, 256, "%s: Line %d: ", file, line);
