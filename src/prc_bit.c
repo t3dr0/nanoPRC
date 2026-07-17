@@ -1070,6 +1070,8 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                 prc_free(ctx, linear_nodes);
                 return NULL;
             }
+            linear_nodes[0] = root_node;
+            linear_node_count = 1;
 
             for (k = 0; k < num_leaves; k++)
             {
@@ -1440,7 +1442,7 @@ prc_bitread_compressed_integer_array(prc_context *ctx, prc_bit_state *state, uin
     if (bit_lengths == NULL)
         return NULL;
 
-    data = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * size);
+    data = (uint32_t*)prc_calloc(ctx, size, sizeof(uint32_t));
     if (data == NULL)
         return NULL;
 
@@ -1493,7 +1495,7 @@ prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_s
             return NULL;
         }
 
-        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * (*data_size));
+        output = (int32_t *)prc_calloc(ctx, *data_size, sizeof(int32_t));
         if (output == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
@@ -1509,7 +1511,7 @@ prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_s
         int32_t temp1, temp2;
 
         /* Need better error handling here */
-        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * size);
+        output = (int32_t *)prc_calloc(ctx, size, sizeof(int32_t));
         if (output == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
@@ -1550,7 +1552,7 @@ prc_bitread_compressed_indice_array(prc_context *ctx, prc_bit_state *state,
     if (bit_lengths == NULL || size == 0)
         return NULL;
 
-    data = (int32_t*)prc_malloc(ctx, sizeof(int32_t) * size);
+    data = (int32_t*)prc_calloc(ctx, size, sizeof(int32_t));
     if (data == NULL)
         return NULL;
 
