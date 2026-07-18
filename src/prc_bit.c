@@ -251,7 +251,7 @@ prc_bitread_huff_bit(prc_context *ctx, prc_bit_state *state)
 {
     uint8_t bit;
 
-    if (state->bit_count <= 0)
+    if (PRC_UNLIKELY(state->bit_count <= 0))
     {
         /* Same rationale as prc_bitread_bit: num_values/num_leaves etc. are
            file-controlled and must not be able to walk this reader past the

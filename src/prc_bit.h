@@ -17,6 +17,16 @@
 #ifndef PRC_BIT_H
 #define PRC_BIT_H
 
+/* Branch-prediction hint for the hot per-bit overrun checks below (the
+   non-overrun path is taken on every single bit of a well-formed stream).
+   No-op on MSVC (which lacks __builtin_expect); a pure optimizer hint
+   elsewhere, so it cannot change behavior, only misprediction cost. */
+#if defined(__GNUC__) || defined(__clang__)
+#define PRC_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define PRC_UNLIKELY(x) (x)
+#endif
+
 typedef struct prc_bit_state_s prc_bit_state;
 struct prc_bit_state_s
 {
@@ -83,7 +93,7 @@ prc_bitread_bit(prc_context *ctx, prc_bit_state *state)
 {
 	uint8_t bit;
 
-	if (state->bit_count <= 0)
+	if (PRC_UNLIKELY(state->bit_count <= 0))
 	{
 		/* File-supplied counts elsewhere in the parser can drive reads past the
 		   end of this section's buffer. Once the declared length is exhausted,
