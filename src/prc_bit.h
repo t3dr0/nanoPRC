@@ -51,11 +51,65 @@ union float_uint
 	unsigned int uint_val;
 };
 
+/* prc_bitread_bit is the hottest call in the parser (once per stream bit);
+   defining it (and its prc_next_bit helper) as static inline here, instead of
+   as an external symbol in prc_bit.c, lets every translation unit that reads
+   the bitstream inline it directly instead of paying a real call per bit.
+   PRC_COUNT_BIT is a manual, single-TU debug toggle (see prc_bit.c) -- when
+   defined before this header is included, each including TU gets its own
+   independent bit_count, which matches its existing single-file-debug intent. */
+#ifdef PRC_COUNT_BIT
+#include <stdio.h>
+static size_t bit_count = 0;
+#endif
+
+static inline void
+prc_next_bit(prc_context *ctx, prc_bit_state *state)
+{
+	state->bitmask >>= 1;
+	if (state->bitmask == 0)
+	{
+		state->ptr += 1;
+		state->bitmask = 0x80;
+	}
+#ifdef PRC_COUNT_BIT
+	bit_count++;
+	printf("Bit pos %zu\n", bit_count);
+#endif
+}
+
+static inline uint8_t
+prc_bitread_bit(prc_context *ctx, prc_bit_state *state)
+{
+	uint8_t bit;
+
+	if (state->bit_count <= 0)
+	{
+		/* File-supplied counts elsewhere in the parser can drive reads past the
+		   end of this section's buffer. Once the declared length is exhausted,
+		   stop dereferencing the buffer (which would walk off the allocation)
+		   and report the overrun so callers can fail the parse instead. */
+		state->overrun = 1;
+		state->bit_position++;
+		return 0;
+	}
+
+	bit = *(state->ptr) & state->bitmask;
+	prc_next_bit(ctx, state);
+
+	state->bit_count--;
+	state->bit_position++;
+
+	if (bit > 0)
+		return 1;
+	else
+		return 0;
+}
+
 void prc_debug_view_stream_bounding_box_search(prc_context *ctx, prc_bit_state *state);
 void prc_debug_view_stream_on_byte_boundary(prc_context *ctx, prc_bit_state *state);
 void prc_debug_stream(prc_context *ctx, prc_bit_state *state);
 void prc_init_bit_state(prc_context* ctx, prc_bit_state* state, uint8_t* ptr, size_t byte_count);
-uint8_t prc_bitread_bit(prc_context* ctx, prc_bit_state* state);
 uint8_t prc_bitread_uint8(prc_context* ctx, prc_bit_state* state);
 uint32_t prc_bitread_uint32(prc_context* ctx, prc_bit_state* state);
 int32_t prc_bitread_int32(prc_context* ctx, prc_bit_state* state);
