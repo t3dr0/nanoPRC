@@ -417,9 +417,9 @@ prc_bitread_float(prc_context *ctx, prc_bit_state *state)
     union float_uint val;
 
     val.uint_val = prc_bitread_uint8(ctx, state);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 8);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 16);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 24);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 8);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 16);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 24);
 
     return val.float_val;
 }
