@@ -116,7 +116,7 @@ struct sCodageOfFrequentDoubleOrExponent_s
 # define OFFSETBYTE(pbd,offset) ((pbd)+=offset)
 # define BEFOREBYTE(pbd) ((pbd)-1)
 # define DIFFPOINTERS(p1,p2) ((p1)-(p2))
-# define SEARCHBYTE(pbstart,b,nb) (unsigned char *)memrchr((pbstart),(b),(nb))
+# define SEARCHBYTE(pbstart,b,nb) (unsigned char *)prc_memrchr((pbstart),(b),(nb))
 # define BYTEAT(pb,i) *((pb)-(i))
 #else
 # error "Big/Little endian to be defined"
@@ -143,7 +143,7 @@ extern sCodageOfFrequentDoubleOrExponent acofdoe[NUMBEROFELEMENTINACOFDOE];
 int stCOFDOECompare(const void*, const void*);
 
 #ifdef PRC_BIG_ENDIAN
-void* memrchr(const void*, int, size_t);
+void* prc_memrchr(const void*, int, size_t);
 #endif
 
 /* Look up the value */

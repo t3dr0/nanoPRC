@@ -25,7 +25,7 @@ int stCOFDOECompare(const void* pcofdoe1, const void* pcofdoe2)
 }
 
 #ifdef PRC_BIG_ENDIAN
-void* memrchr(const void* buf, int c, size_t count)
+void* prc_memrchr(const void* buf, int c, size_t count)
 {
     unsigned char
         * pcBuffer = (unsigned char*)buf,
