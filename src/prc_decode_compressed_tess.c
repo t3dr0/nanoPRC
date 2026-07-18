@@ -1268,7 +1268,7 @@ prc_decode_normal(prc_context *ctx, prc_tess_3d_compressed *data,
     DEBUG_LOG("normal_state->normals_vertex_count = %d\n", normal_state->normals_vertex_count);
     DEBUG_LOG("Normal: [%.17f %.17f %.17f]\n", vertex_normal.x, vertex_normal.y, vertex_normal.z);
 
-    if (getenv("PRC_TRACE_NORMALS") != NULL)
+    if (ctx->trace_normals)
     {
         fprintf(stderr, "DECNORM tri=%u vidx=%u rev=%u xrev=%u yrev=%u theta=%.6f phi=%.6f normal=(%.6f,%.6f,%.6f) P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
             g_trace_tri_idx, normal_state->normals_vertex_count, tri_reversed, x_reversed, y_reversed, theta, phi,
@@ -2495,7 +2495,7 @@ prc_decode_compressed_tess(prc_context *ctx, prc_tess_3d_compressed *data, uint8
          edge_count = prc_set_left_right_edge_indices(ctx, data, k - 1, &treated_tri,
                                     &treated_details, normals_vertex);
 
-         if (getenv("PRC_TRACE_REVERSED") != NULL)
+         if (ctx->trace_reversed)
          {
              fprintf(stderr, "DEC k=%u reversed=%d treated_index=(%d,%d,%d) right=(%d,%d) left=(%d,%d) P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
                  k - 1, treated_tri.normal_was_reversed,

@@ -1255,7 +1255,7 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
            ISO-SPEC/compressed-write-normal-sign-bug.md for what this diagnoses
            and how to read its output. The matching read-side prints live in
            prc_decode_compressed_tess.c. */
-        if (getenv("PRC_TRACE_REVERSED") != NULL)
+        if (ctx->trace_reversed)
         {
             fprintf(stderr, "ENC k=%u tri=%u mv=(%u,%u,%u) idx=(%d,%d,%d) edge_status=%u P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
                 emitted, cur, mv[0], mv[1], mv[2], idx[0], idx[1], idx[2], out->edge_status_array[emitted],
@@ -2011,7 +2011,7 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
                     }
                 }
             }
-            if (getenv("PRC_TRACE_NORMALS") != NULL)
+            if (ctx->trace_normals)
             {
                 prc_vec3 pos = prc_encode_decoded_vec(trav, idx[c]);
                 fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)\n",
