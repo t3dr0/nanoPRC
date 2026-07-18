@@ -39,12 +39,12 @@ void* prc_memrchr(const void* buf, int c, size_t count)
 #endif
 
 /* Needed to get value in table during reading */
-sCodageOfFrequentDoubleOrExponent*
+const sCodageOfFrequentDoubleOrExponent*
 get_acofdoe_value(prc_context *ctx, unsigned bits, short number_bits)
 {
-    sCodageOfFrequentDoubleOrExponent* value;
+    const sCodageOfFrequentDoubleOrExponent* value;
 
-    for (value = acofdoe; value < acofdoe + NUMBEROFELEMENTINACOFDOE; ++value)
+    for (value = prc_acofdoe; value < prc_acofdoe + NUMBEROFELEMENTINACOFDOE; ++value)
     {
         if (value->NumberOfBits == number_bits && value->Bits == bits)
             return value;
@@ -52,7 +52,7 @@ get_acofdoe_value(prc_context *ctx, unsigned bits, short number_bits)
     return NULL;
 }
 
-sCodageOfFrequentDoubleOrExponent acofdoe[NUMBEROFELEMENTINACOFDOE] =
+const sCodageOfFrequentDoubleOrExponent prc_acofdoe[NUMBEROFELEMENTINACOFDOE] =
 {
         {VT_double,2,0x1,{DOUBLEWITHTWODWORDINTREE(0x00000000,0x00000000)}},
         {VT_exponent,22,0xd1d32,{DOUBLEWITHTWODWORDINTREE(0x00000000,0x00000000)}},

@@ -135,7 +135,7 @@ static PRCdword
 stadwZero[2] = { DOUBLEWITHTWODWORD(0x00000000,0x00000000) },
 stadwNegativeZero[2] = { DOUBLEWITHTWODWORD(0x80000000,0x00000000) };
 
-extern sCodageOfFrequentDoubleOrExponent acofdoe[NUMBEROFELEMENTINACOFDOE];
+extern const sCodageOfFrequentDoubleOrExponent prc_acofdoe[NUMBEROFELEMENTINACOFDOE];
 
 #define STAT_V
 #define STAT_DOUBLE
@@ -147,6 +147,6 @@ void* prc_memrchr(const void*, int, size_t);
 #endif
 
 /* Look up the value */
-sCodageOfFrequentDoubleOrExponent* get_acofdoe_value(prc_context* ctx, unsigned, short);
+const sCodageOfFrequentDoubleOrExponent* get_acofdoe_value(prc_context* ctx, unsigned, short);
 
 #endif

@@ -29,7 +29,7 @@
 
 #ifdef PRC_COUNT_BIT
 #include <stdio.h>
-size_t bit_count = 0;
+static size_t bit_count = 0;
 #endif
 
 inline static void
@@ -439,7 +439,7 @@ prc_bitread_double(prc_context *ctx, prc_bit_state *state)
 {
     union ieee754_double value;
     value.d = 0;
-    sCodageOfFrequentDoubleOrExponent* pcofdoe;
+    const sCodageOfFrequentDoubleOrExponent* pcofdoe;
     unsigned int ucofdoe = 0;
     for (int i = 1; i <= 22; ++i)
     {
