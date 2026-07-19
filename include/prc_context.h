@@ -62,6 +62,9 @@ typedef struct
 struct prc_exception {
     char message[256];
     int code;
+    uint32_t repeat_count; /* consecutive additional pushes with an identical
+                               code+message that were squelched (not given
+                               their own node) rather than pushed again */
     struct prc_exception *next, *prev;
 };
 
