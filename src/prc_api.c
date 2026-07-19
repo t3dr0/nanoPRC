@@ -261,6 +261,32 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                     prc_free(ctx, tess->normals_internal);
                     tess->normals_internal = NULL;
                 }
+                /* Compressed tessellations cache position_normal_lut across
+                   all of this tessellation's per-face
+                   prc_api_get_tessellation_vertices calls (built once on
+                   the first call, reused after) instead of rebuilding it
+                   per face, so it is freed here once instead of per-call.
+                   The uncompressed branch still frees its own use of this
+                   same field at the end of every call, so this is normally
+                   already NULL for that type by the time release runs. */
+                if (tess->position_normal_lut.position_normal_pair != NULL)
+                {
+                    size_t pn;
+                    for (pn = 0; pn < tess->position_normal_lut.number_values; pn++)
+                    {
+                        prc_internal_api_position_normal_pair *pn_current =
+                            tess->position_normal_lut.position_normal_pair[pn].next;
+                        while (pn_current != NULL)
+                        {
+                            prc_internal_api_position_normal_pair *pn_temp = pn_current;
+                            pn_current = pn_current->next;
+                            prc_free(ctx, pn_temp);
+                        }
+                    }
+                    prc_free(ctx, tess->position_normal_lut.position_normal_pair);
+                    tess->position_normal_lut.position_normal_pair = NULL;
+                    tess->position_normal_lut.number_values = 0;
+                }
             }
             if (tess->tess_type == PRC_TYPE_TESS_3D_Wire ||
                 tess->tess_type == PRC_TYPE_TESS_MarkUp)

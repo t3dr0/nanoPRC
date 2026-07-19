@@ -116,7 +116,7 @@ struct sCodageOfFrequentDoubleOrExponent_s
 # define OFFSETBYTE(pbd,offset) ((pbd)+=offset)
 # define BEFOREBYTE(pbd) ((pbd)-1)
 # define DIFFPOINTERS(p1,p2) ((p1)-(p2))
-# define SEARCHBYTE(pbstart,b,nb) (unsigned char *)memrchr((pbstart),(b),(nb))
+# define SEARCHBYTE(pbstart,b,nb) (unsigned char *)prc_memrchr((pbstart),(b),(nb))
 # define BYTEAT(pb,i) *((pb)-(i))
 #else
 # error "Big/Little endian to be defined"
@@ -135,7 +135,7 @@ static PRCdword
 stadwZero[2] = { DOUBLEWITHTWODWORD(0x00000000,0x00000000) },
 stadwNegativeZero[2] = { DOUBLEWITHTWODWORD(0x80000000,0x00000000) };
 
-extern sCodageOfFrequentDoubleOrExponent acofdoe[NUMBEROFELEMENTINACOFDOE];
+extern const sCodageOfFrequentDoubleOrExponent prc_acofdoe[NUMBEROFELEMENTINACOFDOE];
 
 #define STAT_V
 #define STAT_DOUBLE
@@ -143,10 +143,10 @@ extern sCodageOfFrequentDoubleOrExponent acofdoe[NUMBEROFELEMENTINACOFDOE];
 int stCOFDOECompare(const void*, const void*);
 
 #ifdef PRC_BIG_ENDIAN
-void* memrchr(const void*, int, size_t);
+void* prc_memrchr(const void*, int, size_t);
 #endif
 
 /* Look up the value */
-sCodageOfFrequentDoubleOrExponent* get_acofdoe_value(prc_context* ctx, unsigned, short);
+const sCodageOfFrequentDoubleOrExponent* get_acofdoe_value(prc_context* ctx, unsigned, short);
 
 #endif

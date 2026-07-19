@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include <assert.h>
 #include "../include/prc_context.h"
 
 prc_exception*
@@ -33,6 +32,11 @@ prc_print_error_stack(prc_context *ctx)
     while (curr != NULL)
     {
         printf("%s", curr->message);
+        if (curr->repeat_count > 0)
+        {
+            printf("  (...and %u more identical error%s squelched)\n",
+                   curr->repeat_count, curr->repeat_count == 1 ? "" : "s");
+        }
         curr = curr->prev;
     }
 }
@@ -40,25 +44,43 @@ prc_print_error_stack(prc_context *ctx)
 void
 prc_vferror(prc_context *ctx, int code, const char *file, int line, const char *format, va_list args)
 {
-    char buffer[256];
+    char message[256];
     int len;
+    prc_exception *new_except;
 
-    prc_exception *new_except = prc_calloc(ctx, 1, sizeof(prc_exception));
+    snprintf(message, sizeof(message), "%s: Line %d: ", file, line);
+    len = (int) strlen(message);
+    if (len < (int)sizeof(message))
+    {
+        vsnprintf(&message[len], sizeof(message) - len, format, args); /* does null termination */
+    }
+
+    /* Squelch runs of identical errors -- e.g. a corrupted count field
+       driving a loop into millions of iterations that all hit the same
+       default/unknown-type case -- so a repeating error can't grow the
+       exception stack or the eventual printed report without bound. Count
+       the repeat on the existing top-of-stack node instead of allocating
+       and printing a new one for every occurrence. */
+    if (ctx->exception != NULL && ctx->exception->code == code &&
+        strncmp(ctx->exception->message, message, sizeof(message)) == 0)
+    {
+        ctx->exception->repeat_count++;
+        return;
+    }
+
+    new_except = prc_calloc(ctx, 1, sizeof(prc_exception));
     if (new_except == NULL)
     {
-        /* Things have really run off the rails! */
+        /* Things have really run off the rails! The error being reported is
+           already lost to OOM; don't also crash the host process. */
         prc_print_error_stack(ctx);
         printf("Failure to allocate exeception, catastrophic failure!\n");
-        assert(0);
+        return;
     }
 
-    snprintf(buffer, 256, "%s: Line %d: ", file, line);
-    len = (int) strlen(buffer);
-    strncpy(new_except->message, buffer, 256);
-    if (len < 256)
-    {
-        vsnprintf(&new_except->message[len], 256 - len, format, args); /* does null termination */
-    }
+    new_except->code = code;
+    strncpy(new_except->message, message, sizeof(new_except->message));
+    new_except->message[sizeof(new_except->message) - 1] = '\0';
 
     if (ctx->exception == NULL)
         ctx->exception = new_except;

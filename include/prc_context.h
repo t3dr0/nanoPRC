@@ -62,6 +62,9 @@ typedef struct
 struct prc_exception {
     char message[256];
     int code;
+    uint32_t repeat_count; /* consecutive additional pushes with an identical
+                               code+message that were squelched (not given
+                               their own node) rather than pushed again */
     struct prc_exception *next, *prev;
 };
 
@@ -101,6 +104,10 @@ struct prc_context_s
     prc_graphics_content_ctx graphics_content;
     uint32_t source_file_version;
     uint32_t current_file_index;
+    /* PRC_TRACE_REVERSED / PRC_TRACE_NORMALS: read once at context creation
+       instead of via getenv on every triangle/corner (see prc_new_context). */
+    uint8_t trace_reversed;
+    uint8_t trace_normals;
  #if PRC_DEBUG_MEMORY
     prc_debug_memory *debug_memory;
     size_t debug_memory_size;

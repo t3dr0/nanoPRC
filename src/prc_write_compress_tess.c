@@ -1064,10 +1064,25 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
     }
 
     /* One global origin (the decoder's origin_array): the bbox min corner,
-       used by every chain start and one/two-ref branch. */
-    out->origin[0] = mesh->bbox[0];
-    out->origin[1] = mesh->bbox[1];
-    out->origin[2] = mesh->bbox[2];
+       used by every chain start and one/two-ref branch. Round-tripped
+       through float BEFORE any encoder math uses it, because
+       prc_write_compress_tess_to_stream writes this value as a 32-bit
+       float (prc_bitwrite_float) -- a real decoder can only ever recover
+       that float-precision value, never the full double. Using the
+       untruncated double here made every one of the encoder's own
+       "decoded_pos" predictions systematically wrong relative to what any
+       real decoder reconstructs, by exactly the float round-trip error on
+       whichever component doesn't happen to survive it exactly (confirmed:
+       2.2e-7 on one real repro's X component, 0 on components that do
+       round-trip exactly). Each chain restart re-anchors a fresh grow chain
+       to this same mismatched origin, so the error compounds further with
+       every additional chain a large/fragmented mesh needs -- this was
+       nanoPRC's real "shard corruption on large COMPRESSED meshes" bug
+       (see project memory), invisible on single-chain files because the
+       origin is only ever referenced once there. */
+    out->origin[0] = (double)(float)mesh->bbox[0];
+    out->origin[1] = (double)(float)mesh->bbox[1];
+    out->origin[2] = (double)(float)mesh->bbox[2];
 
     num_tris = mesh->num_triangles;
     num_pos = mesh->num_positions;
@@ -1240,7 +1255,7 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
            ISO-SPEC/compressed-write-normal-sign-bug.md for what this diagnoses
            and how to read its output. The matching read-side prints live in
            prc_decode_compressed_tess.c. */
-        if (getenv("PRC_TRACE_REVERSED") != NULL)
+        if (ctx->trace_reversed)
         {
             fprintf(stderr, "ENC k=%u tri=%u mv=(%u,%u,%u) idx=(%d,%d,%d) edge_status=%u P0=(%.6f,%.6f,%.6f) P1=(%.6f,%.6f,%.6f) P2=(%.6f,%.6f,%.6f)\n",
                 emitted, cur, mv[0], mv[1], mv[2], idx[0], idx[1], idx[2], out->edge_status_array[emitted],
@@ -1996,7 +2011,7 @@ prc_encode_normals_c2(prc_context *ctx, const prc_encode_mesh *mesh,
                     }
                 }
             }
-            if (getenv("PRC_TRACE_NORMALS") != NULL)
+            if (ctx->trace_normals)
             {
                 prc_vec3 pos = prc_encode_decoded_vec(trav, idx[c]);
                 fprintf(stderr, "ENCNORM k=%u c=%u pt=%d rev=%u xrev=%u yrev=%u theta=%d phi=%d input_normal=(%.6f,%.6f,%.6f) assigned=(%.6f,%.6f,%.6f) pos=(%.6f,%.6f,%.6f)\n",

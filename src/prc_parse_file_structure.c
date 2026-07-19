@@ -739,6 +739,20 @@ prc_parse_file_tessellation(prc_context *ctx, prc_filestructure *file_struct, ui
     data->tess_count = prc_bitread_uint32(ctx, &bit_state);
     if (data->tess_count > 0)
     {
+        /* Each tessellation entry reads at least a 32-bit type tag up front
+           (prc_parse_tess); reject a tess_count that couldn't possibly fit in
+           what's left of this section so a single corrupted count field can't
+           drive a huge calloc that then gets walked entry-by-entry on release.
+           Found via PRC_ENABLE_UNZIPPED_FUZZ: a mutated tess_count of ~18M
+           produced an 8GB+ mostly-zeroed array whose release loop printed an
+           "Unknown Tessellation type" error tens of millions of times. */
+        if (bit_state.bit_count <= 0 ||
+            (uint64_t)data->tess_count > (uint64_t)bit_state.bit_count / 32)
+        {
+            prc_error(ctx, PRC_ERROR_PARSE, "tess_count implausible for remaining tessellation section size\n");
+            return PRC_ERROR_PARSE;
+        }
+
         data->tess = (prc_tess *)prc_calloc(ctx, data->tess_count, sizeof(prc_tess));
         if (data->tess == NULL)
         {

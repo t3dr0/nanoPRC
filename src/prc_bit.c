@@ -25,27 +25,10 @@
 #include "debug.h"
 #include "prc_parse_common.h"
 
-#define PRC_HUFFMAN_INITIAL_NODES 256
-
-#ifdef PRC_COUNT_BIT
-#include <stdio.h>
-size_t bit_count = 0;
-#endif
-
-inline static void
-prc_next_bit(prc_context *ctx, prc_bit_state *state)
-{
-    state->bitmask >>= 1;
-    if (state->bitmask == 0)
-    {
-        state->ptr += 1;
-        state->bitmask = 0x80;
-    }
-#ifdef PRC_COUNT_BIT
-    bit_count++;
-    printf("Bit pos %zu\n", bit_count);
-#endif
-}
+/* prc_next_bit and prc_bitread_bit now live in prc_bit.h as static inline
+   (see PERF-1 in the review action plan) so every translation unit that reads
+   the bitstream can inline the hottest per-bit call instead of paying a real
+   cross-TU function call for it. */
 
 inline static void
 prc_next_huff_bit(prc_context *ctx, prc_bit_state *state)
@@ -111,34 +94,6 @@ void prc_bitread_rewind(prc_context *ctx, prc_bit_state *state, uint8_t backup_b
             backup_bits = backup_bits - 1;
         }
     }
-}
-
-uint8_t
-prc_bitread_bit(prc_context *ctx, prc_bit_state *state)
-{
-    uint8_t bit;
-
-    if (state->bit_count <= 0)
-    {
-        /* File-supplied counts elsewhere in the parser can drive reads past the
-           end of this section's buffer. Once the declared length is exhausted,
-           stop dereferencing the buffer (which would walk off the allocation)
-           and report the overrun so callers can fail the parse instead. */
-        state->overrun = 1;
-        state->bit_position++;
-        return 0;
-    }
-
-    bit = *(state->ptr) & state->bitmask;
-    prc_next_bit(ctx, state);
-
-    state->bit_count--;
-    state->bit_position++;
-
-    if (bit > 0)
-        return 1;
-    else
-        return 0;
 }
 
 /* DEBUG */
@@ -296,7 +251,7 @@ prc_bitread_huff_bit(prc_context *ctx, prc_bit_state *state)
 {
     uint8_t bit;
 
-    if (state->bit_count <= 0)
+    if (PRC_UNLIKELY(state->bit_count <= 0))
     {
         /* Same rationale as prc_bitread_bit: num_values/num_leaves etc. are
            file-controlled and must not be able to walk this reader past the
@@ -417,9 +372,9 @@ prc_bitread_float(prc_context *ctx, prc_bit_state *state)
     union float_uint val;
 
     val.uint_val = prc_bitread_uint8(ctx, state);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 8);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 16);
-    val.uint_val += (prc_bitread_uint8(ctx, state) << 24);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 8);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 16);
+    val.uint_val += (((uint32_t)prc_bitread_uint8(ctx, state)) << 24);
 
     return val.float_val;
 }
@@ -439,7 +394,7 @@ prc_bitread_double(prc_context *ctx, prc_bit_state *state)
 {
     union ieee754_double value;
     value.d = 0;
-    sCodageOfFrequentDoubleOrExponent* pcofdoe;
+    const sCodageOfFrequentDoubleOrExponent* pcofdoe;
     unsigned int ucofdoe = 0;
     for (int i = 1; i <= 22; ++i)
     {
@@ -536,24 +491,6 @@ prc_bitread_huff_data(prc_context *ctx, prc_bit_state *state, uint32_t num_bits)
     return val;
 }
 
-static prc_huff_node*
-prc_new_huff_node(prc_context *ctx)
-{
-    prc_huff_node *node = (prc_huff_node*)prc_malloc(ctx, sizeof(prc_huff_node));
-
-    if (node == NULL)
-    {
-        return NULL;
-    }
-
-    node->is_leaf = 0;
-    node->left = NULL;
-    node->right = NULL;
-    node->next = NULL;
-
-    return node;
-}
-
 /* Huffman decoder. Can be used to decode data of different bit lengths on the leaves.
 *  This particular implemenation can support char (1 byte) or short (2 byte) arrays
 *  as input to the encoder, and compresses them using a number of bits that depends
@@ -603,9 +540,9 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
     uint32_t index;
     size_t max_bits;
     size_t num_bits_read = 0;
-    prc_huff_node **linear_list = NULL;
-    uint32_t linear_list_capacity;
-    uint32_t linear_list_size = 0;
+    prc_huff_node *node_arena = NULL;
+    uint64_t node_arena_capacity;
+    uint64_t node_arena_used = 0;
 
     if (huffman_array_size == 0)
     {
@@ -699,26 +636,40 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
         num_bits_read += code_length[k];
     }
 
-    /* Allocate an array to hold all the nodes of the tree in a linear list
-       to make deallocation easier */
-    linear_list_capacity = PRC_HUFFMAN_INITIAL_NODES;
-    linear_list = (prc_huff_node **)prc_calloc(ctx, linear_list_capacity, sizeof(prc_huff_node *));
-    if (linear_list == NULL)
+    /* Arena-allocate the tree nodes in one block instead of one prc_malloc per
+       node (PERF-3, matches the encode side's node_bank in prc_huff.c). Each of
+       the num_leaves root-to-leaf walks below creates at most one new node per
+       bit of its code_length, plus the root itself, so 1 + sum(code_length[k])
+       is an exact upper bound. The arena is sized once, up front, and never
+       reallocated -- a mid-build realloc could move the block and invalidate
+       already-issued node pointers (root_node, curr_node->left/right). */
+    node_arena_capacity = 1;
+    for (k = 0; k < num_leaves; k++)
+        node_arena_capacity += code_length[k];
+
+    if (node_arena_capacity > SIZE_MAX / sizeof(prc_huff_node))
     {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman linear_list\n");
+        prc_error(ctx, PRC_ERROR_MEMORY, "Huffman tree node count overflow\n");
+        prc_free(ctx, huffman_array);
+        prc_free(ctx, leaf_values);
+        prc_free(ctx, code_length);
+        prc_free(ctx, code_values);
+        return NULL;
+    }
+
+    node_arena = (prc_huff_node *)prc_calloc(ctx, (size_t)node_arena_capacity, sizeof(prc_huff_node));
+    if (node_arena == NULL)
+    {
+        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman node_arena\n");
+        prc_free(ctx, huffman_array);
+        prc_free(ctx, leaf_values);
+        prc_free(ctx, code_length);
+        prc_free(ctx, code_values);
         return NULL;
     }
 
     /* Build the tree.  The idea here is to only construct the path to each leaf */
-    /* This also creates a linear path through the nodes to make it easy to free */
-    root_node = prc_new_huff_node(ctx);
-    if (root_node == NULL)
-    {
-        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman root_node\n");
-        prc_free(ctx, linear_list);
-        return NULL;
-    }
-    linear_list[linear_list_size++] = root_node;
+    root_node = &node_arena[node_arena_used++];
 
     for (k = 0; k < num_leaves; k++)
     {
@@ -733,33 +684,18 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
                 /* Go left */
                 if (curr_node->left == NULL)
                 {
-                    curr_node->left = prc_new_huff_node(ctx);
-                    if (curr_node->left == NULL)
+                    if (node_arena_used >= node_arena_capacity)
                     {
-                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        prc_error(ctx, PRC_ERROR_INTERNAL, "Huffman node arena exhausted\n");
+                        prc_free(ctx, huffman_array);
+                        prc_free(ctx, leaf_values);
+                        prc_free(ctx, code_length);
+                        prc_free(ctx, code_values);
+                        prc_free(ctx, node_arena);
                         return NULL;
                     }
-                    /* Check if we need to grow the linear list */
-                    if (linear_list_size >= linear_list_capacity)
-                    {
-                        prc_huff_node **new_linear_list;
-                        linear_list_capacity *= 2;
-                        new_linear_list = (prc_huff_node **)prc_realloc(ctx,
-                            linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
-                        if (new_linear_list == NULL)
-                        {
-                            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
-                            return NULL;
-                        }
-                        linear_list = new_linear_list;
-                    }
-                    linear_list[linear_list_size++] = curr_node->left;
+                    curr_node->left = &node_arena[node_arena_used++];
                     curr_node->next = curr_node->left;
-                    if (curr_node->left == NULL)
-                    {
-                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
-                        return NULL;
-                    }
                 }
                 curr_node = curr_node->left;
             }
@@ -768,33 +704,18 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
                 /* Go right */
                 if (curr_node->right == NULL)
                 {
-                    curr_node->right = prc_new_huff_node(ctx);
-                    if (curr_node->right == NULL)
+                    if (node_arena_used >= node_arena_capacity)
                     {
-                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
+                        prc_error(ctx, PRC_ERROR_INTERNAL, "Huffman node arena exhausted\n");
+                        prc_free(ctx, huffman_array);
+                        prc_free(ctx, leaf_values);
+                        prc_free(ctx, code_length);
+                        prc_free(ctx, code_values);
+                        prc_free(ctx, node_arena);
                         return NULL;
                     }
-                    /* Check if we need to grow the linear list */
-                    if (linear_list_size >= linear_list_capacity)
-                    {
-                        prc_huff_node **new_linear_list;
-                        linear_list_capacity *= 2;
-                        new_linear_list = (prc_huff_node **)prc_realloc(ctx,
-                            linear_list, sizeof(prc_huff_node *) * linear_list_capacity);
-                        if (new_linear_list == NULL)
-                        {
-                            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
-                            return NULL;
-                        }
-                        linear_list = new_linear_list;
-                    }
-                    linear_list[linear_list_size++] = curr_node->right;
+                    curr_node->right = &node_arena[node_arena_used++];
                     curr_node->next = curr_node->right;
-                    if (curr_node->right == NULL)
-                    {
-                        prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman tree construction\n");
-                        return NULL;
-                    }
                 }
                 curr_node = curr_node->right;
             }
@@ -818,9 +739,7 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
         prc_free(ctx, leaf_values);
         prc_free(ctx, code_length);
         prc_free(ctx, code_values);
-        for (k = 0; k < linear_list_size; k++)
-            prc_free(ctx, linear_list[k]);
-        prc_free(ctx, linear_list);
+        prc_free(ctx, node_arena);
         return NULL;
     }
 
@@ -832,9 +751,7 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
         prc_free(ctx, leaf_values);
         prc_free(ctx, code_length);
         prc_free(ctx, code_values);
-        for (k = 0; k < linear_list_size; k++)
-            prc_free(ctx, linear_list[k]);
-        prc_free(ctx, linear_list);
+        prc_free(ctx, node_arena);
         return NULL;
     }
 
@@ -864,9 +781,7 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
             prc_free(ctx, code_length);
             prc_free(ctx, code_values);
             prc_free(ctx, data);
-            for (k = 0; k < linear_list_size; k++)
-                prc_free(ctx, linear_list[k]);
-            prc_free(ctx, linear_list);
+            prc_free(ctx, node_arena);
             return NULL;
         }
         if (curr_node->is_leaf)
@@ -882,13 +797,7 @@ prc_huffman_data_decoder(prc_context *ctx, prc_bit_state *state, uint8_t num_bit
     prc_free(ctx, leaf_values);
     prc_free(ctx, code_length);
     prc_free(ctx, code_values);
-
-    /* Free the tree using the linear list */
-    for (k = 0; k < linear_list_size; k++)
-    {
-        prc_free(ctx, linear_list[k]);
-    }
-    prc_free(ctx, linear_list);
+    prc_free(ctx, node_arena);
 
     return data;
 }
@@ -955,9 +864,9 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
         int j;
         prc_huff_node *root_node;
         prc_huff_node *curr_node;
-        prc_huff_node **linear_nodes;
-        uint32_t linear_node_count;
-        uint32_t linear_node_size;
+        prc_huff_node *node_arena = NULL;
+        uint64_t node_arena_capacity;
+        uint64_t node_arena_used = 0;
         uint32_t num_values;
         uint32_t index;
         size_t max_bits;
@@ -1050,22 +959,41 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                 num_bits_read += code_length[k];
             }
 
-            /* Build the tree.  The idea here is to only construct the path to each leaf */
-            /* This also creates a linear path through the nodes to make it easy to free */
-            root_node = prc_new_huff_node(ctx);
+            /* Arena-allocate the tree nodes in one block instead of one prc_malloc
+               per node (PERF-3, matches the encode side's node_bank in
+               prc_huff.c). Each of the num_leaves root-to-leaf walks below
+               creates at most one new node per bit of its code_length, plus the
+               root itself, so 1 + sum(code_length[k]) is an exact upper bound.
+               The arena is sized once, up front, and never reallocated -- a
+               mid-build realloc could move the block and invalidate
+               already-issued node pointers (root_node, curr_node->left/right). */
+            node_arena_capacity = 1;
+            for (k = 0; k < num_leaves; k++)
+                node_arena_capacity += code_length[k];
 
-            /* For now assume that we need twice as many nodes as we have for leaves. If could be
-               more. If needed we will realloc */
-            linear_node_size = 2 * num_leaves;
-            linear_nodes = (prc_huff_node**)prc_calloc(ctx, linear_node_size, sizeof(prc_huff_node*));
-            linear_nodes[0] = root_node;
-            linear_node_count = 1;
-
-            if (root_node == NULL)
+            if (node_arena_capacity > SIZE_MAX / sizeof(prc_huff_node))
             {
-                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of root_node\n");
+                prc_error(ctx, PRC_ERROR_MEMORY, "Huffman tree node count overflow\n");
+                prc_free(ctx, huffman_array);
+                prc_free(ctx, leaf_values);
+                prc_free(ctx, code_length);
+                prc_free(ctx, code_values);
                 return NULL;
             }
+
+            node_arena = (prc_huff_node *)prc_calloc(ctx, (size_t)node_arena_capacity, sizeof(prc_huff_node));
+            if (node_arena == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error of huffman node_arena\n");
+                prc_free(ctx, huffman_array);
+                prc_free(ctx, leaf_values);
+                prc_free(ctx, code_length);
+                prc_free(ctx, code_values);
+                return NULL;
+            }
+
+            /* Build the tree.  The idea here is to only construct the path to each leaf */
+            root_node = &node_arena[node_arena_used++];
 
             for (k = 0; k < num_leaves; k++)
             {
@@ -1080,27 +1008,17 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                         /* Go left */
                         if (curr_node->left == NULL)
                         {
-                            curr_node->left = prc_new_huff_node(ctx);
-                            if (curr_node->left == NULL)
+                            if (node_arena_used >= node_arena_capacity)
                             {
-                                prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman creation\n");
+                                prc_error(ctx, PRC_ERROR_INTERNAL, "Huffman node arena exhausted\n");
+                                prc_free(ctx, huffman_array);
+                                prc_free(ctx, leaf_values);
+                                prc_free(ctx, code_length);
+                                prc_free(ctx, code_values);
+                                prc_free(ctx, node_arena);
                                 return NULL;
                             }
-                            if (linear_node_count == linear_node_size - 1)
-                            {
-                                prc_huff_node **new_linear_nodes;
-                                linear_node_size = linear_node_size * 2;
-                                new_linear_nodes = (prc_huff_node **)prc_realloc(ctx,
-                                    linear_nodes, linear_node_size * sizeof(prc_huff_node*));
-                                if (new_linear_nodes == NULL)
-                                {
-                                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman creation\n");
-                                    return NULL;
-                                }
-                                linear_nodes = new_linear_nodes;
-                            }
-                            linear_nodes[linear_node_count] = curr_node->left;
-                            linear_node_count++;
+                            curr_node->left = &node_arena[node_arena_used++];
                         }
                         curr_node = curr_node->left;
                     }
@@ -1109,27 +1027,17 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                         /* Go right */
                         if (curr_node->right == NULL)
                         {
-                            curr_node->right = prc_new_huff_node(ctx);
-                            if (curr_node->right == NULL)
+                            if (node_arena_used >= node_arena_capacity)
                             {
-                                prc_error(ctx, PRC_ERROR_HUFFMAN, "Error in huffman creation\n");
+                                prc_error(ctx, PRC_ERROR_INTERNAL, "Huffman node arena exhausted\n");
+                                prc_free(ctx, huffman_array);
+                                prc_free(ctx, leaf_values);
+                                prc_free(ctx, code_length);
+                                prc_free(ctx, code_values);
+                                prc_free(ctx, node_arena);
                                 return NULL;
                             }
-                            if (linear_node_count == linear_node_size - 1)
-                            {
-                                prc_huff_node **new_linear_nodes;
-                                linear_node_size = linear_node_size * 2;
-                                new_linear_nodes = (prc_huff_node **)prc_realloc(ctx,
-                                    linear_nodes, linear_node_size * sizeof(prc_huff_node*));
-                                if (new_linear_nodes == NULL)
-                                {
-                                    prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in huffman creation\n");
-                                    return NULL;
-                                }
-                                linear_nodes = new_linear_nodes;
-                            }
-                            linear_nodes[linear_node_count] = curr_node->right;
-                            linear_node_count++;
+                            curr_node->right = &node_arena[node_arena_used++];
                         }
                         curr_node = curr_node->right;
                     }
@@ -1152,9 +1060,7 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                 prc_free(ctx, leaf_values);
                 prc_free(ctx, code_length);
                 prc_free(ctx, code_values);
-                for (k = 0; k < linear_node_count; k++)
-                    prc_free(ctx, linear_nodes[k]);
-                prc_free(ctx, linear_nodes);
+                prc_free(ctx, node_arena);
                 return NULL;
             }
 
@@ -1166,9 +1072,7 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                 prc_free(ctx, leaf_values);
                 prc_free(ctx, code_length);
                 prc_free(ctx, code_values);
-                for (k = 0; k < linear_node_count; k++)
-                    prc_free(ctx, linear_nodes[k]);
-                prc_free(ctx, linear_nodes);
+                prc_free(ctx, node_arena);
                 return NULL;
             }
 
@@ -1198,9 +1102,7 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
                     prc_free(ctx, code_length);
                     prc_free(ctx, code_values);
                     prc_free(ctx, data);
-                    for (k = 0; k < linear_node_count; k++)
-                        prc_free(ctx, linear_nodes[k]);
-                    prc_free(ctx, linear_nodes);
+                    prc_free(ctx, node_arena);
                     return NULL;
                 }
                 if (curr_node->is_leaf)
@@ -1216,12 +1118,7 @@ prc_bitread_character_array(prc_context *ctx, prc_bit_state *state, uint32_t *da
             prc_free(ctx, leaf_values);
             prc_free(ctx, code_length);
             prc_free(ctx, code_values);
-
-            for (k = 0; k < linear_node_count; k++)
-            {
-                prc_free(ctx, linear_nodes[k]);
-            }
-            prc_free(ctx, linear_nodes);
+            prc_free(ctx, node_arena);
 
             return data;
         }
@@ -1436,7 +1333,7 @@ prc_bitread_compressed_integer_array(prc_context *ctx, prc_bit_state *state, uin
     if (bit_lengths == NULL)
         return NULL;
 
-    data = (uint32_t*)prc_malloc(ctx, sizeof(uint32_t) * size);
+    data = (uint32_t*)prc_calloc(ctx, size, sizeof(uint32_t));
     if (data == NULL)
         return NULL;
 
@@ -1489,7 +1386,7 @@ prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_s
             return NULL;
         }
 
-        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * (*data_size));
+        output = (int32_t *)prc_calloc(ctx, *data_size, sizeof(int32_t));
         if (output == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
@@ -1505,7 +1402,7 @@ prc_bitread_short_array(prc_context *ctx, prc_bit_state *state, uint32_t *data_s
         int32_t temp1, temp2;
 
         /* Need better error handling here */
-        output = (int32_t *)prc_malloc(ctx, sizeof(int32_t) * size);
+        output = (int32_t *)prc_calloc(ctx, size, sizeof(int32_t));
         if (output == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitread_short_array\n");
@@ -1546,7 +1443,7 @@ prc_bitread_compressed_indice_array(prc_context *ctx, prc_bit_state *state,
     if (bit_lengths == NULL || size == 0)
         return NULL;
 
-    data = (int32_t*)prc_malloc(ctx, sizeof(int32_t) * size);
+    data = (int32_t*)prc_calloc(ctx, size, sizeof(int32_t));
     if (data == NULL)
         return NULL;
 

@@ -288,17 +288,17 @@ prc_acofdoe_find_double(double magnitude)
 
     for (k = 0; k < NUMBEROFELEMENTINACOFDOE; k++)
     {
-        if (acofdoe[k].Type != VT_double)
+        if (prc_acofdoe[k].Type != VT_double)
             continue;
-        if (acofdoe[k].NumberOfBits == 2 && acofdoe[k].Bits == 1)
+        if (prc_acofdoe[k].NumberOfBits == 2 && prc_acofdoe[k].Bits == 1)
             continue;
         {
-            double entry_val = acofdoe[k].u2uod.Value;
+            double entry_val = prc_acofdoe[k].u2uod.Value;
             uint64_t entry_bits;
             memcpy(&entry_bits, &entry_val, sizeof(entry_bits));
             entry_bits &= ~((uint64_t)1 << 63);
             if (entry_bits == target_bits)
-                return &acofdoe[k];
+                return &prc_acofdoe[k];
         }
     }
     return NULL;
@@ -317,12 +317,12 @@ prc_acofdoe_find_exponent(unsigned exponent_value)
     for (k = 0; k < NUMBEROFELEMENTINACOFDOE; k++)
     {
         union ieee754_double tmp;
-        if (acofdoe[k].Type != VT_exponent)
+        if (prc_acofdoe[k].Type != VT_exponent)
             continue;
-        tmp.d = acofdoe[k].u2uod.Value;
+        tmp.d = prc_acofdoe[k].u2uod.Value;
         if (tmp.ieee.exponent == exponent_value)
-            if (best == NULL || acofdoe[k].NumberOfBits < best->NumberOfBits)
-                best = &acofdoe[k];
+            if (best == NULL || prc_acofdoe[k].NumberOfBits < best->NumberOfBits)
+                best = &prc_acofdoe[k];
     }
     return best;
 }

@@ -27,7 +27,7 @@ static int CRYPT_SHA384Update(prc_context *ctx, CRYPT_sha2_context *crypt_contex
 
 #define mulby2(x) (((x & 0x7F) << 1) ^ (x & 0x80 ? 0x1B : 0))
 
-uint8_t Sbox[256] =
+static const uint8_t Sbox[256] =
     {0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b,
      0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0,
      0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26,
@@ -51,7 +51,7 @@ uint8_t Sbox[256] =
      0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f,
      0xb0, 0x54, 0xbb, 0x16};
 
-uint8_t Sboxinv[256] =
+static const uint8_t Sboxinv[256] =
     {0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e,
      0x81, 0xf3, 0xd7, 0xfb, 0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87,
      0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb, 0x54, 0x7b, 0x94, 0x32,
@@ -75,7 +75,7 @@ uint8_t Sboxinv[256] =
      0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63,
      0x55, 0x21, 0x0c, 0x7d};
 
-uint32_t D0[256] = {
+static const uint32_t D0[256] = {
     0x51f4a750, 0x7e416553, 0x1a17a4c3, 0x3a275e96, 0x3bab6bcb, 0x1f9d45f1,
     0xacfa58ab, 0x4be30393, 0x2030fa55, 0xad766df6, 0x88cc7691, 0xf5024c25,
     0x4fe5d7fc, 0xc52acbd7, 0x26354480, 0xb562a38f, 0xdeb15a49, 0x25ba1b67,
@@ -121,7 +121,7 @@ uint32_t D0[256] = {
     0x7bcb8461, 0xd532b670, 0x486c5c74, 0xd0b85742,
 };
 
-uint32_t D1[256] = {
+static const uint32_t D1[256] = {
     0x5051f4a7, 0x537e4165, 0xc31a17a4, 0x963a275e, 0xcb3bab6b, 0xf11f9d45,
     0xabacfa58, 0x934be303, 0x552030fa, 0xf6ad766d, 0x9188cc76, 0x25f5024c,
     0xfc4fe5d7, 0xd7c52acb, 0x80263544, 0x8fb562a3, 0x49deb15a, 0x6725ba1b,
@@ -167,7 +167,7 @@ uint32_t D1[256] = {
     0x617bcb84, 0x70d532b6, 0x74486c5c, 0x42d0b857,
 };
 
-uint32_t D2[256] = {
+static const uint32_t D2[256] = {
     0xa75051f4, 0x65537e41, 0xa4c31a17, 0x5e963a27, 0x6bcb3bab, 0x45f11f9d,
     0x58abacfa, 0x03934be3, 0xfa552030, 0x6df6ad76, 0x769188cc, 0x4c25f502,
     0xd7fc4fe5, 0xcbd7c52a, 0x44802635, 0xa38fb562, 0x5a49deb1, 0x1b6725ba,
@@ -213,7 +213,7 @@ uint32_t D2[256] = {
     0x84617bcb, 0xb670d532, 0x5c74486c, 0x5742d0b8,
 };
 
-uint32_t D3[256] = {
+static const uint32_t D3[256] = {
     0xf4a75051, 0x4165537e, 0x17a4c31a, 0x275e963a, 0xab6bcb3b, 0x9d45f11f,
     0xfa58abac, 0xe303934b, 0x30fa5520, 0x766df6ad, 0xcc769188, 0x024c25f5,
     0xe5d7fc4f, 0x2acbd7c5, 0x35448026, 0x62a38fb5, 0xb15a49de, 0xba1b6725,
@@ -259,7 +259,7 @@ uint32_t D3[256] = {
     0xcb84617b, 0x32b670d5, 0x6c5c7448, 0xb85742d0,
 };
 
-uint32_t E0[] = {
+static const uint32_t E0[] = {
     0xc66363a5, 0xf87c7c84, 0xee777799, 0xf67b7b8d, 0xfff2f20d, 0xd66b6bbd,
     0xde6f6fb1, 0x91c5c554, 0x60303050, 0x02010103, 0xce6767a9, 0x562b2b7d,
     0xe7fefe19, 0xb5d7d762, 0x4dababe6, 0xec76769a, 0x8fcaca45, 0x1f82829d,
@@ -305,7 +305,7 @@ uint32_t E0[] = {
     0x7bb0b0cb, 0xa85454fc, 0x6dbbbbd6, 0x2c16163a,
 };
 
-uint32_t E1[] = {
+static const uint32_t E1[] = {
     0xa5c66363, 0x84f87c7c, 0x99ee7777, 0x8df67b7b, 0x0dfff2f2, 0xbdd66b6b,
     0xb1de6f6f, 0x5491c5c5, 0x50603030, 0x03020101, 0xa9ce6767, 0x7d562b2b,
     0x19e7fefe, 0x62b5d7d7, 0xe64dabab, 0x9aec7676, 0x458fcaca, 0x9d1f8282,
@@ -351,7 +351,7 @@ uint32_t E1[] = {
     0xcb7bb0b0, 0xfca85454, 0xd66dbbbb, 0x3a2c1616,
 };
 
-uint32_t E2[] = {
+static const uint32_t E2[] = {
     0x63a5c663, 0x7c84f87c, 0x7799ee77, 0x7b8df67b, 0xf20dfff2, 0x6bbdd66b,
     0x6fb1de6f, 0xc55491c5, 0x30506030, 0x01030201, 0x67a9ce67, 0x2b7d562b,
     0xfe19e7fe, 0xd762b5d7, 0xabe64dab, 0x769aec76, 0xca458fca, 0x829d1f82,
@@ -397,7 +397,7 @@ uint32_t E2[] = {
     0xb0cb7bb0, 0x54fca854, 0xbbd66dbb, 0x163a2c16,
 };
 
-uint32_t E3[] = {
+static const uint32_t E3[] = {
     0x6363a5c6, 0x7c7c84f8, 0x777799ee, 0x7b7b8df6, 0xf2f20dff, 0x6b6bbdd6,
     0x6f6fb1de, 0xc5c55491, 0x30305060, 0x01010302, 0x6767a9ce, 0x2b2b7d56,
     0xfefe19e7, 0xd7d762b5, 0xababe64d, 0x76769aec, 0xcaca458f, 0x82829d1f,
@@ -804,7 +804,7 @@ sha256_process(prc_context *prc_ctx, CRYPT_sha2_context *ctx, uint8_t *data)
 }
 
 static uint32_t
-GetUInt32LSBFirst(uint8_t *span)
+GetUInt32LSBFirst(const uint8_t *span)
 {
     return ((uint32_t)span[3]) << 24 |
         ((uint32_t)span[2]) << 16 |
@@ -1109,7 +1109,7 @@ CRYPT_ArcFourCryptBlock(uint8_t *data, uint32_t size_data, uint8_t *key, uint32_
 }
 
 static void
-md5_process(CRYPT_md5_context *ctx, uint8_t *data)
+md5_process(CRYPT_md5_context *ctx, const uint8_t *data)
 {
     uint32_t X[16] = {
         GetUInt32LSBFirst(&data[0]) ,
@@ -1231,7 +1231,7 @@ CRYPT_MD5Start()
 }
 
 static void
-CRYPT_MD5Update(CRYPT_md5_context *context, uint8_t *data, uint32_t data_size)
+CRYPT_MD5Update(CRYPT_md5_context *context, const uint8_t *data, uint32_t data_size)
 {
     uint32_t left = (context->total[0] >> 3) & 0x3F;
     uint32_t fill = 64 - left;
@@ -1264,7 +1264,7 @@ CRYPT_MD5Update(CRYPT_md5_context *context, uint8_t *data, uint32_t data_size)
     }
 }
 
-uint8_t md5_padding[64] = {
+static const uint8_t md5_padding[64] = {
     0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -1584,12 +1584,28 @@ DecryptFinish(prc_context *ctx, void *cipher_context,
     if (pContext->m_block_offset == 16)
     {
         uint8_t block_buf[16];
+        uint8_t pad;
+        int i;
+
         CRYPT_AESDecrypt(ctx, pContext->aes_ctx, block_buf, pContext->m_block, 16);
-        if (block_buf[15] < 16)
+        pad = block_buf[15];
+        if (pad < 1 || pad > 16)
         {
-            *finish_size = 16 - block_buf[15];
-            memcpy(des, block_buf, *finish_size);
+            prc_free(ctx, pContext);
+            prc_error(ctx, PRC_ERROR_PDF, "Invalid PKCS#7 padding in decrypted PDF stream\n");
+            return PRC_ERROR_PDF;
         }
+        for (i = 16 - pad; i < 16; i++)
+        {
+            if (block_buf[i] != pad)
+            {
+                prc_free(ctx, pContext);
+                prc_error(ctx, PRC_ERROR_PDF, "Invalid PKCS#7 padding in decrypted PDF stream\n");
+                return PRC_ERROR_PDF;
+            }
+        }
+        *finish_size = 16 - pad;
+        memcpy(des, block_buf, *finish_size);
     }
     prc_free(ctx, pContext);
     return 0;
