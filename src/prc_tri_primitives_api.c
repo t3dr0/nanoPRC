@@ -4189,6 +4189,7 @@ uncompressed_done:
         int num_prc_normals = tess->num_normals_prc_compressed_3d;
         prc_internal_api_position_normal_pair *position_normal_pair = NULL, *current;
         prc_internal_api_position_normal_pair *prev = NULL;
+        prc_internal_api_position_normal_lookup *cache = NULL;
         size_t count = 0;
         int j, k;
         int got_color_match;
@@ -4272,35 +4273,11 @@ uncompressed_done:
             each unique position/normal/color/style and an appropriate triangle indice.
         */
 
-        /* Create one of these for each vertex. Then each vertex will contain
-           multiple normals in a list */
-        position_normal_pair =
-            (prc_internal_api_position_normal_pair *)prc_calloc(ctx, num_prc_vertices,
-                                        sizeof(prc_internal_api_position_normal_pair));
-        if (position_normal_pair == NULL)
-        {
-            prc_error(ctx, PRC_API_ERROR_MEMORY,
-                "Memory allocation failed for position_normal_pair in compressed branch\n");
-            code = PRC_API_ERROR_MEMORY;
-            goto compressed_failure;
-        }
-
-        /* Allocate twice as many for the possible multiple normal, multiple color,
-            situation. We may need to realloc this as we go along */
-        vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx,
-                                        num_prc_vertices * 2, sizeof(prc_api_vertex));
-        if (vertex_out->vertices == NULL)
-        {
-            prc_error(ctx, PRC_API_ERROR_MEMORY,
-                "Memory allocation failed for vertex_out->vertices in compressed branch\n");
-            code = PRC_API_ERROR_MEMORY;
-            goto compressed_failure;
-        }
-
-        vertex_out->num_vertices = num_prc_vertices;
-        vertex_out->capacity = num_prc_vertices * 2;
-
-        /* Allocate the new indices. Same length as current one. */
+        /* Allocate the new indices. Same length as current one. This is
+           per-face-owned (each face's tess_faces[j].reserved is a separate
+           struct, freed individually in prc_api_release_data), so unlike
+           the cache-guarded block below it must be (re)allocated on every
+           call, not just the first. */
         face_out_reserved->vertex_indices = (uint32_t *)prc_calloc(ctx,
                                                 num_prc_indices, sizeof(uint32_t));
         if (face_out_reserved->vertex_indices == NULL)
@@ -4381,50 +4358,144 @@ uncompressed_done:
             face_out->vertices_have_style = false;
         }
 
-        /* We will leave the normals unset. As we encounter a position, we will set
-           the normal. If the normal is already set and different than the current
-           one, we will add a new vertex and update the vertex array information.
-           The assumption here in the compressed tessellation case, is that we have
-           already computed the normals with the appropriate crease angle. This is
-           in contrast to the uncompressed case where we have to still decode the
-           indices and build the triangles to be able to compute the normals */
-        for (k = 0; k < num_prc_vertices; k++)
+        /* The decoded position/normal/color/style data built in this block is
+           identical across every face_index of a GIVEN api_tess instance's
+           compressed tessellation -- the compressed format doesn't cleanly
+           separate per-face data, so the (uncached, always-run) loop below
+           this one processes the whole tessellation's indices on every
+           call regardless of face_index. It is NOT necessarily identical
+           across DIFFERENT api_tess instances that happen to reference the
+           same underlying PRC tess_index: style can be assigned by
+           reference at the part/product-instance level
+           (api_tess->style_leaf, consumed above via has_ref_style_defined/
+           face_style_index), so two different instances of the same
+           tessellation are free to carry different styles -- see the
+           comment on prc_api_tess itself: "it turns out that we can have
+           different realizations of the same tessellation with different
+           styles". Cache this build on api_tess->reserved (a per-instance
+           extension slot, already zeroed by prc_api_initialize_tessellation
+           and otherwise unused by the compressed-tessellation type --
+           reserved is only used by the mutually-exclusive wire/markup
+           branches) so a later face_index call for the SAME instance reuses
+           it, but a DIFFERENT instance referencing the same tess_index
+           builds its own, independent copy.
+
+           An earlier version of this optimization cached on the shared
+           prc_tess struct instead (file_struct->tessellation->
+           tess[tess_index].position_normal_lut), keyed by tess_index alone.
+           That is the wrong scope: it is shared by every instance
+           referencing the tessellation, so any instance after the first
+           got an empty vertex_out->tess_vertices (this loop never ran for
+           it) while its own face_out_reserved->vertex_indices was still
+           fully populated by the loop below -- indices into an empty
+           buffer. Reported as real parts rendering in the wrong location
+           or not at all on assemblies with reused/instanced hardware
+           (e.g. bolts/washers shared across many positions); see project
+           history (branch disc-brake-rendering-regression). */
+        cache = (prc_internal_api_position_normal_lookup *)api_tess->reserved;
+        if (cache == NULL)
         {
-            prc_api_helper_set_vertex_position(ctx, vertex_out, k, tess, count);
-            count += 3;
-
-            // Set UV coordinates if texture data is available
-            // (regardless of face_out->is_texture which may not be set yet)
-            if (tess->uv_coordinates_3d != NULL)
+            cache = (prc_internal_api_position_normal_lookup *)prc_calloc(ctx, 1,
+                                        sizeof(prc_internal_api_position_normal_lookup));
+            if (cache == NULL)
             {
-                // Get raw UV coordinates from compressed tessellation data
-                double raw_u = tess->uv_coordinates_3d[k * 2];
-                double raw_v = tess->uv_coordinates_3d[k * 2 + 1];
-
-                // Apply transform and V-flip using helper function (correct order: raw -> transform -> flip)
-                // Note: face_out->texture may not be fully initialized yet, but transform should be available
-                prc_internal_api_set_vertex_texture_coords(ctx, &vertex_out->vertices[k], raw_u, raw_v,
-                    (face_out && face_out->texture.has_transform) ? face_out->texture.transform : NULL,
-                    (face_out && face_out->texture.has_transform) ? face_out->texture.has_transform : 0);
-
-                // Set color to white for textured vertices
-                vertex_out->vertices[k].color[0] = 1.0;
-                vertex_out->vertices[k].color[1] = 1.0;
-                vertex_out->vertices[k].color[2] = 1.0;
-                vertex_out->vertices[k].color[3] = 1.0;
-
-                // Store texture state in position_normal_pair
-                position_normal_pair[k].texture_set = PRC_INTERNAL_API_TEXTURE_SET;
-            }
-            else
-            {
-                prc_api_helper_set_face_color(ctx, vertex_out, k, face_color,
-                    position_normal_pair);
+                prc_error(ctx, PRC_API_ERROR_MEMORY,
+                    "Memory allocation failed for position_normal_lut cache in compressed branch\n");
+                code = PRC_API_ERROR_MEMORY;
+                goto compressed_failure;
             }
 
-            prc_api_helper_intialize_position_normal_pair(ctx,
-                position_normal_pair, k, initial_color_state, initial_style_state,
-                face_style_index, face_style_file_index);
+            /* Create one of these for each vertex. Then each vertex will
+               contain multiple normals in a list */
+            position_normal_pair =
+                (prc_internal_api_position_normal_pair *)prc_calloc(ctx, num_prc_vertices,
+                                            sizeof(prc_internal_api_position_normal_pair));
+            if (position_normal_pair == NULL)
+            {
+                prc_error(ctx, PRC_API_ERROR_MEMORY,
+                    "Memory allocation failed for position_normal_pair in compressed branch\n");
+                prc_free(ctx, cache);
+                code = PRC_API_ERROR_MEMORY;
+                goto compressed_failure;
+            }
+
+            /* Allocate twice as many for the possible multiple normal, multiple color,
+                situation. We may need to realloc this as we go along */
+            vertex_out->vertices = (prc_api_vertex *)prc_calloc(ctx,
+                                            num_prc_vertices * 2, sizeof(prc_api_vertex));
+            if (vertex_out->vertices == NULL)
+            {
+                prc_error(ctx, PRC_API_ERROR_MEMORY,
+                    "Memory allocation failed for vertex_out->vertices in compressed branch\n");
+                prc_free(ctx, position_normal_pair);
+                prc_free(ctx, cache);
+                code = PRC_API_ERROR_MEMORY;
+                goto compressed_failure;
+            }
+
+            vertex_out->num_vertices = num_prc_vertices;
+            vertex_out->capacity = num_prc_vertices * 2;
+
+            /* We will leave the normals unset. As we encounter a position, we will set
+               the normal. If the normal is already set and different than the current
+               one, we will add a new vertex and update the vertex array information.
+               The assumption here in the compressed tessellation case, is that we have
+               already computed the normals with the appropriate crease angle. This is
+               in contrast to the uncompressed case where we have to still decode the
+               indices and build the triangles to be able to compute the normals */
+            for (k = 0; k < num_prc_vertices; k++)
+            {
+                prc_api_helper_set_vertex_position(ctx, vertex_out, k, tess, count);
+                count += 3;
+
+                // Set UV coordinates if texture data is available
+                // (regardless of face_out->is_texture which may not be set yet)
+                if (tess->uv_coordinates_3d != NULL)
+                {
+                    // Get raw UV coordinates from compressed tessellation data
+                    double raw_u = tess->uv_coordinates_3d[k * 2];
+                    double raw_v = tess->uv_coordinates_3d[k * 2 + 1];
+
+                    // Apply transform and V-flip using helper function (correct order: raw -> transform -> flip)
+                    // Note: face_out->texture may not be fully initialized yet, but transform should be available
+                    prc_internal_api_set_vertex_texture_coords(ctx, &vertex_out->vertices[k], raw_u, raw_v,
+                        (face_out && face_out->texture.has_transform) ? face_out->texture.transform : NULL,
+                        (face_out && face_out->texture.has_transform) ? face_out->texture.has_transform : 0);
+
+                    // Set color to white for textured vertices
+                    vertex_out->vertices[k].color[0] = 1.0;
+                    vertex_out->vertices[k].color[1] = 1.0;
+                    vertex_out->vertices[k].color[2] = 1.0;
+                    vertex_out->vertices[k].color[3] = 1.0;
+
+                    // Store texture state in position_normal_pair
+                    position_normal_pair[k].texture_set = PRC_INTERNAL_API_TEXTURE_SET;
+                }
+                else
+                {
+                    prc_api_helper_set_face_color(ctx, vertex_out, k, face_color,
+                        position_normal_pair);
+                }
+
+                prc_api_helper_intialize_position_normal_pair(ctx,
+                    position_normal_pair, k, initial_color_state, initial_style_state,
+                    face_style_index, face_style_file_index);
+            }
+
+            /* Publish for reuse by later face_index calls for THIS SAME
+               api_tess instance; freed once in prc_api_release_data. */
+            cache->position_normal_pair = position_normal_pair;
+            cache->number_values = (size_t)num_prc_vertices;
+            api_tess->reserved = (void *)cache;
+        }
+        else
+        {
+            /* Already built by an earlier face_index call for this SAME
+               api_tess instance; vertex_out->vertices (api_tess->
+               tess_vertices) was published then too and is
+               tessellation-wide (for this instance), not per-face, so
+               nothing else to rebuild here. */
+            position_normal_pair = cache->position_normal_pair;
         }
 
         /* Now lets start going through the prc indices, assigning multiple normals to
@@ -4903,40 +4974,50 @@ uncompressed_done:
             face_out->vertices_have_style = true;
         }
 
-        /* Free the position_normal_pair list */
-        for (k = 0; k < num_prc_vertices; k++)
-        {
-            prc_internal_api_position_normal_pair *temp;
-
-            current = position_normal_pair[k].next;
-            while (current != NULL)
-            {
-                temp = current;
-                current = current->next;
-                prc_free(ctx, temp);
-            }
-        }
-        prc_free(ctx, position_normal_pair);
+        /* position_normal_pair is now owned by cache (either just published
+           above, or reused from an earlier face_index call on this SAME
+           api_tess instance) and persists across all of this instance's
+           per-face calls -- freed once in prc_api_release_data, not here. */
 
         break;
 
 compressed_failure:
-        if (position_normal_pair != NULL)
+        /* api_tess->reserved (if any) is unconditionally invalidated here,
+           regardless of whether THIS call built it fresh or merely reused
+           it from an earlier face_index call on this same instance: a
+           failure partway through processing one face leaves no guarantee
+           the cached state is consistent for any other face still to be
+           processed on this instance. Use cache->number_values (not
+           num_prc_vertices) for the cleanup bound in case this failure
+           happens on a cache-hit call before num_prc_vertices for this
+           call has been confirmed to match what built the cache -- for a
+           conforming file the two always agree, but the cleanup should not
+           assume that under an error condition. */
+        if (api_tess->reserved != NULL)
         {
-            for (k = 0; k < num_prc_vertices; k++)
+            prc_internal_api_position_normal_lookup *fail_cache =
+                prc_tess_internal_position_normal_lookup(api_tess);
+
+            if (fail_cache->position_normal_pair != NULL)
             {
-                prc_internal_api_position_normal_pair *temp;
-                current = position_normal_pair[k].next;
-                while (current != NULL)
+                size_t pn;
+                for (pn = 0; pn < fail_cache->number_values; pn++)
                 {
-                    temp = current;
-                    current = current->next;
-                    prc_free(ctx, temp);
+                    prc_internal_api_position_normal_pair *temp;
+                    current = fail_cache->position_normal_pair[pn].next;
+                    while (current != NULL)
+                    {
+                        temp = current;
+                        current = current->next;
+                        prc_free(ctx, temp);
+                    }
                 }
+                prc_free(ctx, fail_cache->position_normal_pair);
             }
-            prc_free(ctx, position_normal_pair);
-            position_normal_pair = NULL;
+            prc_free(ctx, fail_cache);
+            api_tess->reserved = NULL;
         }
+        position_normal_pair = NULL;
         goto failure;
     }
     case PRC_TYPE_TESS_Face:

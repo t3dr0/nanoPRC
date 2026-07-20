@@ -323,4 +323,21 @@ prc_face_internal_wire(const prc_api_face *f)
     return (prc_internal_api_wire *)f->reserved;
 }
 
+/* prc_api_tess::reserved, interpreted as the compressed-tessellation
+   per-vertex dedup cache (prc_api_get_tessellation_vertices). Scoped to
+   ONE api_tess instance -- i.e. one caller-owned prc_api_tess, built on
+   its first face_index call and reused by that SAME instance's later
+   faces -- never shared across different api_tess instances that happen
+   to reference the same underlying PRC tess_index, since those can
+   legitimately carry different per-instance styles (see the comment on
+   prc_api_tess itself: "we can have different realizations of the same
+   tessellation with different styles"). Mutually exclusive with the
+   wire/markup branches' own use of this same field (api_tess->type
+   determines which interpretation applies). */
+static PRC_INLINE prc_internal_api_position_normal_lookup *
+prc_tess_internal_position_normal_lookup(const prc_api_tess *t)
+{
+    return (prc_internal_api_position_normal_lookup *)t->reserved;
+}
+
 #endif

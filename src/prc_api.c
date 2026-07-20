@@ -261,14 +261,20 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                     prc_free(ctx, tess->normals_internal);
                     tess->normals_internal = NULL;
                 }
-                /* Compressed tessellations cache position_normal_lut across
-                   all of this tessellation's per-face
-                   prc_api_get_tessellation_vertices calls (built once on
-                   the first call, reused after) instead of rebuilding it
-                   per face, so it is freed here once instead of per-call.
-                   The uncompressed branch still frees its own use of this
-                   same field at the end of every call, so this is normally
-                   already NULL for that type by the time release runs. */
+                /* tess->position_normal_lut is used only by the uncompressed
+                   (PRC_TYPE_TESS_3D) branch of prc_api_get_tessellation_vertices,
+                   which builds and frees its own use of this field within
+                   every call -- so this is normally already NULL by the
+                   time release runs; kept as a defensive catch-all in case
+                   a call fails partway through. The compressed-tessellation
+                   branch's equivalent cache is scoped per api_tess instance
+                   (api_tess->reserved, see prc_tess_internal_position_normal_lookup
+                   in prc_internal_api.h) and freed below, in the per-api_tess
+                   loop -- NOT here, since this prc_tess-level struct is
+                   shared by every api_tess instance that references the
+                   same underlying tessellation (e.g. reused/instanced
+                   hardware in an assembly), and each such instance owns an
+                   independent copy of its own dedup cache. */
                 if (tess->position_normal_lut.position_normal_pair != NULL)
                 {
                     size_t pn;
@@ -382,6 +388,37 @@ prc_api_release_data(prc_context *ctx, prc_api_data data_in, prc_api_tess *tess_
                     }
                 }
                 //prc_free(ctx, tess_in[k].tess_faces);
+            }
+            if (tess_in[k].type == PRC_API_TESS_3D_Compressed &&
+                tess_in[k].reserved != NULL)
+            {
+                /* Per-instance dedup cache built by the compressed branch
+                   of prc_api_get_tessellation_vertices, scoped to THIS
+                   api_tess (see prc_tess_internal_position_normal_lookup
+                   in prc_internal_api.h) -- not shared with any other
+                   instance that may reference the same underlying
+                   tess_index, so it is freed here, once per instance,
+                   rather than once per underlying tessellation. */
+                prc_internal_api_position_normal_lookup *tess_cache =
+                    prc_tess_internal_position_normal_lookup(&tess_in[k]);
+                if (tess_cache->position_normal_pair != NULL)
+                {
+                    size_t pn;
+                    for (pn = 0; pn < tess_cache->number_values; pn++)
+                    {
+                        prc_internal_api_position_normal_pair *pn_current =
+                            tess_cache->position_normal_pair[pn].next;
+                        while (pn_current != NULL)
+                        {
+                            prc_internal_api_position_normal_pair *pn_temp = pn_current;
+                            pn_current = pn_current->next;
+                            prc_free(ctx, pn_temp);
+                        }
+                    }
+                    prc_free(ctx, tess_cache->position_normal_pair);
+                }
+                prc_free(ctx, tess_cache);
+                tess_in[k].reserved = NULL;
             }
             if (tess_in[k].tess_vertices.vertices != NULL)
                 prc_free(ctx, tess_in[k].tess_vertices.vertices);
