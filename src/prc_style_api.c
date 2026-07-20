@@ -51,6 +51,22 @@ void prc_internal_api_initialize_vertex(prc_context *ctx,
         vertices[k].tri_has_material = 0;
         vertices[k].shininess = 0;
         vertices[k].alpha = 1.0f;
+
+        /* This region comes from prc_realloc, which -- unlike prc_calloc,
+           used for the buffer's initial allocation -- does not zero new
+           memory. Without explicitly clearing these here, they retain
+           whatever the reused heap memory previously held (a genuine
+           uninitialized-read bug, not merely a missing "nice to have"
+           default): normal_set/uv_set false-positive as "set" at random,
+           and style_index/style_file_index can come up as an arbitrary
+           value instead of the "no style assigned yet" default every
+           freshly prc_calloc'd vertex gets implicitly. Match that default
+           (all-zero) here so a vertex's observable state does not depend
+           on whether it happened to need this buffer to grow. */
+        vertices[k].normal_set = 0;
+        vertices[k].uv_set = 0;
+        vertices[k].style_index = 0;
+        vertices[k].style_file_index = 0;
     }
 }
 
