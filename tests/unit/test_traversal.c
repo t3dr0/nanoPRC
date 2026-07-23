@@ -233,9 +233,19 @@ test_chain_start_variants(prc_context *ctx)
         6, 8, 10   /* 3-ref */
     };
 
-    /* 2 + 1 + 1 + 1 + 2 + 2 + 3 reference slots across the seven ref-using
-       chain starts above */
-    check_roundtrip(ctx, positions, 12, tris, 8, 12);
+    /* This mesh's vertex-only (never edge-only) sharing was originally
+       chosen specifically to hit the chain-start variants described
+       above, and used to reference 2+1+1+1+2+2+3 = 12 slots doing so.
+       Since the non-manifold-vertex fix in prc_encode_preprocess (private-
+       vertex-splitting for vertices whose incident triangles form 2+
+       disconnected fans -- exactly what "connected only through vertices"
+       means for a vertex touched by non-edge-adjacent triangles), most of
+       that sharing is no longer preserved as-is: each such vertex gets
+       split into private per-fan copies, which is the intended, correct
+       behavior for real non-manifold meshes. The actual current count
+       (2) is a regression-guard floor, not a design target -- if it
+       changes again, re-derive it, don't just bump the number blindly. */
+    check_roundtrip(ctx, positions, 12, tris, 8, 2);
 }
 
 int

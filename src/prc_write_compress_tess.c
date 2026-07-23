@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 #include "prc_write_compress_tess.h"
 #include "prc_vector_util.h"
 #include "prc_parse_common.h"
@@ -80,6 +81,63 @@ prc_uf_find(uint32_t *parent, uint32_t x)
     return x;
 }
 
+/* Builds (or rebuilds) the edge-adjacency hash table and out->edges array
+   from a (possibly just-remapped) triangle index array. `etable` must be
+   zeroed by the caller before each call (reused across builds rather than
+   reallocated); `edges_out` must have capacity for at least clean_tris*3
+   entries, an upper bound independent of how many times this is called.
+   Any edge that still ends up with a 3rd+ triangle referencing it (should
+   not happen after the non-manifold-edge/-vertex fixes upstream have run,
+   but is not re-verified here to avoid an unbounded fixed-point loop) is
+   conservatively left with only its first two triangles linked, same as
+   this write facility's original behavior for genuinely-3+-way edges. */
+static uint32_t
+prc_encode_rebuild_edges(prc_edge_slot *etable, size_t ecap,
+    const uint32_t *tri_indices, uint32_t clean_tris, prc_encode_edge *edges_out)
+{
+    uint32_t nedges = 0;
+    uint32_t i;
+
+    for (i = 0; i < clean_tris; i++)
+    {
+        uint32_t e;
+        for (e = 0; e < 3; e++)
+        {
+            uint32_t a = tri_indices[(size_t)i * 3 + e];
+            uint32_t b = tri_indices[(size_t)i * 3 + ((e + 1) % 3)];
+            uint32_t v0 = a < b ? a : b;
+            uint32_t v1 = a < b ? b : a;
+            size_t slot = (size_t)(prc_mix64(((uint64_t)v0 << 32) | (uint64_t)v1) & (uint64_t)(ecap - 1));
+
+            for (;;)
+            {
+                prc_edge_slot *s = &etable[slot];
+                if (!s->used)
+                {
+                    s->used = 1;
+                    s->v0 = v0;
+                    s->v1 = v1;
+                    s->edge_index = nedges;
+                    edges_out[nedges].v0 = v0;
+                    edges_out[nedges].v1 = v1;
+                    edges_out[nedges].tri0 = (int32_t)i;
+                    edges_out[nedges].tri1 = -1;
+                    nedges++;
+                    break;
+                }
+                if (s->v0 == v0 && s->v1 == v1)
+                {
+                    if (edges_out[s->edge_index].tri1 == -1)
+                        edges_out[s->edge_index].tri1 = (int32_t)i;
+                    break;
+                }
+                slot = (slot + 1) & (ecap - 1);
+            }
+        }
+    }
+    return nedges;
+}
+
 int
 prc_encode_preprocess(prc_context *ctx,
     const double *positions, uint32_t num_positions,
@@ -95,6 +153,7 @@ prc_encode_preprocess(prc_context *ctx,
     double diagonal, tol;
     uint32_t i;
     uint32_t clean_tris = 0;
+    uint32_t prc_nonmanifold_edge_count_diag = 0;
     int ret = PRC_ERROR_INTERNAL;
 
     if (out == NULL)
@@ -211,6 +270,34 @@ prc_encode_preprocess(prc_context *ctx,
     if (num_triangles > 0)
     {
         uint32_t removed = 0;
+        /* Sliver-triangle filtering (default ON, 2026-07-23): the a==b/
+           b==c/a==c check above only catches EXACT welded-duplicate
+           corners. Real-world meshes (3D scans, CAD exports) commonly
+           contain triangles with three DISTINCT welded corners that are
+           still nearly collinear (near-zero area) -- confirmed via a real
+           customer file (757-3516-1.STL, otherwise perfectly topologically
+           clean: watertight, zero non-manifold edges/vertices, single
+           component) to independently cause an Adobe-Acrobat-specific
+           blank-model-tree rejection, distinct from the non-manifold-edge
+           defect class fixed elsewhere in this function -- Acrobat's own
+           (opaque) geometry validation apparently rejects some slivers
+           outright even though this write facility's own encoder/decoder
+           round-trip every position bit-for-bit self-consistently either
+           way (i.e. this is NOT a bug in OUR bit-packing; every other
+           reader tried tolerates the same bits fine). A sin(angle)-between-
+           edges threshold of 0.01 (~0.57 degrees) is used: small enough
+           that legitimate thin CAD features survive (a real, independently-
+           produced, Acrobat-working reference file for a DIFFERENT
+           investigation this session had its own thinnest sliver at
+           sin-angle ~1.1e-3, an order of magnitude below this threshold,
+           and opened fine), large enough to catch the confirmed-bad
+           757-3516-1.STL case (worst sliver there: sin-angle ~4.9e-3).
+           PRC_DIAG_SLIVER_SIN_THRESHOLD overrides this default (e.g. "0" to
+           disable entirely for diagnostic comparison, or another positive
+           value to tune) but is not required for normal operation. */
+        const char *sliver_env = getenv("PRC_DIAG_SLIVER_SIN_THRESHOLD");
+        double sliver_sin_threshold = sliver_env != NULL ? atof(sliver_env) : 0.01;
+        uint32_t sliver_removed = 0;
 
         out->tri_indices = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * 3 * sizeof(uint32_t));
         out->tri_orig_index = (uint32_t *)prc_malloc(ctx, (size_t)num_triangles * sizeof(uint32_t));
@@ -231,6 +318,30 @@ prc_encode_preprocess(prc_context *ctx,
                 removed++;
                 continue;
             }
+            if (sliver_sin_threshold > 0.0)
+            {
+                double *pa = &out->positions[(size_t)a * 3];
+                double *pb = &out->positions[(size_t)b * 3];
+                double *pc = &out->positions[(size_t)c * 3];
+                double e0[3], e1[3], cr[3];
+                double len_e0, len_e1, len_cr, denom;
+                uint32_t d;
+
+                for (d = 0; d < 3; d++) { e0[d] = pb[d] - pa[d]; e1[d] = pc[d] - pa[d]; }
+                cr[0] = e0[1]*e1[2] - e0[2]*e1[1];
+                cr[1] = e0[2]*e1[0] - e0[0]*e1[2];
+                cr[2] = e0[0]*e1[1] - e0[1]*e1[0];
+                len_e0 = sqrt(e0[0]*e0[0]+e0[1]*e0[1]+e0[2]*e0[2]);
+                len_e1 = sqrt(e1[0]*e1[0]+e1[1]*e1[1]+e1[2]*e1[2]);
+                len_cr = sqrt(cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2]);
+                denom = len_e0 * len_e1;
+                if (denom > 0.0 && (len_cr / denom) < sliver_sin_threshold)
+                {
+                    removed++;
+                    sliver_removed++;
+                    continue;
+                }
+            }
             out->tri_indices[(size_t)clean_tris * 3 + 0] = a;
             out->tri_indices[(size_t)clean_tris * 3 + 1] = b;
             out->tri_indices[(size_t)clean_tris * 3 + 2] = c;
@@ -239,6 +350,9 @@ prc_encode_preprocess(prc_context *ctx,
         }
         out->num_triangles = clean_tris;
         (void)removed;
+        if (sliver_removed > 0 && getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+            printf("PRC_DIAG_SLIVER_SIN_THRESHOLD=%.6g: removed %u sliver triangles (of %u total removed)\n",
+                sliver_sin_threshold, sliver_removed, removed);
 
         if (clean_tris == 0)
         {
@@ -263,17 +377,112 @@ prc_encode_preprocess(prc_context *ctx,
         remap = NULL;
     }
 
+    /* DIAGNOSTIC (2026-07-22, PRC_DIAG_MESH_QUALITY): measures how close
+       to degenerate (in absolute terms, not just the a==b/b==c/a==c exact-
+       duplicate check above) the welded mesh's triangles are -- real 3D-
+       scan data can contain near-collinear/near-zero-area slivers that
+       exact-duplicate-vertex filtering doesn't catch. Read-only, does not
+       affect encoder output. */
+    if (clean_tris > 0 && getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+    {
+        double min_edge_len = 1e300, min_cross_len = 1e300;
+        double min_edge_len_rel = 1e300, min_cross_len_rel = 1e300;
+        uint32_t near_degenerate_flt_eps = 0;
+        uint32_t i2;
+
+        for (i2 = 0; i2 < clean_tris; i2++)
+        {
+            uint32_t a = out->tri_indices[(size_t)i2 * 3 + 0];
+            uint32_t b = out->tri_indices[(size_t)i2 * 3 + 1];
+            uint32_t c = out->tri_indices[(size_t)i2 * 3 + 2];
+            double *pa = &out->positions[(size_t)a * 3];
+            double *pb = &out->positions[(size_t)b * 3];
+            double *pc = &out->positions[(size_t)c * 3];
+            double e0[3], e1[3], e2[3], cr[3];
+            double len_e0, len_e1, len_e2, len_cr;
+            uint32_t d;
+
+            for (d = 0; d < 3; d++)
+            {
+                e0[d] = pb[d] - pa[d];
+                e1[d] = pc[d] - pa[d];
+                e2[d] = pc[d] - pb[d];
+            }
+            cr[0] = e0[1] * e1[2] - e0[2] * e1[1];
+            cr[1] = e0[2] * e1[0] - e0[0] * e1[2];
+            cr[2] = e0[0] * e1[1] - e0[1] * e1[0];
+            len_e0 = sqrt(e0[0]*e0[0]+e0[1]*e0[1]+e0[2]*e0[2]);
+            len_e1 = sqrt(e1[0]*e1[0]+e1[1]*e1[1]+e1[2]*e1[2]);
+            len_e2 = sqrt(e2[0]*e2[0]+e2[1]*e2[1]+e2[2]*e2[2]);
+            len_cr = sqrt(cr[0]*cr[0]+cr[1]*cr[1]+cr[2]*cr[2]);
+
+            if (len_e0 < min_edge_len) min_edge_len = len_e0;
+            if (len_e1 < min_edge_len) min_edge_len = len_e1;
+            if (len_e2 < min_edge_len) min_edge_len = len_e2;
+            if (len_cr < min_cross_len) min_cross_len = len_cr;
+            /* relative to this triangle's own longest edge, to catch
+               slivers that are small in absolute terms too but whose
+               DEGENERACY (near-collinearity) matters more than absolute
+               scale -- cross product length / (edge0_len * edge1_len)
+               approximates sin(angle) between the two edges. */
+            {
+                double denom = len_e0 * len_e1;
+                if (denom > 0.0)
+                {
+                    double sin_angle = len_cr / denom;
+                    if (sin_angle < min_cross_len_rel) min_cross_len_rel = sin_angle;
+                }
+            }
+            if (len_e0 < FLT_EPSILON || len_e1 < FLT_EPSILON || len_e2 < FLT_EPSILON || len_cr < FLT_EPSILON)
+                near_degenerate_flt_eps++;
+        }
+        (void)min_edge_len_rel;
+        printf("PRC_DIAG_MESH_QUALITY: clean_tris=%u min_edge_len=%.9e min_cross_len=%.9e min_sin_angle=%.9e near_FLT_EPSILON_count=%u bbox_diagonal=%.6f FLT_EPSILON=%.9e\n",
+            clean_tris, min_edge_len, min_cross_len, min_cross_len_rel, near_degenerate_flt_eps, diagonal, (double)FLT_EPSILON);
+    }
+
+    /* Non-manifold input (3+ triangles sharing one edge): a single-pass
+       2-manifold traversal can only ever treat an edge as connecting
+       exactly two triangles. Confirmed via real-file bisection (2026-07-22
+       investigation, hand.stl -- a real 3D scan with a genuine 4-triangle
+       edge fan, most likely a fold/overlap artifact from the scanning
+       process) that BOTH of the alternatives tried before this one fail:
+       (a) silently linking just the first two triangles and dropping the
+       rest (the original behavior) produces a blank model tree in Adobe
+       Acrobat while every other reader tolerates it; (b) leaving every
+       triangle in place but retroactively treating the edge as a boundary
+       for everyone ALSO fails -- the final decoded geometry is identical
+       either way, so Acrobat's rejection tracks the reconstructed 3D
+       topology itself, not this write facility's own internal
+       chain-growth bookkeeping. Confirmed via a minimal 6-triangle
+       standalone repro that fully REMOVING the excess triangles fixes it,
+       but that loses real user geometry. The fix that both fixes Acrobat
+       AND keeps every triangle (confirmed on the same repro): give every
+       triangle beyond the first two on a shared edge its own PRIVATE,
+       imperceptibly-offset copy of that edge's two vertices, so no edge
+       in the final mesh is ever shared by more than two triangles -- a
+       genuinely valid 2-manifold structure, with the "extra" triangles now
+       just very slightly detached (an offset far below visual perception,
+       scaled off this mesh's own resolved encoding tolerance) rather than
+       welded onto the same edge as everyone else. */
     if (clean_tris > 0)
     {
         size_t max_edges = (size_t)clean_tris * 3;
         size_t ecap = prc_next_pow2(max_edges * 2);
         uint32_t nedges = 0;
+        uint32_t *excess_tri = NULL;
+        uint32_t *excess_slot = NULL;
+        uint32_t num_excess = 0;
 
         etable = (prc_edge_slot *)prc_calloc(ctx, ecap, sizeof(prc_edge_slot));
         out->edges = (prc_encode_edge *)prc_malloc(ctx, max_edges * sizeof(prc_encode_edge));
-        if (etable == NULL || out->edges == NULL)
+        excess_tri = (uint32_t *)prc_malloc(ctx, max_edges * sizeof(uint32_t));
+        excess_slot = (uint32_t *)prc_malloc(ctx, max_edges * sizeof(uint32_t));
+        if (etable == NULL || out->edges == NULL || excess_tri == NULL || excess_slot == NULL)
         {
             prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_preprocess edge adjacency\n");
+            if (excess_tri != NULL) prc_free(ctx, excess_tri);
+            if (excess_slot != NULL) prc_free(ctx, excess_slot);
             ret = PRC_ERROR_MEMORY;
             goto fail;
         }
@@ -307,18 +516,328 @@ prc_encode_preprocess(prc_context *ctx,
                     }
                     if (s->v0 == v0 && s->v1 == v1)
                     {
-                        /* Non-manifold input (3+ triangles on one edge) is out
-                           of scope; keep the first two adjacencies and ignore
-                           the rest rather than failing. */
                         if (out->edges[s->edge_index].tri1 == -1)
+                        {
                             out->edges[s->edge_index].tri1 = (int32_t)i;
+                        }
+                        else
+                        {
+                            /* Third (or later) triangle on this edge: queue
+                               it for private-vertex remapping below, leave
+                               the first two exactly as linked. */
+                            excess_tri[num_excess] = i;
+                            excess_slot[num_excess] = e;
+                            num_excess++;
+                            if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+                            {
+                                prc_nonmanifold_edge_count_diag++;
+                                printf("PRC_DIAG_MESH_QUALITY: nonmanifold edge v0=%u v1=%u tri0=%d tri1=%d extra_tri=%u (queued for private-vertex remap)\n",
+                                    v0, v1, out->edges[s->edge_index].tri0, out->edges[s->edge_index].tri1, i);
+                            }
+                        }
                         break;
                     }
                     slot = (slot + 1) & (ecap - 1);
                 }
             }
         }
+
+        if (num_excess > 0)
+        {
+            /* Offset magnitude: well above the resolved encoding tolerance
+               (so the quantized point_array value is genuinely distinct,
+               not silently re-merged by quantization), far below anything
+               visually perceptible on real geometry. */
+            double offset_mag = tol * 50.0;
+            double *grown;
+            uint32_t new_count = out->num_positions;
+
+            grown = (double *)prc_realloc(ctx, out->positions,
+                ((size_t)out->num_positions + (size_t)num_excess * 2) * 3 * sizeof(double));
+            if (grown == NULL)
+            {
+                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_preprocess non-manifold remap\n");
+                prc_free(ctx, excess_tri);
+                prc_free(ctx, excess_slot);
+                ret = PRC_ERROR_MEMORY;
+                goto fail;
+            }
+            out->positions = grown;
+
+            for (i = 0; i < num_excess; i++)
+            {
+                uint32_t ti = excess_tri[i];
+                uint32_t e = excess_slot[i];
+                uint32_t i0 = out->tri_indices[(size_t)ti * 3 + e];
+                uint32_t i1 = out->tri_indices[(size_t)ti * 3 + ((e + 1) % 3)];
+                uint32_t apex = out->tri_indices[(size_t)ti * 3 + ((e + 2) % 3)];
+                double *p0 = &out->positions[(size_t)i0 * 3];
+                double *p1 = &out->positions[(size_t)i1 * 3];
+                double *papex = &out->positions[(size_t)apex * 3];
+                double mid[3], dir[3], len;
+                uint32_t d;
+                uint32_t new_i0, new_i1;
+
+                for (d = 0; d < 3; d++) mid[d] = (p0[d] + p1[d]) * 0.5;
+                for (d = 0; d < 3; d++) dir[d] = papex[d] - mid[d];
+                len = sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+                if (len > 1e-300)
+                    for (d = 0; d < 3; d++) dir[d] /= len;
+                else
+                    { dir[0] = 1.0; dir[1] = 0.0; dir[2] = 0.0; } /* degenerate apex-at-midpoint fallback */
+
+                new_i0 = new_count++;
+                new_i1 = new_count++;
+                for (d = 0; d < 3; d++) out->positions[(size_t)new_i0 * 3 + d] = p0[d] + dir[d] * offset_mag;
+                for (d = 0; d < 3; d++) out->positions[(size_t)new_i1 * 3 + d] = p1[d] + dir[d] * offset_mag;
+
+                out->tri_indices[(size_t)ti * 3 + e] = new_i0;
+                out->tri_indices[(size_t)ti * 3 + ((e + 1) % 3)] = new_i1;
+            }
+            out->num_positions = new_count;
+
+            /* Rebuild edge adjacency from scratch: the remapped triangles
+               no longer reference the over-shared edge at all, so a clean
+               second pass is simplest and cheapest (no in-place edge-table
+               surgery needed) and self-verifying (any lingering 3+-way
+               edge after remapping would show up as a repeat of this same
+               diagnostic on the next iteration were this looped, though it
+               never should since every excess occurrence got its own new
+               vertices). */
+            memset(etable, 0, ecap * sizeof(prc_edge_slot));
+            nedges = prc_encode_rebuild_edges(etable, ecap, out->tri_indices, clean_tris, out->edges);
+        }
+
         out->num_edges = nedges;
+        if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+        {
+            uint32_t boundary_edges = 0, ei;
+            for (ei = 0; ei < nedges; ei++)
+                if (out->edges[ei].tri1 == -1)
+                    boundary_edges++;
+            printf("PRC_DIAG_MESH_QUALITY: num_edges=%u boundary_edges=%u nonmanifold_occurrences_remapped=%u final_num_positions=%u\n",
+                nedges, boundary_edges, prc_nonmanifold_edge_count_diag, out->num_positions);
+        }
+        prc_free(ctx, excess_tri);
+        prc_free(ctx, excess_slot);
+
+        /* Non-manifold VERTEX fix (2026-07-23): a DIFFERENT defect class
+           than the non-manifold EDGE case above -- a vertex is non-
+           manifold if the triangles touching it don't form a single
+           connected "fan" (each consecutive pair sharing an edge through
+           that vertex) but rather two or more separate fans meeting only
+           at that one point (a "bowtie"). Confirmed via a real customer
+           file (UK_original.stl) that has non-manifold vertices in every
+           one of its 7 connected parts and still failed in Acrobat after
+           the edge fix and the sliver-triangle filter above were both
+           already active -- this was previously only diagnosed (read-only
+           census), never fixed. Same general remedy as the edge case: keep
+           the first fan on the original vertex, give every OTHER fan its
+           own private, imperceptibly-offset copy of that vertex's
+           position, remapping only that fan's triangles' corner(s) at this
+           vertex. Uses a per-vertex incident-edge index (not a scan over
+           ALL edges per vertex) so this stays O(V+E) and scales to
+           multi-million-triangle meshes. */
+        if (out->num_positions > 0 && clean_tris > 0)
+        {
+            uint32_t *vtri_count = (uint32_t *)prc_calloc(ctx, out->num_positions, sizeof(uint32_t));
+            uint32_t *vtri_start = (uint32_t *)prc_calloc(ctx, (size_t)out->num_positions + 1, sizeof(uint32_t));
+            uint32_t *vtri_list = NULL;
+            uint32_t *vedge_count = (uint32_t *)prc_calloc(ctx, out->num_positions, sizeof(uint32_t));
+            uint32_t *vedge_start = (uint32_t *)prc_calloc(ctx, (size_t)out->num_positions + 1, sizeof(uint32_t));
+            uint32_t *vedge_list = NULL;
+            uint32_t *vparent = (uint32_t *)prc_malloc(ctx, (size_t)clean_tris * sizeof(uint32_t));
+            uint32_t *vfan_new_vertex = (uint32_t *)prc_malloc(ctx, (size_t)clean_tris * sizeof(uint32_t));
+            uint32_t total = 0, etotal = 0, vi, ti2, ei2, nonmanifold_vertices = 0, splits_needed = 0;
+            /* Captured BEFORE the per-vertex loop below, which grows
+               out->num_positions in place as vertices get split -- the
+               per-vertex triangle/edge index arrays (vtri_.. and vedge_..)
+               are sized/built once, up front, for the ORIGINAL vertex
+               count only; newly-split vertices never need their own fan
+               analysis (they're each already a single, freshly-created,
+               trivially-manifold point), so the loop bound must stay
+               fixed at this snapshot, not track the live (growing)
+               out->num_positions. */
+            uint32_t orig_num_positions = out->num_positions;
+
+            for (ti2 = 0; ti2 < clean_tris; ti2++)
+            {
+                uint32_t c;
+                for (c = 0; c < 3; c++)
+                    vtri_count[out->tri_indices[(size_t)ti2 * 3 + c]]++;
+            }
+            for (vi = 0; vi < orig_num_positions; vi++) { vtri_start[vi] = total; total += vtri_count[vi]; }
+            vtri_start[orig_num_positions] = total;
+            vtri_list = (uint32_t *)prc_malloc(ctx, (size_t)total * sizeof(uint32_t));
+            memset(vtri_count, 0, (size_t)orig_num_positions * sizeof(uint32_t));
+            for (ti2 = 0; ti2 < clean_tris; ti2++)
+            {
+                uint32_t c;
+                for (c = 0; c < 3; c++)
+                {
+                    uint32_t v = out->tri_indices[(size_t)ti2 * 3 + c];
+                    vtri_list[vtri_start[v] + vtri_count[v]] = ti2;
+                    vtri_count[v]++;
+                }
+            }
+
+            for (ei2 = 0; ei2 < out->num_edges; ei2++)
+            {
+                if (out->edges[ei2].tri1 == -1) continue;
+                vedge_count[out->edges[ei2].v0]++;
+                vedge_count[out->edges[ei2].v1]++;
+            }
+            for (vi = 0; vi < orig_num_positions; vi++) { vedge_start[vi] = etotal; etotal += vedge_count[vi]; }
+            vedge_start[orig_num_positions] = etotal;
+            vedge_list = (uint32_t *)prc_malloc(ctx, (size_t)etotal * sizeof(uint32_t));
+            memset(vedge_count, 0, (size_t)orig_num_positions * sizeof(uint32_t));
+            for (ei2 = 0; ei2 < out->num_edges; ei2++)
+            {
+                uint32_t v0e, v1e;
+                if (out->edges[ei2].tri1 == -1) continue;
+                v0e = out->edges[ei2].v0; v1e = out->edges[ei2].v1;
+                vedge_list[vedge_start[v0e] + vedge_count[v0e]] = ei2; vedge_count[v0e]++;
+                vedge_list[vedge_start[v1e] + vedge_count[v1e]] = ei2; vedge_count[v1e]++;
+            }
+
+            if (vtri_count && vtri_start && vtri_list && vedge_count && vedge_start && vedge_list && vparent && vfan_new_vertex)
+            {
+                for (vi = 0; vi < orig_num_positions; vi++)
+                {
+                    uint32_t deg = vtri_start[vi + 1] - vtri_start[vi];
+                    uint32_t k2, ncomp2, root0, m2;
+                    if (deg < 2) continue;
+                    for (k2 = 0; k2 < deg; k2++)
+                        vparent[k2] = k2; /* local indices 0..deg-1 into vtri_list[vtri_start[vi]+k2] */
+                    for (m2 = vedge_start[vi]; m2 < vedge_start[vi + 1]; m2++)
+                    {
+                        const prc_encode_edge *ed = &out->edges[vedge_list[m2]];
+                        int32_t ta = ed->tri0, tb = ed->tri1;
+                        uint32_t la = UINT32_MAX, lb = UINT32_MAX, k3;
+                        for (k3 = 0; k3 < deg; k3++)
+                        {
+                            uint32_t t = vtri_list[vtri_start[vi] + k3];
+                            if ((int32_t)t == ta) la = k3;
+                            if ((int32_t)t == tb) lb = k3;
+                        }
+                        if (la != UINT32_MAX && lb != UINT32_MAX)
+                        {
+                            uint32_t ra = prc_uf_find(vparent, la);
+                            uint32_t rb = prc_uf_find(vparent, lb);
+                            if (ra != rb) vparent[ra] = rb;
+                        }
+                    }
+                    root0 = prc_uf_find(vparent, 0);
+                    ncomp2 = 1;
+                    for (k2 = 1; k2 < deg; k2++)
+                        if (prc_uf_find(vparent, k2) != root0) { ncomp2 = 2; break; }
+                    if (ncomp2 < 2) continue;
+
+                    nonmanifold_vertices++;
+                    if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+                        printf("PRC_DIAG_MESH_QUALITY: nonmanifold VERTEX v=%u incident_triangles=%u (multiple disconnected fans, splitting)\n",
+                            vi, deg);
+
+                    /* Assign each LOCAL triangle a "new vertex" slot per
+                       fan-root, except the fan containing local index 0
+                       (kept on the original vertex vi). Fan roots are
+                       discovered on first sight; UINT32_MAX marks
+                       "not yet assigned"/"keep original". */
+                    for (k2 = 0; k2 < deg; k2++) vfan_new_vertex[k2] = UINT32_MAX;
+                    for (k2 = 0; k2 < deg; k2++)
+                    {
+                        uint32_t root = prc_uf_find(vparent, k2);
+                        if (root == root0) continue; /* stays on original vertex */
+                        if (vfan_new_vertex[root] == UINT32_MAX)
+                        {
+                            /* Allocate a new position lazily, in place, by
+                               growing out->positions one vertex at a time
+                               -- num_positions can grow arbitrarily here so
+                               a single up-front bound isn't practical;
+                               realloc growth is amortized by the caller's
+                               allocator. */
+                            double *pv = &out->positions[(size_t)vi * 3];
+                            double *grown2 = (double *)prc_realloc(ctx, out->positions,
+                                ((size_t)out->num_positions + 1) * 3 * sizeof(double));
+                            uint32_t newv;
+                            double offset_mag2 = tol * 50.0;
+                            uint32_t d2;
+                            if (grown2 == NULL)
+                            {
+                                prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_encode_preprocess non-manifold vertex split\n");
+                                prc_free(ctx, vtri_count); prc_free(ctx, vtri_start); prc_free(ctx, vtri_list);
+                                prc_free(ctx, vedge_count); prc_free(ctx, vedge_start); prc_free(ctx, vedge_list);
+                                prc_free(ctx, vparent); prc_free(ctx, vfan_new_vertex);
+                                ret = PRC_ERROR_MEMORY;
+                                goto fail;
+                            }
+                            out->positions = grown2;
+                            pv = &out->positions[(size_t)vi * 3]; /* re-fetch: realloc may have moved the buffer */
+                            newv = out->num_positions;
+                            out->num_positions++;
+                            /* Offset toward this fan's own first triangle's
+                               centroid -- keeps the split imperceptible and
+                               avoids an arbitrary/shared direction across
+                               fans. */
+                            {
+                                uint32_t rep_tri = vtri_list[vtri_start[vi] + k2];
+                                double cen[3], dir2[3], len2;
+                                uint32_t cc;
+                                cen[0] = cen[1] = cen[2] = 0.0;
+                                for (cc = 0; cc < 3; cc++)
+                                {
+                                    uint32_t vv = out->tri_indices[(size_t)rep_tri * 3 + cc];
+                                    uint32_t dd;
+                                    for (dd = 0; dd < 3; dd++) cen[dd] += out->positions[(size_t)vv * 3 + dd] / 3.0;
+                                }
+                                for (d2 = 0; d2 < 3; d2++) dir2[d2] = cen[d2] - pv[d2];
+                                len2 = sqrt(dir2[0]*dir2[0] + dir2[1]*dir2[1] + dir2[2]*dir2[2]);
+                                if (len2 > 1e-300)
+                                    for (d2 = 0; d2 < 3; d2++) dir2[d2] /= len2;
+                                else
+                                    { dir2[0] = 1.0; dir2[1] = 0.0; dir2[2] = 0.0; }
+                                for (d2 = 0; d2 < 3; d2++)
+                                    out->positions[(size_t)newv * 3 + d2] = pv[d2] + dir2[d2] * offset_mag2;
+                            }
+                            vfan_new_vertex[root] = newv;
+                            splits_needed++;
+                        }
+                        {
+                            uint32_t t = vtri_list[vtri_start[vi] + k2];
+                            uint32_t cc;
+                            for (cc = 0; cc < 3; cc++)
+                                if (out->tri_indices[(size_t)t * 3 + cc] == vi)
+                                    out->tri_indices[(size_t)t * 3 + cc] = vfan_new_vertex[root];
+                        }
+                    }
+                }
+                if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+                    printf("PRC_DIAG_MESH_QUALITY: nonmanifold_vertices=%u vertex_splits=%u (out of %u positions before splitting)\n",
+                        nonmanifold_vertices, splits_needed, orig_num_positions);
+            }
+            if (vtri_count != NULL) prc_free(ctx, vtri_count);
+            if (vtri_start != NULL) prc_free(ctx, vtri_start);
+            if (vtri_list != NULL) prc_free(ctx, vtri_list);
+            if (vedge_count != NULL) prc_free(ctx, vedge_count);
+            if (vedge_start != NULL) prc_free(ctx, vedge_start);
+            if (vedge_list != NULL) prc_free(ctx, vedge_list);
+            if (vparent != NULL) prc_free(ctx, vparent);
+            if (vfan_new_vertex != NULL) prc_free(ctx, vfan_new_vertex);
+
+            if (nonmanifold_vertices > 0)
+            {
+                /* Vertex splitting changed tri_indices (and possibly grew
+                   out->positions), so out->edges must be rebuilt from
+                   scratch once more before the connected-components pass
+                   below reads it. out->edges' allocation (max_edges =
+                   clean_tris*3, an UPPER bound independent of vertex
+                   count) is still valid and sufficient. */
+                memset(etable, 0, ecap * sizeof(prc_edge_slot));
+                nedges = prc_encode_rebuild_edges(etable, ecap, out->tri_indices, clean_tris, out->edges);
+                out->num_edges = nedges;
+            }
+        }
+
         if ((size_t)nedges < max_edges)
         {
             prc_encode_edge *shrunk = (prc_encode_edge *)prc_realloc(ctx, out->edges, (size_t)nedges * sizeof(prc_encode_edge));
@@ -370,6 +889,10 @@ prc_encode_preprocess(prc_context *ctx,
         }
         out->num_components = ncomp;
 
+        if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
+            printf("PRC_DIAG_MESH_QUALITY: num_components=%u clean_tris=%u num_positions=%u\n",
+                ncomp, clean_tris, out->num_positions);
+
         prc_free(ctx, parent);
         parent = NULL;
         prc_free(ctx, label);
@@ -401,6 +924,32 @@ fail:
    same order, so encoder and decoder stay bit-for-bit synchronized. */
 
 #define PRC_ENCODE_MAX_CHAIN 65536
+
+/* TEMPORARY DIAGNOSTIC (2026-07-22, remove after the current Acrobat blank-
+   tree investigation concludes -- see project memory): runtime override for
+   PRC_ENCODE_MAX_CHAIN via PRC_DIAG_MAX_CHAIN env var, to test the SAME
+   mesh topology at different chain-fragmentation patterns without varying
+   mesh size (the technique that isolated the origin-truncation bug in an
+   earlier session of this same investigation). Falls back to the compile-
+   time constant when unset or invalid. */
+static uint32_t
+prc_encode_max_chain(void)
+{
+    static int cached = 0;
+    static uint32_t value = PRC_ENCODE_MAX_CHAIN;
+    if (!cached)
+    {
+        const char *env = getenv("PRC_DIAG_MAX_CHAIN");
+        if (env != NULL)
+        {
+            long v = strtol(env, NULL, 10);
+            if (v > 0)
+                value = (uint32_t)v;
+        }
+        cached = 1;
+    }
+    return value;
+}
 
 typedef struct
 {
@@ -707,6 +1256,13 @@ prc_encode_chain_start(prc_encode_state *st, uint32_t tri,
         out->points_is_reference_array[out->points_is_reference_array_size] = r[k];
         out->points_is_reference_array_size++;
     }
+    if (st->ctx->trace_reversed)
+    {
+        fprintf(stderr, "ENC_CHAINSTART tri=%u mv=(%u,%u,%u) r=(%u,%u,%u) num_refs=%u "
+            "pref_size_before=%u pisref_size_before=%u\n",
+            tri, mv[0], mv[1], mv[2], r[0], r[1], r[2], num_refs,
+            out->point_reference_array_size, out->points_is_reference_array_size - 3);
+    }
 
     if (num_refs == 0)
     {
@@ -994,7 +1550,7 @@ prc_encode_edge_status(prc_encode_state *st, uint32_t tri,
            unvisited-triangle scan as fresh chain starts. */
         growable = (uint8_t)(nb >= 0 &&
             !st->visited[nb] && !st->pending[nb] &&
-            st->chain_len + st->stack_size < PRC_ENCODE_MAX_CHAIN);
+            st->chain_len + st->stack_size < prc_encode_max_chain());
 
         if (growable)
         {
@@ -1209,6 +1765,27 @@ prc_encode_traversal(prc_context *ctx, const prc_encode_mesh *mesh,
                emitted == 0 distinguishes the first so chain ids start at 0. */
             if (emitted > 0)
                 st.current_chain++;
+            /* DIAGNOSTIC (2026-07-22, PRC_DIAG_RESTART_REASON): for each
+               genuine chain restart (not the very first chain), report
+               whether this triangle's 3 mesh-topology neighbor slots (from
+               st.neighbor[], populated purely from mesh adjacency,
+               independent of visited/pending state) exist at all, and if so
+               whether they were already visited by an earlier chain vs.
+               genuinely absent (a true mesh boundary/non-manifold-dropped
+               edge). Distinguishes "genuine dead end" from "neighbor exists
+               but timing stranded this triangle". Read-only, no behavior
+               change. */
+            if (emitted > 0 && getenv("PRC_DIAG_RESTART_REASON") != NULL)
+            {
+                int32_t n0 = st.neighbor[(size_t)cur * 3 + 0];
+                int32_t n1 = st.neighbor[(size_t)cur * 3 + 1];
+                int32_t n2 = st.neighbor[(size_t)cur * 3 + 2];
+                fprintf(stderr, "RESTART emitted=%u cur=%u n=(%d,%d,%d) visited=(%d,%d,%d)\n",
+                    emitted, cur, n0, n1, n2,
+                    n0 >= 0 ? (int)st.visited[n0] : -1,
+                    n1 >= 0 ? (int)st.visited[n1] : -1,
+                    n2 >= 0 ? (int)st.visited[n2] : -1);
+            }
             st.chain_offset = 0;
             code = prc_encode_chain_start(&st, cur, idx, mv);
             if (code < 0)
@@ -1569,6 +2146,79 @@ prc_encode_normals_c1(prc_context *ctx, const prc_encode_mesh *mesh,
                 rev[k] = 1;
         }
         prc_free(ctx, component_size);
+    }
+
+    /* DIAGNOSTIC (2026-07-22, PRC_DIAG_COUNT_REVERSED): input_normals==NULL
+       (must_recalculate_normals path) never computes a per-triangle
+       reversed-bit decision for growing (non-isolated) triangles -- it's
+       unconditionally left at the calloc'd 0 (see the long comment above on
+       mesh->num_components). This block does NOT change rev[] -- it only
+       measures how often the SAME dot-product test used below for the
+       supplied-normals case would have wanted rev[k]=1 for a growing
+       triangle, using a smooth per-mesh-vertex normal (equal-weighted
+       average of adjacent MESH-order face normals, i.e. a proxy for what
+       the decoder's own crease-angle smoothing will approximately
+       reconstruct) as the stand-in "input normal". Purely additive/read-
+       only; does not affect encoder output. */
+    if (input_normals == NULL && getenv("PRC_DIAG_COUNT_REVERSED") != NULL)
+    {
+        prc_vec3 *vertex_normal = (prc_vec3 *)prc_calloc(ctx, mesh->num_positions, sizeof(prc_vec3));
+        uint32_t growing = 0, would_want_rev = 0;
+
+        if (vertex_normal != NULL)
+        {
+            for (k = 0; k < mesh->num_triangles; k++)
+            {
+                uint32_t i0 = mesh->tri_indices[(size_t)k * 3 + 0];
+                uint32_t i1 = mesh->tri_indices[(size_t)k * 3 + 1];
+                uint32_t i2 = mesh->tri_indices[(size_t)k * 3 + 2];
+                prc_vec3 Q0, Q1, Q2, f1, f2, fn;
+
+                Q0.x = mesh->positions[(size_t)i0 * 3 + 0]; Q0.y = mesh->positions[(size_t)i0 * 3 + 1]; Q0.z = mesh->positions[(size_t)i0 * 3 + 2];
+                Q1.x = mesh->positions[(size_t)i1 * 3 + 0]; Q1.y = mesh->positions[(size_t)i1 * 3 + 1]; Q1.z = mesh->positions[(size_t)i1 * 3 + 2];
+                Q2.x = mesh->positions[(size_t)i2 * 3 + 0]; Q2.y = mesh->positions[(size_t)i2 * 3 + 1]; Q2.z = mesh->positions[(size_t)i2 * 3 + 2];
+                prc_vec_sub(Q1, Q0, &f1);
+                prc_vec_sub(Q2, Q0, &f2);
+                prc_vec_cross(f1, f2, &fn);
+                vertex_normal[i0].x += fn.x; vertex_normal[i0].y += fn.y; vertex_normal[i0].z += fn.z;
+                vertex_normal[i1].x += fn.x; vertex_normal[i1].y += fn.y; vertex_normal[i1].z += fn.z;
+                vertex_normal[i2].x += fn.x; vertex_normal[i2].y += fn.y; vertex_normal[i2].z += fn.z;
+            }
+
+            for (k = 0; k < num_tris; k++)
+            {
+                const int32_t *idx = &trav->triangle_point_indices[(size_t)k * 3];
+                prc_vec3 P0 = prc_encode_decoded_vec(trav, idx[0]);
+                prc_vec3 P1 = prc_encode_decoded_vec(trav, idx[1]);
+                prc_vec3 P2 = prc_encode_decoded_vec(trav, idx[2]);
+                prc_vec3 e1, e2, raw_cross, avg;
+                uint32_t c;
+                double dot_val;
+
+                if (trav->edge_status_array[k] == 0)
+                    continue; /* leaf/chain-start, not a "growing" triangle */
+                growing++;
+
+                prc_vec_sub(P1, P0, &e1);
+                prc_vec_sub(P2, P0, &e2);
+                prc_vec_cross(e1, e2, &raw_cross);
+
+                avg.x = avg.y = avg.z = 0.0;
+                for (c = 0; c < 3; c++)
+                {
+                    uint32_t mv = (uint32_t)trav->point_mesh_vertex[idx[c]];
+                    avg.x += vertex_normal[mv].x / 3.0;
+                    avg.y += vertex_normal[mv].y / 3.0;
+                    avg.z += vertex_normal[mv].z / 3.0;
+                }
+                dot_val = prc_vec_dot_product(avg, raw_cross);
+                if (dot_val > 0.0)
+                    would_want_rev++;
+            }
+            printf("PRC_DIAG_COUNT_REVERSED: growing_triangles=%u would_want_rev=%u (currently forced to 0)\n",
+                growing, would_want_rev);
+            prc_free(ctx, vertex_normal);
+        }
     }
 
     if (input_normals != NULL)
@@ -2477,6 +3127,60 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
         }
 
     }
+    /* DIAGNOSTIC (2026-07-22, PRC_DIAG_USE_PROXY_NORMALS): experimental --
+       when must_recalculate_normals and this env var is set, compute a
+       smooth per-mesh-vertex normal (equal-weighted average of adjacent
+       MESH-order face normals) and feed it into prc_encode_traversal's
+       real_normals parameter so prc_encode_decide_reversed makes a real,
+       traversal-consistent reversed-bit decision for EVERY triangle
+       (including growing ones), instead of leaving trav.triangle_reversed
+       all-zero. Testing whether matching a real encoder's non-zero
+       reversed-bit pattern (see RG comparison) fixes Acrobat rejection now
+       that chain fragmentation is separately ruled out. */
+    if (must_recalculate_normals && getenv("PRC_DIAG_USE_PROXY_NORMALS") != NULL)
+    {
+        double *vertex_normal = (double *)prc_calloc(ctx, (size_t)mesh.num_positions * 3, sizeof(double));
+
+        corner_normals = (double *)prc_malloc(ctx, (size_t)mesh.num_triangles * 9 * sizeof(double));
+        if (vertex_normal == NULL || corner_normals == NULL)
+        {
+            if (vertex_normal != NULL) prc_free(ctx, vertex_normal);
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry (proxy normals)\n");
+            ret = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        for (k = 0; k < mesh.num_triangles; k++)
+        {
+            uint32_t i0 = mesh.tri_indices[(size_t)k * 3 + 0];
+            uint32_t i1 = mesh.tri_indices[(size_t)k * 3 + 1];
+            uint32_t i2 = mesh.tri_indices[(size_t)k * 3 + 2];
+            double *pa = &mesh.positions[(size_t)i0 * 3];
+            double *pb = &mesh.positions[(size_t)i1 * 3];
+            double *pc = &mesh.positions[(size_t)i2 * 3];
+            double e1[3], e2[3], fn[3];
+            uint32_t d;
+            for (d = 0; d < 3; d++) { e1[d] = pb[d] - pa[d]; e2[d] = pc[d] - pa[d]; }
+            fn[0] = e1[1]*e2[2] - e1[2]*e2[1];
+            fn[1] = e1[2]*e2[0] - e1[0]*e2[2];
+            fn[2] = e1[0]*e2[1] - e1[1]*e2[0];
+            for (d = 0; d < 3; d++)
+            {
+                vertex_normal[(size_t)i0 * 3 + d] += fn[d];
+                vertex_normal[(size_t)i1 * 3 + d] += fn[d];
+                vertex_normal[(size_t)i2 * 3 + d] += fn[d];
+            }
+        }
+        for (k = 0; k < mesh.num_triangles; k++)
+        {
+            uint32_t c;
+            for (c = 0; c < 3; c++)
+            {
+                uint32_t mv = mesh.tri_indices[(size_t)k * 3 + c];
+                memcpy(&corner_normals[((size_t)k * 3 + c) * 3], &vertex_normal[(size_t)mv * 3], 3 * sizeof(double));
+            }
+        }
+        prc_free(ctx, vertex_normal);
+    }
 
     /* corner_normals (mesh order, 9 doubles/triangle -- NULL when
        must_recalculate_normals) is passed straight through as
@@ -2498,6 +3202,8 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
     if (!must_recalculate_normals)
     {
         code = prc_encode_normals_c2(ctx, &mesh, &trav, corner_normals, &angles, &acount, &bin, &bsize);
+        if (getenv("PRC_DIAG_C2_FALLBACK") != NULL)
+            printf("PRC_DIAG_C2_FALLBACK: prc_encode_normals_c2 code=%d (0=succeeded, nonzero=fell back to C1)\n", code);
         if (code != 0)
         {
             /* Supplied per-corner normals can legitimately conflict with the
@@ -2527,6 +3233,22 @@ prc_write_compress_tess_entry(prc_context *ctx, prc_bit_write_state *s,
             memcpy(rev, trav.triangle_reversed, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
             code = 0;
         }
+    }
+    else if (getenv("PRC_DIAG_USE_PROXY_NORMALS") != NULL)
+    {
+        /* Proxy normals were fed to prc_encode_traversal above, so
+           trav.triangle_reversed already holds a real, traversal-consistent
+           decision for every triangle (see prc_encode_decide_reversed) --
+           just copy it, same as the C2-fallback path above does. */
+        rev = (uint8_t *)prc_malloc(ctx, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
+        if (rev == NULL)
+        {
+            prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_write_compress_tess_entry\n");
+            ret = PRC_ERROR_MEMORY;
+            goto cleanup;
+        }
+        memcpy(rev, trav.triangle_reversed, (size_t)trav.edge_status_array_size * sizeof(uint8_t));
+        code = 0;
     }
     else
     {
