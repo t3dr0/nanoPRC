@@ -112,6 +112,21 @@ int main(int argc, char **argv)
     fprintf(out, "tolerance %.17g\n", parsed->tolerance);
     fprintf(out, "origin %.17g %.17g %.17g\n", parsed->origin_array.x, parsed->origin_array.y, parsed->origin_array.z);
     fprintf(out, "must_recalculate_normals %u\n", parsed->must_recalculate_normals);
+    fprintf(out, "crease_angle %.17g\n", parsed->crease_angle);
+    fprintf(out, "normal_recalculation_flags %u\n", parsed->normal_recalculation_flags);
+    fprintf(out, "face_number %u\n", parsed->face_number);
+    fprintf(out, "is_point_color %u\n", parsed->is_point_color);
+    fprintf(out, "is_multiple_line_attribute %u\n", parsed->is_multiple_line_attribute);
+    fprintf(out, "no_texture %u\n", parsed->no_texture);
+    fprintf(out, "has_behaviors %u\n", parsed->has_behaviors);
+    fprintf(out, "line_attribute_array_size %u\n", parsed->line_attribute_array_size);
+    fprintf(out, "line_attribute_array");
+    for (i = 0; i < parsed->line_attribute_array_size; i++) fprintf(out, " %d", parsed->line_attribute_array[i]);
+    fprintf(out, "\n");
+    fprintf(out, "is_face_planar");
+    if (parsed->is_face_planar != NULL)
+        for (i = 0; i < parsed->face_number; i++) fprintf(out, " %u", parsed->is_face_planar[i]);
+    fprintf(out, "\n");
 
     fprintf(out, "edge_status_array");
     for (i = 0; i < parsed->triangle_face_array_size; i++) fprintf(out, " %u", parsed->edge_status_array[i]);
