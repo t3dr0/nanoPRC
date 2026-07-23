@@ -132,6 +132,14 @@ add_executable(standalone_nonmanifold_fan tests/internal/standalone_nonmanifold_
 target_link_libraries(standalone_nonmanifold_fan prc_static)
 target_include_directories(standalone_nonmanifold_fan PRIVATE tests)
 
+add_executable(standalone_multichain tests/internal/standalone_multichain.c)
+target_link_libraries(standalone_multichain prc_static)
+target_include_directories(standalone_multichain PRIVATE tests)
+
+add_executable(standalone_mixed_chains tests/internal/standalone_mixed_chains.c)
+target_link_libraries(standalone_mixed_chains prc_static)
+target_include_directories(standalone_mixed_chains PRIVATE tests)
+
 add_executable(standalone_grid_triangles tests/internal/standalone_grid_triangles.c)
 target_link_libraries(standalone_grid_triangles prc_static)
 target_include_directories(standalone_grid_triangles PRIVATE tests)

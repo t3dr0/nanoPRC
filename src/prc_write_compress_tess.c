@@ -531,8 +531,18 @@ prc_encode_preprocess(prc_context *ctx,
                             if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
                             {
                                 prc_nonmanifold_edge_count_diag++;
-                                printf("PRC_DIAG_MESH_QUALITY: nonmanifold edge v0=%u v1=%u tri0=%d tri1=%d extra_tri=%u (queued for private-vertex remap)\n",
-                                    v0, v1, out->edges[s->edge_index].tri0, out->edges[s->edge_index].tri1, i);
+                                printf("PRC_DIAG_MESH_QUALITY: nonmanifold edge v0=%u v1=%u tri0=%d tri1=%d extra_tri=%u "
+                                    "(queued for private-vertex remap) orig_idx tri0=%d tri1=%d extra_tri=%u\n",
+                                    v0, v1, out->edges[s->edge_index].tri0, out->edges[s->edge_index].tri1, i,
+                                    out->edges[s->edge_index].tri0 >= 0 ? (int)out->tri_orig_index[out->edges[s->edge_index].tri0] : -1,
+                                    out->edges[s->edge_index].tri1 >= 0 ? (int)out->tri_orig_index[out->edges[s->edge_index].tri1] : -1,
+                                    out->tri_orig_index[i]);
+                                if (getenv("PRC_DIAG_DUMP_NONMANIFOLD_REGION") != NULL)
+                                {
+                                    printf("PRC_DIAG_DUMP_REGION: edge v0=%u pos=(%.17g,%.17g,%.17g) v1=%u pos=(%.17g,%.17g,%.17g)\n",
+                                        v0, out->positions[(size_t)v0 * 3 + 0], out->positions[(size_t)v0 * 3 + 1], out->positions[(size_t)v0 * 3 + 2],
+                                        v1, out->positions[(size_t)v1 * 3 + 0], out->positions[(size_t)v1 * 3 + 1], out->positions[(size_t)v1 * 3 + 2]);
+                                }
                             }
                         }
                         break;
@@ -737,6 +747,30 @@ prc_encode_preprocess(prc_context *ctx,
                     if (getenv("PRC_DIAG_MESH_QUALITY") != NULL)
                         printf("PRC_DIAG_MESH_QUALITY: nonmanifold VERTEX v=%u incident_triangles=%u (multiple disconnected fans, splitting)\n",
                             vi, deg);
+                    /* Diagnostic-only, separately gated (verbose): dump this
+                       vertex's own position and every incident triangle's
+                       full geometry, enough to reconstruct a minimal
+                       synthetic repro of just this fix site by hand. */
+                    if (getenv("PRC_DIAG_DUMP_NONMANIFOLD_REGION") != NULL)
+                    {
+                        uint32_t k4;
+                        printf("PRC_DIAG_DUMP_REGION: vertex v=%u pos=(%.17g,%.17g,%.17g)\n", vi,
+                            out->positions[(size_t)vi * 3 + 0], out->positions[(size_t)vi * 3 + 1],
+                            out->positions[(size_t)vi * 3 + 2]);
+                        for (k4 = 0; k4 < deg; k4++)
+                        {
+                            uint32_t t = vtri_list[vtri_start[vi] + k4];
+                            uint32_t a = out->tri_indices[(size_t)t * 3 + 0];
+                            uint32_t b = out->tri_indices[(size_t)t * 3 + 1];
+                            uint32_t c = out->tri_indices[(size_t)t * 3 + 2];
+                            printf("PRC_DIAG_DUMP_REGION:   tri=%u orig_idx=%u fan_root=%u verts=(%u,%u,%u) "
+                                "p0=(%.17g,%.17g,%.17g) p1=(%.17g,%.17g,%.17g) p2=(%.17g,%.17g,%.17g)\n",
+                                t, out->tri_orig_index[t], prc_uf_find(vparent, k4), a, b, c,
+                                out->positions[(size_t)a * 3 + 0], out->positions[(size_t)a * 3 + 1], out->positions[(size_t)a * 3 + 2],
+                                out->positions[(size_t)b * 3 + 0], out->positions[(size_t)b * 3 + 1], out->positions[(size_t)b * 3 + 2],
+                                out->positions[(size_t)c * 3 + 0], out->positions[(size_t)c * 3 + 1], out->positions[(size_t)c * 3 + 2]);
+                        }
+                    }
 
                     /* Assign each LOCAL triangle a "new vertex" slot per
                        fan-root, except the fan containing local index 0

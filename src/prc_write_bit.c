@@ -644,6 +644,18 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
     }
     prc_free(ctx, sorted);
 
+    if (getenv("PRC_DIAG_HUFF_FREQ") != NULL)
+    {
+        uint32_t di;
+        uint32_t tie_count = 0;
+        for (di = 1; di < distinct_count; di++)
+            if (distinct_freqs[di] == distinct_freqs[di - 1]) tie_count++;
+        fprintf(stderr, "PRC_DIAG_HUFF_FREQ: count=%u distinct_count=%u tie_count=%u\n", count, distinct_count, tie_count);
+        for (di = 0; di < distinct_count; di++)
+            fprintf(stderr, "PRC_DIAG_HUFF_FREQ:   value=%u freq=%llu\n", distinct_values[di],
+                (unsigned long long)distinct_freqs[di]);
+    }
+
     /* +2 over the "normal" 2*distinct_count-1 node budget covers the
        active_count==1 single-value special case's extra phantom leaf below;
        +2 more (total +4) covers the unconditional top-level phantom-wrap

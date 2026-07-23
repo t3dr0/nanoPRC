@@ -2085,6 +2085,97 @@ main(int argc, char *argv[])
     }
     printf("Found %u connected part%s\n", (unsigned)num_components, num_components == 1 ? "" : "s");
 
+    /* Diagnostic-only (not for production use): restrict output to a
+       caller-chosen subset of the connected components just labeled
+       above, by component index (0-based, in union-find-root-discovery
+       order -- stable for a given input file/tolerance, not necessarily
+       meaningful across different files or tolerances). For isolating
+       which of several parts in a multi-part STL is responsible for an
+       Acrobat-rejection defect: e.g. PRC_DIAG_COMPONENT_FILTER=0 keeps
+       only the first-discovered component, dropping everything else,
+       without needing to know which raw STL facet range it occupies (the
+       way PRC_DIAG_TRI_RANGE would require) -- components need not be
+       contiguous in facet order. Incompatible with --original-normals
+       (global_normal_index is built below, indexed by the ORIGINAL
+       per-triangle order, which this filter would desync from the
+       now-compacted triangle list) -- rejected outright rather than
+       silently producing wrong normals. */
+    {
+        const char *diag_component_filter = getenv("PRC_DIAG_COMPONENT_FILTER");
+        if (diag_component_filter != NULL)
+        {
+            uint8_t *keep;
+            uint32_t *new_id;
+            uint32_t *weld_index_filtered;
+            uint32_t kept_triangles = 0, kept_components = 0;
+            char *filter_copy, *tok;
+            uint32_t t, c;
+
+            if (original_normals)
+            {
+                fprintf(stderr, "Error: PRC_DIAG_COMPONENT_FILTER is incompatible with --original-normals\n");
+                goto cleanup;
+            }
+
+            keep = (uint8_t *)calloc(num_components, sizeof(uint8_t));
+            new_id = (uint32_t *)malloc(sizeof(uint32_t) * num_components);
+            weld_index_filtered = (uint32_t *)malloc(sizeof(uint32_t) * 3 * mesh.num_triangles);
+            filter_copy = (char *)malloc(strlen(diag_component_filter) + 1);
+            if (keep == NULL || new_id == NULL || weld_index_filtered == NULL || filter_copy == NULL)
+            {
+                fprintf(stderr, "Error: allocation failed for PRC_DIAG_COMPONENT_FILTER\n");
+                free(keep); free(new_id); free(weld_index_filtered); free(filter_copy);
+                goto cleanup;
+            }
+            strcpy(filter_copy, diag_component_filter);
+            for (tok = strtok(filter_copy, ","); tok != NULL; tok = strtok(NULL, ","))
+            {
+                long idx = strtol(tok, NULL, 10);
+                if (idx >= 0 && (uint32_t)idx < num_components) keep[idx] = 1;
+            }
+            free(filter_copy);
+            for (c = 0; c < num_components; c++)
+                new_id[c] = keep[c] ? kept_components++ : UINT32_MAX;
+
+            for (t = 0; t < mesh.num_triangles; t++)
+            {
+                uint32_t comp = component_of_welded[weld_index[t * 3 + 0]];
+                if (!keep[comp]) continue;
+                weld_index_filtered[kept_triangles * 3 + 0] = weld_index[t * 3 + 0];
+                weld_index_filtered[kept_triangles * 3 + 1] = weld_index[t * 3 + 1];
+                weld_index_filtered[kept_triangles * 3 + 2] = weld_index[t * 3 + 2];
+                /* Filtered-triangle order is exactly raw-facet-index order
+                   restricted to kept components (this loop walks t in
+                   ascending order and only ever appends), so with a SINGLE
+                   kept component -- the common case for this diagnostic --
+                   this filtered index is also exactly the local component-
+                   relative triangle index prc_encode_preprocess will later
+                   see as its own input order (its own tri_orig_index[]
+                   diagnostic field indexes into THAT space). Printing this
+                   mapping lets tri_orig_index values be traced all the way
+                   back to a real raw STL facet index, e.g. for building a
+                   precise (not reconstructed-from-rounded-text) minimal
+                   repro via PRC_DIAG_TRI_RANGE on just that facet. */
+                if (getenv("PRC_DIAG_DUMP_TRIANGLE_MAP") != NULL)
+                    printf("PRC_DIAG_TRIANGLE_MAP: filtered_index=%u raw_facet_index=%u\n",
+                        (unsigned)kept_triangles, (unsigned)t);
+                kept_triangles++;
+            }
+            for (c = 0; c < grid.count; c++)
+                component_of_welded[c] = keep[component_of_welded[c]] ? new_id[component_of_welded[c]] : UINT32_MAX;
+
+            free(weld_index);
+            weld_index = weld_index_filtered;
+            mesh.num_triangles = kept_triangles;
+            num_components = kept_components;
+            free(keep);
+            free(new_id);
+            printf("PRC_DIAG_COMPONENT_FILTER=%s: restricted to %u triangles, %u component%s\n",
+                diag_component_filter, (unsigned)kept_triangles, (unsigned)kept_components,
+                kept_components == 1 ? "" : "s");
+        }
+    }
+
     /* Step 3: original-facet-normal deduplication, only if requested (Section 3). */
     if (original_normals)
     {
