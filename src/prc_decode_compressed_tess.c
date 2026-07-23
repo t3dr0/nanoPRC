@@ -1173,6 +1173,14 @@ prc_handle_empty_stack_decode(prc_context *ctx, prc_tess_3d_compressed *data,
     num_ref_points = point_is_ref[0] + point_is_ref[1] + point_is_ref[2];
     *points_is_reference_index += 3;
 
+    if (ctx->trace_reversed)
+    {
+        fprintf(stderr, "DEC_CHAINSTART r=(%u,%u,%u) num_refs=%u "
+            "pref_size_before=%d pisref_size_before=%d\n",
+            point_is_ref[0], point_is_ref[1], point_is_ref[2], num_ref_points,
+            *reference_array_count, *points_is_reference_index - 3);
+    }
+
     if (num_ref_points == 0)
     {
         /* In this case, we are essentially rebooting with a fresh
