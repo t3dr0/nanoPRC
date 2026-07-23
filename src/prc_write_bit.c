@@ -20,6 +20,7 @@
    pattern its prc_bitread_X counterpart in prc_bit.c consumes -- each
    function below says which read function it pairs with and where. */
 
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
@@ -835,18 +836,33 @@ typedef struct
    mismatches were confined to frequency-tied leaves (e.g. two leaves both
    occurring 23 times get the same code LENGTH in both this tree and the
    real one, but the real file swaps which of the two gets the lower vs.
-   higher code VALUE). Tested the standard "canonical Huffman" hypothesis
-   (reassign code values purely from the already-correct lengths, sorted
-   by value, independent of tree shape) -- did not match either. The real
-   encoder's exact tie-breaking rule for equal-frequency leaves has not
-   been determined; would need tied-frequency examples from more real
-   files to pin down with confidence rather than guess from one. Does NOT
-   affect code LENGTH (hence total field size is already correct) and is
-   not shown to matter for decodability by any reader tried, including
-   Acrobat -- unlike the phantom-wrap/tree-shape fix elsewhere in this
-   file, which IS confirmed causal to Acrobat's blank-model-tree
-   rejection. Affects normal_angle_array and (very likely, same
-   mechanism, not independently re-verified) point_reference_array. */
+   higher code VALUE). The real encoder's exact tie-breaking rule for
+   equal-frequency leaves has not been determined. Does NOT affect code
+   LENGTH (hence total field size is already correct).
+
+   DO NOT "FIX" THIS WITH CANONICAL HUFFMAN CODING (2026-07-22, tried and
+   REVERTED after confirming it breaks real Acrobat decoding). Standard
+   canonical Huffman assigns code 0 (the all-zero-prefix codeword) to the
+   shortest-length symbol -- but prc_huff_build_tree's phantom-wrap merge
+   (below) deliberately reserves the tree root's entire '0'-branch as dead/
+   unused specifically because real Acrobat requires every actual leaf's
+   code to start with bit 1 (see that fix's own history). Canonical
+   assignment computed purely from code lengths, ignorant of which branch
+   the phantom occupies, silently reuses that reserved 0-branch --
+   reintroducing the exact defect the phantom-wrap fix exists to prevent,
+   just via a different code path. Confirmed via real Acrobat round-trip:
+   N=272 and N=709 synthetic COMPRESSED grids (previously Acrobat-
+   confirmed-working) both regressed to blank canvas/model tree with
+   canonical coding applied, and both went back to working immediately
+   upon reverting it, with nothing else changed. This tie-breaking
+   ambiguity is real but is NOT shown to matter for decodability by any
+   reader tried, including Acrobat, when left as this function's existing
+   tree-traversal-order assignment produces it -- unlike the phantom-wrap/
+   tree-shape fix itself, which IS confirmed causal to Acrobat's blank-
+   model-tree rejection. Affects normal_angle_array and (very likely, same
+   mechanism, not independently re-verified) point_reference_array; if
+   revisited, any replacement scheme MUST preserve the "every real leaf
+   code starts with bit 1" invariant, not just match code lengths. */
 static int
 prc_huff_assign_codes(prc_context *ctx, prc_huff_build_node *root, uint32_t leaf_count,
     uint32_t *leaf_values, uint32_t *code_lengths, uint32_t *code_values)
@@ -1032,6 +1048,9 @@ prc_bitwrite_huffman_block(prc_context *ctx, prc_bit_write_state *state,
            file leaf-for-leaf, isolating the max_code_length field itself
            as the sole remaining discrepancy (2026-07-10). */
         max_code_length = prc_spec_bits_for_unsigned(true_max_code_length);
+        if (getenv("PRC_DIAG_HUFF_STATS") != NULL)
+            printf("PRC_DIAG_HUFF_STATS: count=%u leaf_count=%u true_max_code_length=%u max_code_length_field=%u num_bits=%u\n",
+                count, leaf_count, true_max_code_length, max_code_length, (unsigned)num_bits);
     }
 
     if (prc_bitwrite_init(ctx, &sub, 64) != 0)
