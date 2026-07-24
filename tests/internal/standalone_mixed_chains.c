@@ -42,10 +42,11 @@ int main(int argc, char **argv)
     int code;
     const char *mode;
     const char *out_pdf = NULL;
-    double positions[16 * 3];
-    uint32_t tri_indices[11 * 3];
+    double positions[64 * 3];
+    uint32_t tri_indices[64 * 3];
     uint32_t num_positions = 0, num_triangles = 0;
     uint8_t include_fan = 0, include_strip = 0, include_lone = 0, include_minifan = 0;
+    uint32_t fan_size = 8;
     uint32_t face_tri_counts[1];
     prc_api_write_tessellation tess;
     prc_api_write_rep_item rep_item;
@@ -55,7 +56,7 @@ int main(int argc, char **argv)
 
     if (argc < 3)
     {
-        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple> <output.prc> [output.pdf]\n", argv[0]);
+        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple|custom> <output.prc> [output.pdf] [fan_size (custom mode only, default 8)]\n", argv[0]);
         return 2;
     }
     mode = argv[1];
@@ -66,28 +67,33 @@ int main(int argc, char **argv)
     else if (strcmp(mode, "strip_lone") == 0) { include_strip = include_lone = 1; }
     else if (strcmp(mode, "fan_strip") == 0) { include_fan = include_strip = 1; }
     else if (strcmp(mode, "small_triple") == 0) { include_minifan = include_strip = include_lone = 1; }
+    else if (strcmp(mode, "custom") == 0)
+    {
+        include_fan = include_strip = include_lone = 1;
+        if (argc >= 5) fan_size = (uint32_t)strtoul(argv[4], NULL, 10);
+    }
     else { printf("unrecognized mode '%s'\n", mode); return 2; }
 
-    /* Fan: hub + 8-ring, centered at origin, radius 1 -- 8 triangles. */
+    /* Fan: hub + fan_size-ring (default 8), centered at origin, radius 1. */
     if (include_fan)
     {
         uint32_t base = num_positions;
         positions[base * 3 + 0] = 0.0; positions[base * 3 + 1] = 0.0; positions[base * 3 + 2] = 0.0;
-        for (k = 0; k < 8; k++)
+        for (k = 0; k < (int)fan_size; k++)
         {
-            double a = 2.0 * 3.14159265358979323846 * k / 8.0;
+            double a = 2.0 * 3.14159265358979323846 * k / (double)fan_size;
             positions[(base + 1 + k) * 3 + 0] = cos(a);
             positions[(base + 1 + k) * 3 + 1] = sin(a);
             positions[(base + 1 + k) * 3 + 2] = 0.0;
         }
-        for (k = 0; k < 8; k++)
+        for (k = 0; k < (int)fan_size; k++)
         {
             tri_indices[num_triangles * 3 + 0] = base;
             tri_indices[num_triangles * 3 + 1] = base + 1 + k;
-            tri_indices[num_triangles * 3 + 2] = base + 1 + ((k + 1) % 8);
+            tri_indices[num_triangles * 3 + 2] = base + 1 + ((uint32_t)(k + 1) % fan_size);
             num_triangles++;
         }
-        num_positions += 9;
+        num_positions += fan_size + 1;
     }
 
     /* Mini fan: hub + 3-ring -- 3 triangles. Same shape as the 8-triangle
