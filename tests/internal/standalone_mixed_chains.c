@@ -56,7 +56,7 @@ int main(int argc, char **argv)
 
     if (argc < 3)
     {
-        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple|custom|custom_fan_strip> <output.prc> [output.pdf] [fan_size (custom/custom_fan_strip modes only, default 8)]\n", argv[0]);
+        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple|custom|custom_fan_strip|custom_fan_only> <output.prc> [output.pdf] [fan_size (custom/custom_fan_strip/custom_fan_only modes only, default 8)]\n", argv[0]);
         return 2;
     }
     mode = argv[1];
@@ -75,6 +75,19 @@ int main(int argc, char **argv)
     else if (strcmp(mode, "custom_fan_strip") == 0)
     {
         include_fan = include_strip = 1;
+        if (argc >= 5) fan_size = (uint32_t)strtoul(argv[4], NULL, 10);
+    }
+    else if (strcmp(mode, "custom_fan_only") == 0)
+    {
+        /* Fan alone: no strip, no chain restart, single connected component
+           -- breaks the perfect correlation between fan_size and total
+           position/triangle count that every other mode has (each fan_size
+           tested so far maps to a unique total, so fan_size, num_positions,
+           and num_triangles could not be distinguished as the operative
+           variable). If fan_size=8 alone still fails, the defect is
+           intrinsic to the fan shape/count; if it works, the strip/
+           chain-restart interaction is essential. */
+        include_fan = 1;
         if (argc >= 5) fan_size = (uint32_t)strtoul(argv[4], NULL, 10);
     }
     else { printf("unrecognized mode '%s'\n", mode); return 2; }
@@ -160,6 +173,17 @@ int main(int argc, char **argv)
     {
         uint32_t base = num_positions;
         double ox = 20.0;
+        /* PRC_DIAG_STRIP_BASE_X_OFFSET (default 20.0): moves the WHOLE
+           strip's base position, keeping its shape (the two triangles'
+           relative coordinates) identical -- added to test whether fan8's
+           Acrobat blank-tree failure (confirmed 2026-07-24 to require fan8
+           + THIS SPECIFIC STRIP, since fan8 alone and fan8+lone-triangle
+           both work) depends on the strip's ABSOLUTE POSITION (a
+           coincidental numeric collision with fan8's own quantized values,
+           specific to ox=20) or merely on having a 2-triangle second chain
+           at all, regardless of where. */
+        if (getenv("PRC_DIAG_STRIP_BASE_X_OFFSET") != NULL)
+            ox = atof(getenv("PRC_DIAG_STRIP_BASE_X_OFFSET"));
         /* PRC_DIAG_STRIP_SECOND_X_OFFSET (default 1.0): the strip's own
            2nd vertex's X-offset from its 1st. Exists to directly engineer
            (independent of fan_size/shape) whether this chain-restart's

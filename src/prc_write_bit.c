@@ -355,11 +355,32 @@ prc_acofdoe_find_exponent(unsigned exponent_value)
    Acrobat-working. The mechanism inside Acrobat's own PRC engine was not
    determined (proprietary, unavailable for inspection) -- avoiding this
    one shortcut is the confirmed, minimal fix. */
+/* DIAGNOSTIC (2026-07-24, PRC_DIAG_BITWRITE_DOUBLE): dumps every value
+   passed through prc_bitwrite_double and exactly which encoding path was
+   taken (zero fast-path / frequent-double table hit / exponent-table entry
+   + per-mantissa-byte literal-vs-shortcut choice). Added while chasing the
+   mixed_chains/UK_original.stl Acrobat blank-tree bug -- tolerance_mm
+   (prc_write_compress_tess.c) is the one field confirmed to differ in
+   VALUE (not just structure) between the known-failing fan8 repro and its
+   known-working rotated-fan comparison, and this is the function that
+   turns that value into bits; every earlier trace this investigation added
+   was one level removed from what this prints. Zero behavior change when
+   unset. */
+static int prc_diag_bitwrite_double_enabled_cache = -1;
+static int
+prc_diag_bitwrite_double_enabled(void)
+{
+    if (prc_diag_bitwrite_double_enabled_cache < 0)
+        prc_diag_bitwrite_double_enabled_cache = (getenv("PRC_DIAG_BITWRITE_DOUBLE") != NULL) ? 1 : 0;
+    return prc_diag_bitwrite_double_enabled_cache;
+}
+
 int
 prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
 {
     union ieee754_double target;
     uint64_t val_bits;
+    int diag = prc_diag_bitwrite_double_enabled();
 
     if (state->error)
         return -1;
@@ -369,7 +390,11 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
 
     /* Exact +0.0: the table's dedicated 2-bit code, no sign bit follows. */
     if (val_bits == 0)
+    {
+        if (diag)
+            fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE: val=%.17g path=zero\n", val);
         return prc_bitwrite_uint_variable_bit(ctx, state, 1, 2);
+    }
 
     {
         double magnitude = fabs(val);
@@ -377,6 +402,9 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
 
         if (entry != NULL)
         {
+            if (diag)
+                fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE: val=%.17g path=table_double bits=0x%x nbits=%d sign=%d\n",
+                    val, entry->Bits, (int)entry->NumberOfBits, (int)target.ieee.negative);
             if (prc_bitwrite_uint_variable_bit(ctx, state, entry->Bits, (uint32_t)entry->NumberOfBits) != 0)
                 return -1;
             return prc_bitwrite_bit(ctx, state, (uint8_t)target.ieee.negative);
@@ -399,13 +427,23 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
             return -1;
         }
 
+        if (diag)
+            fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE: val=%.17g path=table_exponent bits=0x%x nbits=%d sign=%d "
+                "exponent=0x%x mantissa0=0x%x mantissa1=0x%x\n",
+                val, entry->Bits, (int)entry->NumberOfBits, (int)target.ieee.negative,
+                (unsigned)target.ieee.exponent, (unsigned)target.ieee.mantissa0, (unsigned)target.ieee.mantissa1);
+
         if (prc_bitwrite_uint_variable_bit(ctx, state, entry->Bits, (uint32_t)entry->NumberOfBits) != 0)
             return -1;
         if (prc_bitwrite_bit(ctx, state, (uint8_t)target.ieee.negative) != 0)
             return -1;
 
         if (target.ieee.mantissa0 == 0 && target.ieee.mantissa1 == 0)
+        {
+            if (diag)
+                fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE:   no_mantissa\n");
             return prc_bitwrite_bit(ctx, state, 0); /* no mantissa */
+        }
 
         if (prc_bitwrite_bit(ctx, state, 1) != 0)
             return -1;
@@ -429,6 +467,10 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
         tb[4] = (uint8_t)((target.ieee.mantissa1 >> 8) & 0xFF);
         tb[5] = (uint8_t)(target.ieee.mantissa1 & 0xFF);
 
+        if (diag)
+            fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE:   mantissa_bytes=%02x %02x %02x %02x %02x %02x prev_byte=%02x\n",
+                tb[0], tb[1], tb[2], tb[3], tb[4], tb[5], prev_byte);
+
         for (i = 0; i < 6; )
         {
             int j, all_eq;
@@ -438,6 +480,9 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
                 if (tb[j] != prev_byte) { all_eq = 0; break; }
             if (all_eq)
             {
+                if (diag)
+                    fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE:   byte[%d..5]=fill_all_remaining(prev=%02x) (opcode offset=0, %d byte(s))\n",
+                        i, prev_byte, 6 - i);
                 if (prc_bitwrite_bit(ctx, state, 0) != 0) return -1;
                 if (prc_bitwrite_uint_variable_bit(ctx, state, 0, 3) != 0) return -1;
                 break;
@@ -450,6 +495,9 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
                     if (tb[j] != prev_byte) { all_eq = 0; break; }
                 if (all_eq)
                 {
+                    if (diag)
+                        fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE:   byte[%d..4]=fill_except_last(prev=%02x), byte[5]=literal(%02x) (opcode offset=6)\n",
+                            i, prev_byte, tb[5]);
                     if (prc_bitwrite_bit(ctx, state, 0) != 0) return -1;
                     if (prc_bitwrite_uint_variable_bit(ctx, state, 6, 3) != 0) return -1;
                     if (prc_bitwrite_uint8(ctx, state, tb[5]) != 0) return -1;
@@ -457,6 +505,9 @@ prc_bitwrite_double(prc_context *ctx, prc_bit_write_state *state, double val)
                 }
             }
 
+            if (diag)
+                fprintf(stderr, "PRC_DIAG_BITWRITE_DOUBLE:   byte[%d]=literal(%02x) prev_byte_was=%02x %s\n",
+                    i, tb[i], prev_byte, (tb[i] == prev_byte) ? "(== prev_byte, but emitted literal, not offset=1 shortcut)" : "");
             if (prc_bitwrite_bit(ctx, state, 1) != 0) return -1;
             if (prc_bitwrite_uint8(ctx, state, tb[i]) != 0) return -1;
             prev_byte = tb[i];
@@ -1567,6 +1618,18 @@ prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *sta
     }
     for (k = 0; k < data_size; k++)
         bit_lengths[k] = (uint8_t)prc_int32_bit_width_signed(data[k]);
+
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_POINT_ARRAY_BITLENGTHS): dumps each
+       value alongside its computed bit length, added while checking whether
+       a bit-width boundary (rather than duplicate values, already
+       disproven) correlates with the mixed_chains/fan8 Acrobat blank-tree
+       bug. Zero behavior change when unset. */
+    if (getenv("PRC_DIAG_POINT_ARRAY_BITLENGTHS") != NULL)
+    {
+        for (k = 0; k < data_size; k++)
+            fprintf(stderr, "PRC_DIAG_POINT_ARRAY_BITLENGTHS: k=%u value=%d bit_length=%u\n",
+                k, data[k], bit_lengths[k]);
+    }
 
     /* matches: bit_lengths = prc_bitread_character_array(ctx, state, &size,
        6, true, 0); (prc_bit.c 1435) -- the bit-length table itself, written
