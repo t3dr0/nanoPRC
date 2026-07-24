@@ -76,39 +76,35 @@
 #include <math.h>
 #include <ctype.h>
 
-/* Research option (default OFF): when a welded STL splits into multiple
-   disjoint connected components, the DEFAULT behavior (stl_import_build_
-   parts, below) gives each component its own PRC_TYPE_ASM_FileStructure
-   Tessellation entry, rep item, and 3-level tree branch (root ->
-   intermediate[empty part] -> leaf[real part]). At real-world STL-scan
-   scale that can mean tens or hundreds of thousands of tree nodes and
-   tessellation entries sharing one file structure's bitstream section --
-   Adobe Acrobat/Reader are independently known to have performance
-   problems with very large/deep model trees, and this investigation has
-   also seen a from-scratch bitstream corruption (an independent reader
-   disagreeing with our own writer, not just Acrobat being stricter --
-   see the "beetle_1000000.stl entry #397" notes in this repo's PRC/STL
-   investigation writeup) that is specific to writing many sequential
-   COMPRESSED entries into one shared section.
-
-   This is a THRESHOLD, not a boolean: 0 (the default) means "never" --
-   always use the default per-component-model behavior, unconditionally.
-   A positive value N means "when a welded STL has more than N disjoint
-   components, build exactly ONE tessellation entry, ONE rep item, and
-   ONE tree leaf for the whole mesh instead, with every connected
-   component encoded as its own FACE GROUP within that single entry
-   (prc_api_write_tessellation's face_tri_counts/num_faces) rather than
-   as a separate model." This trades away per-part identity in the model
-   tree (all components collapse into one named node) in exchange for a
-   flat tree and a single tessellation entry regardless of how many
-   disjoint pieces the STL contains.
-
-   Left at 0 until the face-group encoding has itself been validated
-   end-to-end against the real-world files driving this investigation
-   (beetle_1000000.stl / UK_original.stl) -- once confirmed correct, this
-   is the natural default to flip on (e.g. to 20) for STL-scan-scale
-   inputs, per-file, with no CLI flag needed. */
-#define STL_IMPORT_PARTS_AS_FACES_THRESHOLD 0
+/* ====================================================================
+ * STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD -- adjust this to change when
+ * stl_import switches from one-model-per-part to a single lumped model.
+ * ====================================================================
+ *
+ * When a welded STL splits into multiple disjoint connected components,
+ * the normal behavior (stl_import_build_parts, below) gives each
+ * component its own PRC_TYPE_ASM_FileStructureTessellation entry, rep
+ * item, and 3-level tree branch (root -> intermediate[empty part] ->
+ * leaf[real part]) -- so each part shows up separately in the model
+ * tree. At real-world STL-scan scale that can mean tens or hundreds of
+ * thousands of tree nodes and tessellation entries sharing one file
+ * structure's bitstream section -- Adobe Acrobat/Reader are
+ * independently known to have performance problems with very large/deep
+ * model trees.
+ *
+ * When the welded STL has MORE than this many disjoint components,
+ * stl_import instead merges every component's triangles into a single
+ * lumped model: one tessellation entry, one rep item, one tree leaf,
+ * with no per-part identity preserved in the tree (this is a plain
+ * merge, not the abandoned "components as face groups within one entry"
+ * approach -- see git history around 2026-07-23/24 if that's ever worth
+ * revisiting; it was reverted because verifying multi-face-group entries
+ * correctly needs its own dedicated internal test, not production code,
+ * after it exposed a still-unfixed O(faces) per-call vertex_indices
+ * allocation bug in prc_api_get_tessellation_vertices). A value of 0
+ * would mean "always lump, never show separate parts" -- not a useful
+ * setting in practice, so this define is not meant to be set to 0. */
+#define STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD 100
 
 /* Multiplies `count * elem_size`, checking for size_t overflow first.
    Every allocation in this file that scales with a value read from (or
@@ -1147,10 +1143,9 @@ stl_parts_free(stl_parts *parts)
         free((void *)parts->tess_entries[i].tri_indices);
         free((void *)parts->tess_entries[i].normals);
         free((void *)parts->tess_entries[i].norm_indices);
-        /* NULL for the default per-component path (that path never sets
-           face_tri_counts -- see stl_import_build_parts' own comment);
-           only the STL_IMPORT_PARTS_AS_FACES_THRESHOLD path allocates
-           one, and free(NULL) is a no-op, so this is safe unconditionally. */
+        /* Neither build path (per-component or lumped single model) ever
+           sets face_tri_counts -- always NULL here, and free(NULL) is a
+           no-op, so this is just a defensive catch-all. */
         free((void *)parts->tess_entries[i].face_tri_counts);
     }
     free(parts->tess_entries);
@@ -1163,97 +1158,61 @@ stl_parts_free(stl_parts *parts)
     memset(parts, 0, sizeof(*parts));
 }
 
-/* STL_IMPORT_PARTS_AS_FACES_THRESHOLD alternative (see that #define's own
+/* STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD path (see that #define's own
    comment near the top of the file): builds exactly ONE tessellation
-   entry / rep item / tree leaf for the WHOLE mesh, with each connected
-   component becoming its own face group (face_tri_counts/num_faces)
-   instead of its own model. Comes back with parts->num_components == 1,
-   so every caller downstream of stl_import_build_parts (root node
-   assembly, prc_api_write_prc_buffer, stl_parts_free in Section 5) works
-   completely unchanged -- from the outside this looks exactly like the
+   entry / rep item / tree leaf for the WHOLE mesh, merging every
+   connected component's triangles into one plain, ungrouped COMPRESSED
+   entry (no face_tri_counts/num_faces grouping -- see include/prc_api.h's
+   prc_api_write_tessellation doc comment: NULL/0 there is legal for
+   COMPRESSED and means "whole entry treated as one face"). No per-part
+   identity survives in the model tree; that's the whole point of this
+   path existing, for STLs too fragmented to give every part its own
+   tree node/entry without risking Acrobat's known large/deep-tree
+   performance problems. Comes back with parts->num_components == 1, so
+   every caller downstream of stl_import_build_parts (root node assembly,
+   prc_api_write_prc_buffer, stl_parts_free in Section 5) works completely
+   unchanged -- from the outside this looks exactly like the
    num_components==1 case of the default per-component path.
 
-   No per-component vertex/normal remapping is needed here (unlike the
-   default path): the single entry spans the whole mesh, so weld_index's
-   global welded-vertex ids into welded_positions, and global_normal_
-   index's ids into dedup_normals, are already exactly the arrays this
-   entry needs -- the only reordering required is grouping tri_indices
-   (and norm_indices, if present) so each component's triangles are
-   contiguous, which is what makes face_tri_counts meaningful. */
+   No per-component grouping/reordering is needed here (unlike the
+   default path, and unlike the abandoned face-groups approach this
+   replaced): a plain merge doesn't care what order triangles come in, so
+   weld_index's global welded-vertex ids into welded_positions, and
+   global_normal_index's ids into dedup_normals, are used directly,
+   triangle by triangle, in their original order. */
 static int
-stl_import_build_single_model_faces(const stl_mesh *mesh, const double *welded_positions, uint32_t num_welded,
-    const uint32_t *weld_index, const uint32_t *component_of_welded, uint32_t num_components,
-    int original_normals, const uint32_t *global_normal_index, const double *dedup_normals,
-    double weld_tolerance_fraction, stl_parts *parts)
+stl_import_build_single_lumped_model(const stl_mesh *mesh, const double *welded_positions, uint32_t num_welded,
+    const uint32_t *weld_index, int original_normals, const uint32_t *global_normal_index,
+    const double *dedup_normals, double weld_tolerance_fraction, stl_parts *parts)
 {
-    uint32_t *component_of_triangle = NULL;
-    uint32_t *tri_count_per_component = NULL;
-    uint32_t *component_offset = NULL;
-    uint32_t *triangle_order = NULL;
-    uint32_t *fill_cursor = NULL;
-    uint32_t *face_tri_counts = NULL;
     uint32_t *combined_tri_indices = NULL;
     double *combined_positions = NULL;
     double *combined_normals = NULL;
     uint32_t *combined_norm_indices = NULL;
     double bbox_min[3], bbox_max[3];
-    uint32_t t, c, k;
+    uint32_t t;
     uint32_t max_normal_id = 0;
     int ok = -1;
 
     memset(parts, 0, sizeof(*parts));
 
-    component_of_triangle = (uint32_t *)malloc(sizeof(uint32_t) * mesh->num_triangles);
-    tri_count_per_component = (uint32_t *)calloc(num_components, sizeof(uint32_t));
-    component_offset = (uint32_t *)malloc(sizeof(uint32_t) * (num_components + 1));
-    triangle_order = (uint32_t *)malloc(sizeof(uint32_t) * mesh->num_triangles);
-    fill_cursor = (uint32_t *)malloc(sizeof(uint32_t) * num_components);
-    face_tri_counts = (uint32_t *)malloc(sizeof(uint32_t) * num_components);
-    combined_tri_indices = (uint32_t *)malloc(sizeof(uint32_t) * 3 * mesh->num_triangles);
-    combined_positions = (double *)malloc(sizeof(double) * 3 * (num_welded > 0 ? num_welded : 1));
-    if (component_of_triangle == NULL || tri_count_per_component == NULL || component_offset == NULL ||
-        triangle_order == NULL || fill_cursor == NULL || face_tri_counts == NULL ||
-        combined_tri_indices == NULL || combined_positions == NULL)
-    {
-        fprintf(stderr, "Error: allocation failed building single-model face groups\n");
-        goto cleanup;
-    }
-
-    /* Same counting sort as stl_import_build_parts: group triangle indices
-       contiguously by component, so triangle_order[component_offset[c] ..
-       component_offset[c+1]-1] are component c's triangles -- here that
-       ordering becomes the face-group layout directly (face_tri_counts[c]),
-       rather than feeding N separate per-component entries. */
-    for (t = 0; t < mesh->num_triangles; t++)
-    {
-        component_of_triangle[t] = component_of_welded[weld_index[t * 3 + 0]];
-        tri_count_per_component[component_of_triangle[t]]++;
-    }
-    component_offset[0] = 0;
-    for (c = 0; c < num_components; c++)
-    {
-        component_offset[c + 1] = component_offset[c] + tri_count_per_component[c];
-        face_tri_counts[c] = tri_count_per_component[c];
-    }
-    memcpy(fill_cursor, component_offset, sizeof(uint32_t) * num_components);
-    for (t = 0; t < mesh->num_triangles; t++)
-        triangle_order[fill_cursor[component_of_triangle[t]]++] = t;
-
     /* tess_entries[].positions/tri_indices are demo-owned and freed by
        stl_parts_free, so this can't just alias the caller's own
        weld_index/welded_positions buffers (main() owns and frees those
        separately) -- copy instead. */
+    combined_tri_indices = (uint32_t *)malloc(sizeof(uint32_t) * 3 * mesh->num_triangles);
+    combined_positions = (double *)malloc(sizeof(double) * 3 * (num_welded > 0 ? num_welded : 1));
+    if (combined_tri_indices == NULL || combined_positions == NULL)
+    {
+        fprintf(stderr, "Error: allocation failed building lumped single model\n");
+        goto cleanup;
+    }
     memcpy(combined_positions, welded_positions, sizeof(double) * 3 * num_welded);
+    memcpy(combined_tri_indices, weld_index, sizeof(uint32_t) * 3 * mesh->num_triangles);
+
     bbox_reset(bbox_min, bbox_max);
     for (t = 0; t < num_welded; t++)
         bbox_expand(bbox_min, bbox_max, &welded_positions[t * 3]);
-    for (k = 0; k < mesh->num_triangles; k++)
-    {
-        uint32_t tri = triangle_order[k];
-        combined_tri_indices[k * 3 + 0] = weld_index[tri * 3 + 0];
-        combined_tri_indices[k * 3 + 1] = weld_index[tri * 3 + 1];
-        combined_tri_indices[k * 3 + 2] = weld_index[tri * 3 + 2];
-    }
 
     if (original_normals)
     {
@@ -1263,22 +1222,19 @@ stl_import_build_single_model_faces(const stl_mesh *mesh, const double *welded_p
         combined_norm_indices = (uint32_t *)malloc(sizeof(uint32_t) * 3 * mesh->num_triangles);
         if (combined_normals == NULL || combined_norm_indices == NULL)
         {
-            fprintf(stderr, "Error: allocation failed building single-model normals\n");
+            fprintf(stderr, "Error: allocation failed building lumped single model normals\n");
             goto cleanup;
         }
         /* dedup_normals is already a global, deduplicated array (Section 3)
-           -- global_normal_index's values index it directly, no further
-           dedup/remap needed here, unlike the per-component path's
-           local-id remap (which exists there only because each component
-           gets its OWN 0-based normals array). */
+           -- global_normal_index's values index it directly, no remap
+           needed for a plain merge. */
         memcpy(combined_normals, dedup_normals, sizeof(double) * 3 * max_normal_id);
-        for (k = 0; k < mesh->num_triangles; k++)
+        for (t = 0; t < mesh->num_triangles; t++)
         {
-            uint32_t tri = triangle_order[k];
-            uint32_t gn = global_normal_index[tri];
-            combined_norm_indices[k * 3 + 0] = gn;
-            combined_norm_indices[k * 3 + 1] = gn;
-            combined_norm_indices[k * 3 + 2] = gn;
+            uint32_t gn = global_normal_index[t];
+            combined_norm_indices[t * 3 + 0] = gn;
+            combined_norm_indices[t * 3 + 1] = gn;
+            combined_norm_indices[t * 3 + 2] = gn;
         }
     }
 
@@ -1293,7 +1249,7 @@ stl_import_build_single_model_faces(const stl_mesh *mesh, const double *welded_p
         parts->child_ptrs == NULL || parts->intermediates == NULL || parts->intermediate_ptrs == NULL ||
         parts->names == NULL)
     {
-        fprintf(stderr, "Error: allocation failed building single-model part list\n");
+        fprintf(stderr, "Error: allocation failed building lumped single model part list\n");
         goto cleanup;
     }
     parts->num_components = 1;
@@ -1305,8 +1261,9 @@ stl_import_build_single_model_faces(const stl_mesh *mesh, const double *welded_p
         tess->num_positions = num_welded;
         tess->tri_indices = combined_tri_indices;
         tess->num_triangles = mesh->num_triangles;
-        tess->face_tri_counts = face_tri_counts;
-        tess->num_faces = num_components;
+        /* face_tri_counts/num_faces left at NULL/0: this is a plain merge,
+           not the abandoned face-groups approach -- see this function's
+           own doc comment. */
         tess->tolerance = prc_write_tol_relative(weld_tolerance_fraction);
         if (original_normals)
         {
@@ -1365,23 +1322,16 @@ stl_import_build_single_model_faces(const stl_mesh *mesh, const double *welded_p
     parts->intermediate_ptrs[0] = &parts->intermediates[0];
 
     ok = 0;
-    /* Ownership of these transferred into tess_entries[0]/face_tri_counts
-       on success -- stl_parts_free (Section 4's own, unmodified) frees
-       them from there; NULL them out here so this function's own cleanup:
-       below doesn't double-free on the success path. */
+    /* Ownership of these transferred into tess_entries[0] on success --
+       stl_parts_free (Section 4's own, unmodified) frees them from there;
+       NULL them out here so this function's own cleanup: below doesn't
+       double-free on the success path. */
     combined_positions = NULL;
     combined_tri_indices = NULL;
     combined_normals = NULL;
     combined_norm_indices = NULL;
-    face_tri_counts = NULL;
 
 cleanup:
-    free(component_of_triangle);
-    free(tri_count_per_component);
-    free(component_offset);
-    free(triangle_order);
-    free(fill_cursor);
-    free(face_tri_counts);
     free(combined_tri_indices);
     free(combined_positions);
     free(combined_normals);
@@ -1433,11 +1383,10 @@ stl_import_build_parts(const stl_mesh *mesh, const double *welded_positions, uin
 
     memset(parts, 0, sizeof(*parts));
 
-    if (STL_IMPORT_PARTS_AS_FACES_THRESHOLD > 0 && num_components > STL_IMPORT_PARTS_AS_FACES_THRESHOLD)
+    if (num_components > STL_IMPORT_SINGLE_MODEL_PART_THRESHOLD)
     {
-        ok = stl_import_build_single_model_faces(mesh, welded_positions, num_welded, weld_index,
-            component_of_welded, num_components, original_normals, global_normal_index, dedup_normals,
-            weld_tolerance_fraction, parts);
+        ok = stl_import_build_single_lumped_model(mesh, welded_positions, num_welded, weld_index,
+            original_normals, global_normal_index, dedup_normals, weld_tolerance_fraction, parts);
         goto cleanup;
     }
 
