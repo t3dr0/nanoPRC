@@ -118,12 +118,24 @@ int main(int argc, char **argv)
            alone can't distinguish, since rotating changes both at once. */
         if (getenv("PRC_DIAG_FAN_Y_OFFSET") != NULL)
             fan_y_offset = atof(getenv("PRC_DIAG_FAN_Y_OFFSET"));
+        /* PRC_DIAG_FAN_RADIUS (default 1.0): scales the ring uniformly.
+           Uniform scaling preserves every exact angular relationship
+           (cos/sin ratios, hence the fan's own exact-tie structure) while
+           shifting its quantized magnitudes -- and therefore the total bit
+           count consumed before any later chain-restart field -- without
+           touching fan_size or rotation. Added to test whether a co-
+           occurring 22-bit value's BYTE-ALIGNMENT PHASE (not just its bit-
+           length) is part of the mixed_chains/fan8 Acrobat blank-tree bug's
+           trigger condition. */
+        double fan_radius = 1.0;
+        if (getenv("PRC_DIAG_FAN_RADIUS") != NULL)
+            fan_radius = atof(getenv("PRC_DIAG_FAN_RADIUS"));
         positions[base * 3 + 0] = 0.0; positions[base * 3 + 1] = 0.0 + fan_y_offset; positions[base * 3 + 2] = 0.0;
         for (k = 0; k < (int)fan_size; k++)
         {
             double a = rotation_rad + 2.0 * 3.14159265358979323846 * k / (double)fan_size;
-            positions[(base + 1 + k) * 3 + 0] = cos(a);
-            positions[(base + 1 + k) * 3 + 1] = sin(a) + fan_y_offset;
+            positions[(base + 1 + k) * 3 + 0] = fan_radius * cos(a);
+            positions[(base + 1 + k) * 3 + 1] = fan_radius * sin(a) + fan_y_offset;
             positions[(base + 1 + k) * 3 + 2] = 0.0;
         }
         for (k = 0; k < (int)fan_size; k++)

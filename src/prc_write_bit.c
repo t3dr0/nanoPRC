@@ -1441,6 +1441,16 @@ prc_bitwrite_character_array(prc_context *ctx, prc_bit_write_state *state,
        real Huffman encoder exists, this writer takes the compressed path
        whenever it's free to choose (has_comp_bit), not just when forced. */
     compressed = has_comp_bit ? 1 : ((num_known > 3) ? 1 : 0);
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY): forces
+       compressed=0 even when has_comp_bit would otherwise mandate Huffman
+       compression -- added to test whether Huffman-compressing a character
+       array AT ALL (independent of any specific tie/code-assignment detail,
+       all already tested and disproven) is itself the enabling factor for
+       the mixed_chains/fan8 Acrobat blank-tree bug, after finding an
+       independent encoder's comparable file skips compression here
+       entirely. Zero behavior change when unset. */
+    if (compressed && getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
+        compressed = 0;
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;
@@ -1524,6 +1534,10 @@ prc_bitwrite_short_array(prc_context *ctx, prc_bit_write_state *state,
        case here -- has_comp_bit == false always means plain output on the
        read side, so that's the only thing this branch can produce then. */
     compressed = has_comp_bit ? 1 : 0;
+    /* See the matching diagnostic/comment in prc_bitwrite_character_array
+       above (PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY). */
+    if (compressed && getenv("PRC_DIAG_FORCE_UNCOMPRESSED_CHARARRAY") != NULL)
+        compressed = 0;
     if (has_comp_bit)
         if (prc_bitwrite_bit(ctx, state, compressed) != 0)
             return -1;
