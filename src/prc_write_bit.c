@@ -718,18 +718,48 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
         active[active_count++] = phantom;
     }
 
+    {
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_HUFF_TIEBREAK_REVERSE): the real
+       encoder's tie-breaking rule for equal-frequency leaves during this
+       merge is still an unresolved KNOWN LOOSE END (see
+       prc_huff_assign_codes' own comment) -- previously believed
+       inconsequential for decodability by any reader including Acrobat,
+       from only 2 synthetic test files that never happened to produce a
+       3-way+ tie. A minimal real repro now exists
+       (E:\Work\nanoPRC_supplementary_files\ISO-SPEC\test-meshes\
+       mixed_chains_minimal_repro_fan8_strip.prc) with a genuine 3-way tie
+       that DOES fail in real Acrobat -- see project_huffman_tiebreak_3way_
+       root_cause memory. Default tie-break (unset) prefers the FIRST
+       (lowest active[] index, i.e. lowest original value pre-merge, since
+       active[] starts value-sorted) node among ties for both min1 and
+       min2 -- via strict `<`. Setting this reverses it to prefer the
+       LAST (`<=`), testing whether that alternative convention matches
+       the real encoder for the known-failing 3-way-tie case. Not yet
+       validated against the previously-confirmed-working real files this
+       write facility was checked against -- do NOT flip the default
+       until that regression check is done. */
+    uint8_t tiebreak_reverse = (getenv("PRC_DIAG_HUFF_TIEBREAK_REVERSE") != NULL);
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_HUFF_SWAP_LR_ON_TIE): a more
+       surgical alternative to PRC_DIAG_HUFF_TIEBREAK_REVERSE above --
+       leaves WHICH nodes get merged at each step completely unchanged
+       (same tree shape, same code LENGTHS, matching the "does NOT affect
+       code length" observation in prc_huff_assign_codes' own comment),
+       only flips which of the two EXACTLY-TIED-IN-FREQUENCY merged nodes
+       becomes the left (bit 0) vs right (bit 1) child. */
+    uint8_t swap_lr_on_tie = (getenv("PRC_DIAG_HUFF_SWAP_LR_ON_TIE") != NULL);
     while (active_count > 1)
     {
         uint32_t min1, min2, k;
         prc_huff_build_node *parent;
+        uint8_t this_merge_tied;
 
         min1 = 0;
         for (k = 1; k < active_count; k++)
-            if (active[k]->freq < active[min1]->freq)
+            if (tiebreak_reverse ? (active[k]->freq <= active[min1]->freq) : (active[k]->freq < active[min1]->freq))
                 min1 = k;
         min2 = (min1 == 0) ? 1 : 0;
         for (k = 0; k < active_count; k++)
-            if (k != min1 && active[k]->freq < active[min2]->freq)
+            if (k != min1 && (tiebreak_reverse ? (active[k]->freq <= active[min2]->freq) : (active[k]->freq < active[min2]->freq)))
                 min2 = k;
 
         parent = (prc_huff_build_node *)prc_malloc(ctx, sizeof(prc_huff_build_node));
@@ -743,13 +773,23 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
         parent->freq = active[min1]->freq + active[min2]->freq;
         parent->is_leaf = 0;
         parent->value = 0;
-        parent->left = active[min1];
-        parent->right = active[min2];
+        this_merge_tied = (active[min1]->freq == active[min2]->freq) ? 1 : 0;
+        if (swap_lr_on_tie && this_merge_tied)
+        {
+            parent->left = active[min2];
+            parent->right = active[min1];
+        }
+        else
+        {
+            parent->left = active[min1];
+            parent->right = active[min2];
+        }
         nodes[node_count++] = parent;
 
         active[min1] = parent;
         active[min2] = active[active_count - 1];
         active_count--;
+    }
     }
 
     /* A real, independently-produced compressed PRC file's Huffman tree for
