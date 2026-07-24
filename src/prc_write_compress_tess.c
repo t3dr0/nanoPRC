@@ -1092,6 +1092,13 @@ prc_encode_emit_axis_point(prc_encode_state *st, uint32_t mesh_vtx, prc_vec3 bas
     if (code < 0)
         return code;
 
+    if (st->ctx->trace_reversed)
+        fprintf(stderr, "ENC_AXISPOINT mesh_vtx=%u base=(%.17g,%.17g,%.17g) p=(%.17g,%.17g,%.17g) "
+            "raw_delta=(%.17g,%.17g,%.17g) tol=%.17g dv=(%d,%d,%d) n_points=%u\n",
+            mesh_vtx, base.x, base.y, base.z, p[0], p[1], p[2],
+            p[0] - base.x, p[1] - base.y, p[2] - base.z, st->tol,
+            dv[0], dv[1], dv[2], st->n_points);
+
     st->out->point_array[st->out->point_array_size + 0] = dv[0];
     st->out->point_array[st->out->point_array_size + 1] = dv[1];
     st->out->point_array[st->out->point_array_size + 2] = dv[2];
@@ -1134,6 +1141,14 @@ prc_encode_emit_basis_point(prc_encode_state *st, uint32_t mesh_vtx,
     code = prc_encode_quantize(st->ctx, prc_vec_dot_product(diff, op->z_basis), st->tol, &dv[2]);
     if (code < 0)
         return code;
+
+    if (st->ctx->trace_reversed)
+        fprintf(stderr, "ENC_BASISPOINT mesh_vtx=%u op_origin=(%.17g,%.17g,%.17g) p=(%.17g,%.17g,%.17g) "
+            "diff=(%.17g,%.17g,%.17g) x_basis=(%.17g,%.17g,%.17g) y_basis=(%.17g,%.17g,%.17g) "
+            "dv=(%d,%d,%d) n_points=%u\n",
+            mesh_vtx, op->origin.x, op->origin.y, op->origin.z, p[0], p[1], p[2],
+            diff.x, diff.y, diff.z, op->x_basis.x, op->x_basis.y, op->x_basis.z,
+            op->y_basis.x, op->y_basis.y, op->y_basis.z, dv[0], dv[1], dv[2], st->n_points);
 
     st->out->point_array[st->out->point_array_size + 0] = dv[0];
     st->out->point_array[st->out->point_array_size + 1] = dv[1];

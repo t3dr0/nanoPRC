@@ -56,7 +56,7 @@ int main(int argc, char **argv)
 
     if (argc < 3)
     {
-        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple|custom> <output.prc> [output.pdf] [fan_size (custom mode only, default 8)]\n", argv[0]);
+        printf("usage: %s <mode:all|fan_lone|strip_lone|fan_strip|small_triple|custom|custom_fan_strip> <output.prc> [output.pdf] [fan_size (custom/custom_fan_strip modes only, default 8)]\n", argv[0]);
         return 2;
     }
     mode = argv[1];
@@ -72,18 +72,45 @@ int main(int argc, char **argv)
         include_fan = include_strip = include_lone = 1;
         if (argc >= 5) fan_size = (uint32_t)strtoul(argv[4], NULL, 10);
     }
+    else if (strcmp(mode, "custom_fan_strip") == 0)
+    {
+        include_fan = include_strip = 1;
+        if (argc >= 5) fan_size = (uint32_t)strtoul(argv[4], NULL, 10);
+    }
     else { printf("unrecognized mode '%s'\n", mode); return 2; }
 
-    /* Fan: hub + fan_size-ring (default 8), centered at origin, radius 1. */
+    /* Fan: hub + fan_size-ring (default 8), centered at origin, radius 1.
+       PRC_DIAG_FAN_ROTATION_DEGREES (default 0) rotates every ring point
+       by a fixed angle -- for testing whether an exact x==y/x==-y
+       coordinate symmetry (unavoidable at fan_size==8's 45-degree step,
+       landing points exactly on the diagonals) is what actually matters,
+       independent of fan_size==8 as a bare integer: a rotated fan keeps
+       the same triangle/chain-restart structure and fan_size, but no
+       longer has any point sitting exactly on a diagonal. */
     if (include_fan)
     {
         uint32_t base = num_positions;
-        positions[base * 3 + 0] = 0.0; positions[base * 3 + 1] = 0.0; positions[base * 3 + 2] = 0.0;
+        double rotation_rad = 0.0;
+        double fan_y_offset = 0.0;
+        if (getenv("PRC_DIAG_FAN_ROTATION_DEGREES") != NULL)
+            rotation_rad = atof(getenv("PRC_DIAG_FAN_ROTATION_DEGREES")) * 3.14159265358979323846 / 180.0;
+        /* PRC_DIAG_FAN_Y_OFFSET (default 0): shifts the fan (hub+ring) in Y
+           only, WITHOUT rotating it -- keeps every ring point's own x==y/
+           x==-y diagonal symmetry intact, but (since the fan is what sets
+           the mesh's bbox_min, hence the encoder's global origin) changes
+           origin's Y component without changing its X, breaking origin's
+           OWN x==y symmetry. Tests whether the trigger is really "delta
+           FROM ORIGIN has dx==dy" rather than "the point's own raw x==y" --
+           those are different claims that PRC_DIAG_FAN_ROTATION_DEGREES
+           alone can't distinguish, since rotating changes both at once. */
+        if (getenv("PRC_DIAG_FAN_Y_OFFSET") != NULL)
+            fan_y_offset = atof(getenv("PRC_DIAG_FAN_Y_OFFSET"));
+        positions[base * 3 + 0] = 0.0; positions[base * 3 + 1] = 0.0 + fan_y_offset; positions[base * 3 + 2] = 0.0;
         for (k = 0; k < (int)fan_size; k++)
         {
-            double a = 2.0 * 3.14159265358979323846 * k / (double)fan_size;
+            double a = rotation_rad + 2.0 * 3.14159265358979323846 * k / (double)fan_size;
             positions[(base + 1 + k) * 3 + 0] = cos(a);
-            positions[(base + 1 + k) * 3 + 1] = sin(a);
+            positions[(base + 1 + k) * 3 + 1] = sin(a) + fan_y_offset;
             positions[(base + 1 + k) * 3 + 2] = 0.0;
         }
         for (k = 0; k < (int)fan_size; k++)
@@ -121,13 +148,31 @@ int main(int argc, char **argv)
         num_positions += 4;
     }
 
-    /* 2-triangle strip, offset well clear of anything else already placed. */
+    /* 2-triangle strip, fixed offset (NOT num_positions-scaled -- this
+       must match the ORIGINAL geometry that produced the confirmed-
+       failing mixed_chains_acrobat_blanktree_repro.prc exactly, since
+       that turned out to matter: even same-topology, different-absolute-
+       coordinate regenerations changed the outcome. See PRC_DIAG_FORCE_
+       TOLERANCE's own comment and the investigation memory/writeup for
+       why this fixed-offset version replaced an earlier num_positions-
+       scaled one that could no longer reproduce the original failure). */
     if (include_strip)
     {
         uint32_t base = num_positions;
-        double ox = (double)num_positions * 3.0 + 20.0;
+        double ox = 20.0;
+        /* PRC_DIAG_STRIP_SECOND_X_OFFSET (default 1.0): the strip's own
+           2nd vertex's X-offset from its 1st. Exists to directly engineer
+           (independent of fan_size/shape) whether this chain-restart's
+           2nd emitted point's quantized X-delta-from-1st-point collides
+           exactly with the 1st point's own quantized Y-delta-from-origin
+           -- see the UK_original.stl/mixed_chains Acrobat blank-tree
+           investigation memory/writeup for why that specific collision is
+           the leading hypothesis for what actually triggers this bug. */
+        double strip_second_x_offset = 1.0;
+        if (getenv("PRC_DIAG_STRIP_SECOND_X_OFFSET") != NULL)
+            strip_second_x_offset = atof(getenv("PRC_DIAG_STRIP_SECOND_X_OFFSET"));
         positions[base * 3 + 0] = ox + 0.0; positions[base * 3 + 1] = 0.0; positions[base * 3 + 2] = 0.0;
-        positions[(base + 1) * 3 + 0] = ox + 1.0; positions[(base + 1) * 3 + 1] = 0.0; positions[(base + 1) * 3 + 2] = 0.0;
+        positions[(base + 1) * 3 + 0] = ox + strip_second_x_offset; positions[(base + 1) * 3 + 1] = 0.0; positions[(base + 1) * 3 + 2] = 0.0;
         positions[(base + 2) * 3 + 0] = ox + 0.5; positions[(base + 2) * 3 + 1] = 1.0; positions[(base + 2) * 3 + 2] = 0.0;
         positions[(base + 3) * 3 + 0] = ox + 1.5; positions[(base + 3) * 3 + 1] = 1.0; positions[(base + 3) * 3 + 2] = 0.0;
         tri_indices[num_triangles * 3 + 0] = base;     tri_indices[num_triangles * 3 + 1] = base + 1; tri_indices[num_triangles * 3 + 2] = base + 2;
@@ -137,11 +182,12 @@ int main(int argc, char **argv)
         num_positions += 4;
     }
 
-    /* Lone isolated triangle, offset well clear of anything else already placed. */
+    /* Lone isolated triangle, fixed offset -- see the strip piece's own
+       comment above for why this must NOT be num_positions-scaled. */
     if (include_lone)
     {
         uint32_t base = num_positions;
-        double ox = (double)num_positions * 3.0 + 40.0;
+        double ox = 40.0;
         positions[base * 3 + 0] = ox + 0.0; positions[base * 3 + 1] = 0.0; positions[base * 3 + 2] = 0.0;
         positions[(base + 1) * 3 + 0] = ox + 1.0; positions[(base + 1) * 3 + 1] = 0.0; positions[(base + 1) * 3 + 2] = 0.0;
         positions[(base + 2) * 3 + 0] = ox + 0.5; positions[(base + 2) * 3 + 1] = 1.0; positions[(base + 2) * 3 + 2] = 0.0;
@@ -164,6 +210,19 @@ int main(int argc, char **argv)
     tess.face_tri_counts = face_tri_counts;
     tess.num_faces = 1;
     tess.crease_angle_degrees = 30.0;
+    /* Left at the memset(0) default (resolves to prc_write_tol_relative(1e-6)
+       -- i.e. 1e-6 * this mesh's own bbox diagonal) unless overridden --
+       this is what makes tolerance differ silently between differently-
+       offset/scaled geometry, which turned out to be the actual variable
+       distinguishing this investigation's known-failing vs known-working
+       repro (see the UK_original.stl Acrobat blank-tree investigation
+       memory/writeup): same topology, different absolute coordinates ->
+       different auto-computed tolerance -> different Acrobat outcome.
+       PRC_DIAG_FORCE_TOLERANCE lets a caller pin an exact absolute
+       tolerance (mm) regardless of this run's own geometry, to test
+       tolerance as an isolated variable against a FIXED shape. */
+    if (getenv("PRC_DIAG_FORCE_TOLERANCE") != NULL)
+        tess.tolerance = prc_write_tol_absolute(atof(getenv("PRC_DIAG_FORCE_TOLERANCE")));
 
     memset(&rep_item, 0, sizeof(rep_item));
     rep_item.kind = PRC_API_WRITE_RI_SURFACE;
