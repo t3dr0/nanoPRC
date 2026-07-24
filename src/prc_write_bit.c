@@ -676,6 +676,50 @@ prc_huff_build_tree(prc_context *ctx, const uint32_t *values, uint32_t count,
     node_count = 0;
     active_count = 0;
 
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_HUFF_BREAK_3WAY_TIES): all 6
+       possible code-VALUE permutations of a known 3-way frequency tie
+       (mixed_chains_minimal_repro_fan8_strip.prc) were tried and ALL FAIL
+       in real Acrobat -- see project_huffman_tiebreak_3way_root_cause
+       memory. That rules out "which tied leaf gets which code" as the
+       mechanism entirely (every possible answer to that question was
+       tested). Remaining hypothesis: Acrobat's decoder cannot handle 3+
+       leaves sharing the exact same code LENGTH at all, regardless of
+       which gets which value within that length -- since every tie-break
+       variant tried still produced identical lengths for all 3 tied
+       leaves (only the value assignment differed), this hasn't been
+       tested yet. This diagnostic perturbs EFFECTIVE frequency (for tree-
+       shape purposes only, in ascending distinct_values order, which is
+       the array order at this point) so no more than 2 leaves ever share
+       an exact frequency -- known-working cases (fan9, fan8 rotated) both
+       have ordinary 2-way ties, so breaking 3+-way ties down to pairs
+       targets exactly the untested structural difference. Naive: adds
+       small increasing offsets, which can rarely coincide with an
+       unrelated leaf's own true frequency and create a new accidental
+       tie -- acceptable for this diagnostic, would need real hardening
+       before ever becoming a default. */
+    if (getenv("PRC_DIAG_HUFF_BREAK_3WAY_TIES") != NULL)
+    {
+        uint32_t di;
+        for (di = 0; di < distinct_count; di++)
+        {
+            uint32_t dj, run_len = 1;
+            for (dj = di + 1; dj < distinct_count; dj++)
+                if (distinct_freqs[dj] == distinct_freqs[di]) run_len++;
+            if (run_len >= 3)
+            {
+                uint32_t bump = 1;
+                for (dj = di + 1; dj < distinct_count; dj++)
+                {
+                    if (distinct_freqs[dj] == distinct_freqs[di])
+                    {
+                        distinct_freqs[dj] += bump;
+                        bump++;
+                    }
+                }
+            }
+        }
+    }
+
     for (i = 0; i < distinct_count; i++)
     {
         prc_huff_build_node *leaf = (prc_huff_build_node *)prc_malloc(ctx, sizeof(prc_huff_build_node));
@@ -1077,6 +1121,109 @@ prc_bitwrite_huffman_block(prc_context *ctx, prc_bit_write_state *state,
         }
     }
 
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_HUFF_CANONICAL_WITHIN_LENGTH): a
+       more targeted alternative than PRC_DIAG_HUFF_TIEBREAK_REVERSE/
+       PRC_DIAG_HUFF_SWAP_LR_ON_TIE (both disproven against the known
+       mixed_chains 3-way-tie repro -- see project_huffman_tiebreak_3way_
+       root_cause memory). Those changed tree SHAPE or per-merge L/R
+       assignment; this instead redistributes the ALREADY-COMPUTED set of
+       code_values within each maximal run of SAME-code_length leaves
+       (the array is already value-sorted at this point) so that ascending
+       leaf VALUE maps to ascending CODE VALUE -- i.e. canonical
+       reassignment scoped to just the tied-length group, not the whole
+       tree. This changes WHICH leaf gets which of an unchanged SET of
+       codes at that length (still prefix-free among same-length codes by
+       construction), so it cannot touch code LENGTHS or which lengths
+       exist at all, hence cannot disturb the phantom-wrap's "every real
+       leaf code starts with bit 1" invariant (unlike naive whole-tree
+       canonical Huffman, already tried and reverted for regressing real
+       files -- see prc_huff_assign_codes' own comment). */
+    if (getenv("PRC_DIAG_HUFF_CANONICAL_WITHIN_LENGTH") != NULL)
+    {
+        uint32_t run_start = 0;
+        while (run_start < leaf_count)
+        {
+            uint32_t run_end = run_start + 1;
+            uint32_t run_len = 1;
+            uint32_t *sorted_codes;
+            uint32_t r;
+            while (run_end < leaf_count && code_lengths[run_end] == code_lengths[run_start])
+            {
+                run_end++;
+                run_len++;
+            }
+            if (run_len > 1)
+            {
+                sorted_codes = (uint32_t *)prc_malloc(ctx, sizeof(uint32_t) * run_len);
+                if (sorted_codes == NULL)
+                    goto cleanup;
+                for (r = 0; r < run_len; r++)
+                    sorted_codes[r] = code_values[run_start + r];
+                /* Simple insertion sort -- run_len is tiny in practice. */
+                for (r = 1; r < run_len; r++)
+                {
+                    uint32_t v = sorted_codes[r];
+                    uint32_t s = r;
+                    while (s > 0 && sorted_codes[s - 1] > v)
+                    {
+                        sorted_codes[s] = sorted_codes[s - 1];
+                        s--;
+                    }
+                    sorted_codes[s] = v;
+                }
+                /* leaf_values[run_start..run_end) is already ascending
+                   (whole array is value-sorted above), so assigning
+                   sorted_codes in order gives ascending value -> ascending
+                   code within this length group. */
+                for (r = 0; r < run_len; r++)
+                    code_values[run_start + r] = sorted_codes[r];
+                prc_free(ctx, sorted_codes);
+            }
+            run_start = run_end;
+        }
+    }
+
+    /* DIAGNOSTIC (2026-07-24, PRC_DIAG_HUFF_MANUAL_PERM): direct override
+       for exhaustively trying every remaining untested permutation of a
+       small tied-length group's code_values, without adding a new
+       toggle per permutation. Format: "value1:code1,value2:code2,...".
+       For each pair, finds the leaf with that leaf_value (post value-sort,
+       so this runs after all the reassignment logic above) and force-sets
+       its code_value to the given code -- caller's responsibility to
+       supply a permutation of the SAME set of codes already in use at
+       that length (this does no validation; a wrong set produces a
+       decodable-by-us-but-possibly-different-length-distribution result,
+       which would confound the test rather than isolate it). */
+    if (getenv("PRC_DIAG_HUFF_MANUAL_PERM") != NULL)
+    {
+        const char *spec = getenv("PRC_DIAG_HUFF_MANUAL_PERM");
+        char *spec_copy = (char *)prc_malloc(ctx, strlen(spec) + 1);
+        char *pair_tok;
+        if (spec_copy != NULL)
+        {
+            strcpy(spec_copy, spec);
+            for (pair_tok = strtok(spec_copy, ","); pair_tok != NULL;
+                 pair_tok = strtok(NULL, ","))
+            {
+                char *colon = strchr(pair_tok, ':');
+                if (colon != NULL)
+                {
+                    uint32_t want_value = (uint32_t)strtoul(pair_tok, NULL, 10);
+                    uint32_t want_code = (uint32_t)strtoul(colon + 1, NULL, 10);
+                    for (k = 0; k < leaf_count; k++)
+                    {
+                        if (leaf_values[k] == want_value)
+                        {
+                            code_values[k] = want_code;
+                            break;
+                        }
+                    }
+                }
+            }
+            prc_free(ctx, spec_copy);
+        }
+    }
+
     {
         uint32_t true_max_code_length = 0;
         for (k = 0; k < leaf_count; k++)
@@ -1103,6 +1250,12 @@ prc_bitwrite_huffman_block(prc_context *ctx, prc_bit_write_state *state,
         if (getenv("PRC_DIAG_HUFF_STATS") != NULL)
             printf("PRC_DIAG_HUFF_STATS: count=%u leaf_count=%u true_max_code_length=%u max_code_length_field=%u num_bits=%u\n",
                 count, leaf_count, true_max_code_length, max_code_length, (unsigned)num_bits);
+        if (getenv("PRC_DIAG_HUFF_TABLE") != NULL)
+        {
+            for (k = 0; k < leaf_count; k++)
+                fprintf(stderr, "PRC_DIAG_HUFF_TABLE: leaf_value=%u code_length=%u code_value=%u (binary computed below)\n",
+                    leaf_values[k], code_lengths[k], code_values[k]);
+        }
     }
 
     if (prc_bitwrite_init(ctx, &sub, 64) != 0)
