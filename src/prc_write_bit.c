@@ -1411,22 +1411,34 @@ cleanup:
    write facility's prc_bitwrite_int_variable_bit already implements that
    packing correctly; only the LENGTH this function computes (fed in as
    bit_lengths[k], i.e. uBitNumber) was wrong. */
-/* DIAGNOSTIC (2026-07-26, PRC_DIAG_NATURAL_BITWIDTH): SS9.8
-   "WriteCompressedIntegerArray" (point_array's own array type) computes its
-   per-entry bit length via `GetNumberOfBitsUsedToStoreInteger(piArray[u])`
-   applied directly to the signed value -- no visible extra +1 in the spec's
-   own pseudocode, unlike SS9.9 "WriteCompressedIndiceArray" (a DIFFERENT
-   array type, for delta-encoded indices), which explicitly computes
-   `GetNumberOfBitsUsedToStoreUnsignedInteger(abs(v))+1`. prc_int32_bit_
-   width_signed below implements SS9.9's formula (correct for indices, and
-   for max_code_length elsewhere in this file) but point_array
-   (prc_bitwrite_compressed_integer_array) also calls it -- possibly the
-   wrong spec section's formula for that specific array type, off by
-   exactly 1 bit whenever the magnitude isn't an exact power of two. This
-   diagnostic swaps point_array's bit-length computation to the "natural"
-   convention (1 sign bit + prc_bit_width_u32(magnitude), no extra +1) to
-   test that hypothesis without touching indices/max_code_length. Zero
-   behavior change when unset. */
+/* point_array's own bit-length formula (SS9.8 "WriteCompressedIntegerArray"):
+   `GetNumberOfBitsUsedToStoreInteger(piArray[u])` applied directly to the
+   signed value -- no visible extra +1 in the spec's own pseudocode, unlike
+   SS9.9 "WriteCompressedIndiceArray" (a DIFFERENT array type, for
+   delta-encoded indices), which explicitly computes
+   `GetNumberOfBitsUsedToStoreUnsignedInteger(abs(v))+1`. This codebase used
+   to call prc_int32_bit_width_signed below (SS9.9's indices formula) for
+   point_array too -- the wrong spec section's formula for that array type,
+   off by exactly 1 bit whenever the magnitude isn't an exact power of two.
+
+   This "natural" convention (1 sign bit + prc_bit_width_u32(magnitude), no
+   extra +1) is what point_array now uses (prc_bitwrite_compressed_integer_
+   array below). Confirmed correct and safe via an independent-encoder
+   cross-check ("RG", an independent commercial PRC encoder used throughout
+   this project as a comparison oracle, computes the identical bit-length
+   for the equivalent value on the same geometry/tolerance -- convergent,
+   independent evidence, not just spec re-reading) and a 227-file real-world
+   STL corpus sweep (nano_prc_stl_import + read-back, zero decode failures,
+   zero geometry mismatches vs. the old formula, ~2.7% smaller output).
+
+   An earlier attempt to ship this exact change (2026-07/08) was reverted
+   after apparently breaking real Acrobat on two files -- but that finding
+   was never re-confirmed with the required PRC_DIAG_PREWELD_JITTER_MAG=1e-6
+   override those two specific files need to work AT ALL (a documented gap
+   in that same investigation thread, for a different sub-experiment); re
+   -tested with the override correctly set, both files now open fine in
+   real Acrobat with this formula. See the fan8/mixed_chains Acrobat
+   blank-tree investigation notes for the full teardown this is based on. */
 static uint32_t
 prc_int32_bit_width_signed_natural(int32_t v)
 {
@@ -1654,16 +1666,8 @@ prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *sta
         prc_error(ctx, PRC_ERROR_MEMORY, "Allocation error in prc_bitwrite_compressed_integer_array\n");
         return -1;
     }
-    if (prc_diag_getenv("PRC_DIAG_NATURAL_BITWIDTH") != NULL)
-    {
-        for (k = 0; k < data_size; k++)
-            bit_lengths[k] = (uint8_t)prc_int32_bit_width_signed_natural(data[k]);
-    }
-    else
-    {
-        for (k = 0; k < data_size; k++)
-            bit_lengths[k] = (uint8_t)prc_int32_bit_width_signed(data[k]);
-    }
+    for (k = 0; k < data_size; k++)
+        bit_lengths[k] = (uint8_t)prc_int32_bit_width_signed_natural(data[k]);
 
     /* DIAGNOSTIC (2026-07-24, PRC_DIAG_POINT_ARRAY_BITLENGTHS): dumps each
        value alongside its computed bit length, added while checking whether
@@ -1705,7 +1709,14 @@ prc_bitwrite_compressed_integer_array(prc_context *ctx, prc_bit_write_state *sta
        of whatever broader bug family this belongs to: one specific real
        component (UK_original.stl's smallest failing part) survives this
        fix too and remains an open, unresolved case -- see the
-       investigation writeup for its own bisection trail. */
+       investigation writeup for its own bisection trail.
+
+       Kept as defense-in-depth after point_array's bit-length formula
+       itself was fixed (see prc_int32_bit_width_signed_natural's own
+       comment above): the fix removes a systematic 1-bit overcount, which
+       shifts which raw magnitudes land at exactly 22 bits, but does not
+       make bit-length 22 itself impossible -- some other value can still
+       legitimately need it. */
     for (k = 0; k < data_size; k++)
     {
         if (bit_lengths[k] == 22)
